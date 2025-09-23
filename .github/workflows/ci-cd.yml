@@ -1,0 +1,145 @@
+name: Android CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 21
+            abi: x86_64
+            device: pixel
+            avd: pixel_api21
+            tag: google_apis
+          - api: 28
+            abi: x86_64
+            device: pixel_3
+            avd: pixel3_api28
+            tag: google_apis
+          - api: 34
+            abi: x86_64
+            device: pixel_fold
+            avd: fold_api34
+            tag: google_apis
+          - api: 34
+            abi: armeabi-v7a
+            device: pixel_4
+            avd: lowram_api34
+            tag: google_apis
+    env:
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
+    steps:
+      - name: Validate required secrets
+        run: |
+          missing=false
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
+            echo "- AWS_ACCESS_KEY_ID: Generate from AWS IAM Console > Users > Your User > Security credentials > Access keys > Create access key (for S3 full access policy). Add as repo secret."
+            missing=true
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
+            echo "- AWS_SECRET_ACCESS_KEY: The secret key paired with access key above. Add as repo secret (never commit)."
+            missing=true
+          fi
+          if [ -z "${{ secrets.S3_BUCKET_NAME }}" ]; then
+            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
+            echo "- S3_BUCKET_NAME: Create S3 bucket in AWS Console > S3 > Create bucket (e.g., nova-pdf-artifacts). Ensure IAM policy allows s3:PutObject. Add as repo secret."
+            missing=true
+          fi
+          if [ "$missing" = true ]; then
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+      - name: Download Android SDK components
+        env:
+          API_LEVEL: ${{ matrix.api }}
+          ABI: ${{ matrix.abi }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+          sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0"
+      - name: Assemble debug
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Assemble release (unsigned if signing key missing)
+        run: ./gradlew assembleRelease --stacktrace
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --info
+      - name: Start emulator
+        env:
+          API_LEVEL: ${{ matrix.api }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory 2048 -skin 1080x1920 &
+          adb wait-for-device
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell input keyevent 82
+      - name: Run instrumentation tests
+        run: ./gradlew connectedAndroidTest --stacktrace
+      - name: Capture screenshots
+        run: |
+          mkdir -p screenshots/${{ matrix.api }}_${{ matrix.device }}
+          adb shell am start -n com.novapdf.reader/.MainActivity
+          sleep 15
+          adb shell screencap -p /sdcard/screen_portrait.png
+          adb pull /sdcard/screen_portrait.png screenshots/${{ matrix.api }}_${{ matrix.device }}/screenshot_${{ matrix.api }}_${{ matrix.device }}_portrait.png
+          adb shell settings put system accelerometer_rotation 0 || true
+          adb shell settings put system user_rotation 1 || true
+          sleep 5
+          adb shell screencap -p /sdcard/screen_landscape.png
+          adb pull /sdcard/screen_landscape.png screenshots/${{ matrix.api }}_${{ matrix.device }}/screenshot_${{ matrix.api }}_${{ matrix.device }}_landscape.png
+          adb shell settings put system user_rotation 0 || true
+      - name: Collect emulator logs
+        if: always()
+        run: adb logcat -d > emulator-${{ matrix.api }}-${{ matrix.device }}.log || true
+      - name: Stop emulator
+        if: always()
+        run: adb -s emulator-5554 emu kill || true
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-build-${{ matrix.api }}-${{ matrix.device }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            screenshots/
+            emulator-${{ matrix.api }}-${{ matrix.device }}.log
+      - name: Install AWS CLI
+        run: pip3 install awscli --user
+      - name: Configure AWS credentials
+        run: |
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set default.region us-east-1
+      - name: Upload build outputs to S3
+        env:
+          BUCKET: ${{ secrets.S3_BUCKET_NAME }}
+        run: |
+          aws s3 cp app/build/outputs/apk/debug/app-debug.apk s3://${BUCKET}/apks/nova-pdf-$(date +%Y%m%d)-${{ matrix.api }}-${{ matrix.device }}.apk
+          aws s3 sync screenshots/ s3://${BUCKET}/screenshots/${{ github.run_id }}/ --delete
+          aws s3 cp app/build/reports/ s3://${BUCKET}/reports/${{ github.run_id }}/ --recursive
