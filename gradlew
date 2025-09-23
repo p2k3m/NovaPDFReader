@@ -15,8 +15,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# SPDX-License-Identifier: Apache-2.0
-#
 
 ##############################################################################
 #
@@ -57,7 +55,7 @@
 #       Darwin, MinGW, and NonStop.
 #
 #   (3) This script is generated from the Groovy template
-#       https://github.com/gradle/gradle/blob/HEAD/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
+#       https://github.com/gradle/gradle/blob/HEAD/subprojects/plugins/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
 #       within the Gradle project.
 #
 #       You can find Gradle at https://github.com/gradle/gradle/.
@@ -86,7 +84,7 @@ done
 # shellcheck disable=SC2034
 APP_BASE_NAME=${0##*/}
 # Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
-APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
+APP_HOME=$( cd "${APP_HOME:-./}" > /dev/null && pwd -P ) || exit
 
 # Use the maximum available, or set MAX_FD != -1 to use that value.
 MAX_FD=maximum
@@ -102,36 +100,6 @@ die () {
     exit 1
 } >&2
 
-WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
-if [ ! -f "$WRAPPER_JAR" ]; then
-    mkdir -p "$( dirname "$WRAPPER_JAR" )"
-    BASE64_WRAPPER="$APP_HOME/gradle/wrapper/gradle-wrapper.jar.base64"
-    if [ -f "$BASE64_WRAPPER" ]; then
-        echo "Gradle wrapper JAR missing. Restoring from $BASE64_WRAPPER..."
-        if command -v python3 >/dev/null 2>&1; then
-            BASE64_WRAPPER="$BASE64_WRAPPER" WRAPPER_JAR="$WRAPPER_JAR" python3 - <<'PYW' || die "ERROR: Failed to decode Gradle wrapper base64 using python3."
-import base64, os, pathlib
-base64_path = pathlib.Path(os.environ['BASE64_WRAPPER'])
-jar_path = pathlib.Path(os.environ['WRAPPER_JAR'])
-jar_path.write_bytes(base64.b64decode(base64_path.read_bytes()))
-PYW
-        elif command -v python >/dev/null 2>&1; then
-            BASE64_WRAPPER="$BASE64_WRAPPER" WRAPPER_JAR="$WRAPPER_JAR" python - <<'PYW' || die "ERROR: Failed to decode Gradle wrapper base64 using python."
-import base64, os, pathlib
-base64_path = pathlib.Path(os.environ['BASE64_WRAPPER'])
-jar_path = pathlib.Path(os.environ['WRAPPER_JAR'])
-jar_path.write_bytes(base64.b64decode(base64_path.read_bytes()))
-PYW
-        elif command -v base64 >/dev/null 2>&1; then
-            base64 --decode "$BASE64_WRAPPER" > "$WRAPPER_JAR" || die "ERROR: Failed to decode Gradle wrapper base64 using base64 utility."
-        else
-            die "ERROR: Unable to decode Gradle wrapper JAR; install python3, python, or base64."
-        fi
-    else
-        die "ERROR: Gradle wrapper JAR is missing. Run './gradlew wrapper' with a local Gradle install to regenerate it."
-    fi
-fi
-
 # OS specific support (must be 'true' or 'false').
 cygwin=false
 msys=false
@@ -144,7 +112,7 @@ case "$( uname )" in                #(
   NONSTOP* )        nonstop=true ;;
 esac
 
-CLASSPATH="\\\"\\\""
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 
 
 # Determine the Java command to use to start the JVM.
@@ -235,7 +203,7 @@ fi
 DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 
 # Collect all arguments for the java command:
-#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
+#   * DEFAULT_JVM_OPTS, JAVA_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
 #     and any embedded shellness will be escaped.
 #   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
 #     treated as '${Hostname}' itself on the command line.
@@ -243,7 +211,7 @@ DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 set -- \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \
         -classpath "$CLASSPATH" \
-        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
+        org.gradle.wrapper.GradleWrapperMain \
         "$@"
 
 # Stop when "xargs" is not available.
