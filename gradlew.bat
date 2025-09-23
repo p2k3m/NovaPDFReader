@@ -13,8 +13,6 @@
 @rem See the License for the specific language governing permissions and
 @rem limitations under the License.
 @rem
-@rem SPDX-License-Identifier: Apache-2.0
-@rem
 
 @if "%DEBUG%"=="" @echo off
 @rem ##########################################################################
@@ -38,26 +36,6 @@ for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
-set WRAPPER_JAR=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
-set WRAPPER_BASE64=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar.base64
-if not exist "%APP_HOME%\gradle\wrapper" (
-    mkdir "%APP_HOME%\gradle\wrapper"
-)
-if not exist "%WRAPPER_JAR%" (
-    if exist "%WRAPPER_BASE64%" (
-        echo Gradle wrapper JAR missing. Restoring from %WRAPPER_BASE64%...
-        powershell -NoProfile -Command "[IO.File]::WriteAllBytes('%WRAPPER_JAR%', [Convert]::FromBase64String([IO.File]::ReadAllText('%WRAPPER_BASE64%')) )" >NUL 2>&1
-        if %ERRORLEVEL% neq 0 (
-            certutil -f -decode "%WRAPPER_BASE64%" "%WRAPPER_JAR%" >NUL 2>&1
-            if %ERRORLEVEL% neq 0 goto decodeFail
-        )
-        if not exist "%WRAPPER_JAR%" goto decodeFail
-    ) else (
-        echo ERROR: Gradle wrapper JAR is missing. Run 'gradlew wrapper' with a local Gradle install to regenerate it. 1>&2
-        goto fail
-    )
-)
-
 @rem Find java.exe
 if defined JAVA_HOME goto findJavaFromJavaHome
 
@@ -65,11 +43,11 @@ set JAVA_EXE=java.exe
 %JAVA_EXE% -version >NUL 2>&1
 if %ERRORLEVEL% equ 0 goto execute
 
-echo. 1>&2
-echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
+echo.
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
 
 goto fail
 
@@ -79,30 +57,26 @@ set JAVA_EXE=%JAVA_HOME%/bin/java.exe
 
 if exist "%JAVA_EXE%" goto execute
 
-echo. 1>&2
-echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
+echo.
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME%
+echo.
+echo Please set the JAVA_HOME variable in your environment to match the
+echo location of your Java installation.
 
 goto fail
 
 :execute
 @rem Setup the command line
 
-set CLASSPATH=
+set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 
 
 @rem Execute Gradle
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
 
 :end
 @rem End local scope for the variables with windows NT shell
 if %ERRORLEVEL% equ 0 goto mainEnd
-
-:decodeFail
-echo ERROR: Failed to restore Gradle wrapper from %WRAPPER_BASE64%. 1>&2
-goto fail
 
 :fail
 rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
