@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NovaPDF Reader</string>
+    <string name="open_pdf">Open PDF</string>
+    <string name="search_hint">Search text</string>
+    <string name="adaptive_flow_on">Adaptive Flow Active</string>
+    <string name="adaptive_flow_off">Adaptive Flow Paused</string>
+    <string name="annotation_saved">Annotations saved</string>
+    <string name="annotation_discarded">Annotations discarded</string>
+</resources>
