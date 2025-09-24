@@ -12,4 +12,10 @@
     <string name="storage_permission_granted">Storage access granted. You can now browse your PDFs.</string>
     <string name="storage_permission_denied">Storage access is still disabled. You can enable it anytime from Settings.</string>
     <string name="storage_permission_open_settings">Open settings</string>
+    <string name="accessibility_settings_title">Accessibility options</string>
+    <string name="dynamic_color_label">Dynamic colors</string>
+    <string name="dynamic_color_description">Adapt NovaPDF Reader to your document’s palette.</string>
+    <string name="dynamic_color_unsupported">Dynamic colors require Android 12 or newer.</string>
+    <string name="high_contrast_label">High contrast</string>
+    <string name="high_contrast_description">Increase contrast for improved readability.</string>
 </resources>
