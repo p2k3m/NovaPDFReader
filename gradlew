@@ -136,7 +136,7 @@ restore_gradle_wrapper_from_base64() {
 
     tmp_target="$wrapper_jar_path.tmp"
     if command -v base64 >/dev/null 2>&1; then
-        if ! base64 --decode "$base64_source" > "$tmp_target"; then
+        if ! base64 --decode < "$base64_source" > "$tmp_target"; then
             rm -f "$tmp_target"
             return 1
         fi
@@ -164,17 +164,61 @@ PY
     return 0
 }
 
+use_gradle_java_home() {
+    java_home=$1
+    if [ -z "$java_home" ]; then
+        return 1
+    fi
+    if [ ! -x "$java_home/bin/java" ]; then
+        return 1
+    fi
+
+    version_output=$("$java_home/bin/java" -version 2>&1 | head -n 1 | tr -d '\r')
+    case "$version_output" in
+        *"17"*)
+            export ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS="$java_home"
+            export JAVA_HOME="$java_home"
+            export PATH="$java_home/bin:$PATH"
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 ensure_gradle_toolchain_jdk() {
     if [ -n "$ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS" ] && [ -x "$ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS/bin/java" ]; then
         return 0
     fi
 
     install_dir="$HOME/.gradle/jdks/temurin-17"
-    if [ -x "$install_dir/bin/java" ]; then
-        export ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS="$install_dir"
-        export JAVA_HOME="$install_dir"
-        export PATH="$install_dir/bin:$PATH"
+    if use_gradle_java_home "$install_dir"; then
         return 0
+    fi
+
+    if use_gradle_java_home "$JAVA_HOME"; then
+        return 0
+    fi
+
+    if use_gradle_java_home "$JAVA_HOME_17"; then
+        return 0
+    fi
+
+    if use_gradle_java_home "$JAVA_HOME_17_X64"; then
+        return 0
+    fi
+
+    if use_gradle_java_home "$JAVA_HOME_17_ARM64"; then
+        return 0
+    fi
+
+    if command -v java >/dev/null 2>&1; then
+        java_path=$(command -v java)
+        java_home_candidate=$(cd "$(dirname "$java_path")/.." >/dev/null 2>&1 && pwd -P)
+        if use_gradle_java_home "$java_home_candidate"; then
+            return 0
+        fi
     fi
 
     os_name=$( uname | tr '[:upper:]' '[:lower:]' )
