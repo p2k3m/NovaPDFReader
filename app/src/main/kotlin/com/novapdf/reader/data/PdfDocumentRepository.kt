@@ -6,10 +6,13 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Size
+import android.util.SparseArray
 import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +30,7 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 
@@ -38,9 +42,9 @@ data class PdfDocumentSession(
     val fileDescriptor: ParcelFileDescriptor
 )
 
-data class PageRenderRequest(
+data class PageTileRequest(
     val pageIndex: Int,
-    val targetSize: Size,
+    val tileRect: Rect,
     val scale: Float
 )
 
@@ -54,6 +58,8 @@ class PdfDocumentRepository(
     private val maxCacheBytes = calculateCacheBudget()
     private val bitmapCache = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {}
     private val bitmapSizes = HashMap<String, Int>()
+    private val pageSizeCache = SparseArray<Size>()
+    private val pageSizeLock = Mutex()
     private var cacheSizeBytes = 0L
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
     val session: StateFlow<PdfDocumentSession?> = openSession.asStateFlow()
@@ -86,6 +92,7 @@ class PdfDocumentRepository(
         } else {
             scheduleCacheClear()
         }
+        pageSizeCache.clear()
         openSession.value?.let { session ->
             try {
                 session.renderer.close()
@@ -113,7 +120,19 @@ class PdfDocumentRepository(
         }
     }
 
-    suspend fun renderPage(request: PageRenderRequest): Bitmap? = withContextGuard {
+    suspend fun getPageSize(pageIndex: Int): Size? = withContextGuard {
+        val session = openSession.value ?: return@withContextGuard null
+        pageSizeLock.withLock {
+            pageSizeCache[pageIndex]?.let { return@withLock it }
+            val page = session.renderer.openPage(pageIndex)
+            val size = Size(page.width, page.height)
+            page.close()
+            pageSizeCache.put(pageIndex, size)
+            size
+        }
+    }
+
+    suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
         val session = openSession.value ?: return@withContextGuard null
         val key = cacheKey(request)
         cacheLock.withLock {
@@ -127,16 +146,24 @@ class PdfDocumentRepository(
             }
         }
         if (!isRendering.compareAndSet(false, true)) {
-            // Avoid concurrent thrashing; retry once rendering flag clears
             return@withContextGuard null
         }
         try {
             val page = session.renderer.openPage(request.pageIndex)
-            val width = max(1, request.targetSize.width)
-            val height = max(1, request.targetSize.height)
+            val clamped = clampRectToPage(request.tileRect, page.width, page.height)
+            if (clamped.isEmpty) {
+                page.close()
+                return@withContextGuard null
+            }
+            val width = max(1, (clamped.width() * request.scale).roundToInt())
+            val height = max(1, (clamped.height() * request.scale).roundToInt())
             val bitmap = createBitmap(width, height)
-            val matrix = Matrix().apply { postScale(request.scale, request.scale) }
-            page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            val matrix = Matrix().apply {
+                postScale(request.scale, request.scale)
+                postTranslate(-clamped.left * request.scale, -clamped.top * request.scale)
+            }
+            val dest = Rect(0, 0, width, height)
+            page.render(bitmap, dest, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             page.close()
             cacheLock.withLock {
                 putBitmapLocked(key, bitmap)
@@ -148,12 +175,19 @@ class PdfDocumentRepository(
         }
     }
 
-    fun preloadPages(indices: List<Int>, size: Size, scale: Float) {
+    fun preloadTiles(indices: List<Int>, tileFractions: List<RectF>, scale: Float) {
         val session = openSession.value ?: return
+        if (tileFractions.isEmpty()) return
         renderScope.launch {
             indices.forEach { pageIndex ->
                 if (pageIndex in 0 until session.pageCount) {
-                    renderPage(PageRenderRequest(pageIndex, size, scale))
+                    val pageSize = getPageSizeInternal(pageIndex) ?: return@forEach
+                    tileFractions.forEach { fraction ->
+                        val rect = fraction.toPageRect(pageSize)
+                        if (!rect.isEmpty) {
+                            renderTile(PageTileRequest(pageIndex, rect, scale))
+                        }
+                    }
                 }
             }
         }
@@ -172,8 +206,41 @@ class PdfDocumentRepository(
         renderScope.cancel()
     }
 
-    private fun cacheKey(request: PageRenderRequest): String =
-        "${request.pageIndex}_${request.targetSize.width}x${request.targetSize.height}_${request.scale}"
+    private fun cacheKey(request: PageTileRequest): String {
+        val rect = request.tileRect
+        return "${request.pageIndex}_${rect.left},${rect.top},${rect.right},${rect.bottom}_${request.scale.toBits()}"
+    }
+
+    private fun clampRectToPage(rect: Rect, width: Int, height: Int): Rect {
+        val clamped = Rect(rect)
+        val valid = clamped.intersect(0, 0, width, height)
+        return if (valid) clamped else Rect()
+    }
+
+    private suspend fun getPageSizeInternal(pageIndex: Int): Size? {
+        val session = openSession.value ?: return null
+        return pageSizeLock.withLock {
+            pageSizeCache[pageIndex]?.let { return@withLock it }
+            val page = session.renderer.openPage(pageIndex)
+            val size = Size(page.width, page.height)
+            page.close()
+            pageSizeCache.put(pageIndex, size)
+            size
+        }
+    }
+
+    private fun RectF.toPageRect(size: Size): Rect {
+        val width = size.width
+        val height = size.height
+        if (width <= 0 || height <= 0) {
+            return Rect()
+        }
+        val left = (this.left * width).toInt().coerceIn(0, width)
+        val top = (this.top * height).toInt().coerceIn(0, height)
+        val right = (this.right * width).roundToInt().coerceIn(left + 1, width)
+        val bottom = (this.bottom * height).roundToInt().coerceIn(top + 1, height)
+        return Rect(left, top, right, bottom)
+    }
 
     private fun calculateCacheBudget(): Long {
         val runtimeLimit = Runtime.getRuntime().maxMemory() / 4

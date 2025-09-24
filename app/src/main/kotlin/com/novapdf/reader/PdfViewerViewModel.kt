@@ -2,6 +2,8 @@ package com.novapdf.reader
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.graphics.RectF
 import android.net.Uri
 import android.util.Size
 import android.content.res.Configuration
@@ -9,7 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
-import com.novapdf.reader.data.PageRenderRequest
+import com.novapdf.reader.data.PageTileRequest
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.SearchMatch
@@ -37,6 +39,12 @@ data class PdfViewerUiState(
     val bookmarks: List<Int> = emptyList()
 )
 
+data class TilePreloadSpec(
+    val pageIndex: Int,
+    val tileFractions: List<RectF>,
+    val scale: Float
+)
+
 class PdfViewerViewModel(
     application: Application
 ) : AndroidViewModel(application) {
@@ -50,6 +58,7 @@ class PdfViewerViewModel(
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
 
     private var searchJob: Job? = null
+    private var lastTileSpec: TilePreloadSpec? = null
 
     init {
         _uiState.value = _uiState.value.copy(isNightMode = isNightModeEnabled())
@@ -85,6 +94,7 @@ class PdfViewerViewModel(
                 return@launch
             }
             annotationRepository.clearInMemory(session.documentId)
+            lastTileSpec = null
             adaptiveFlowManager.start()
             adaptiveFlowManager.trackPageChange(0, session.pageCount)
             _uiState.value = _uiState.value.copy(
@@ -105,21 +115,40 @@ class PdfViewerViewModel(
         adaptiveFlowManager.trackPageChange(index, session.pageCount)
         _uiState.value = _uiState.value.copy(currentPage = index)
         val preloadTargets = adaptiveFlowManager.preloadTargets.value
-        pdfRepository.preloadPages(
-            indices = preloadTargets,
-            size = Size(1080, 1440),
-            scale = 1f
-        )
+        val spec = lastTileSpec
+        if (spec != null) {
+            pdfRepository.preloadTiles(
+                indices = preloadTargets,
+                tileFractions = spec.tileFractions,
+                scale = spec.scale
+            )
+        }
     }
 
-    suspend fun renderPage(index: Int, size: Size, scale: Float): Bitmap? {
-        return pdfRepository.renderPage(
-            PageRenderRequest(
+    suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
+        return pdfRepository.renderTile(
+            PageTileRequest(
                 pageIndex = index,
-                targetSize = size,
+                tileRect = rect,
                 scale = scale
             )
         )
+    }
+
+    suspend fun pageSize(index: Int): Size? {
+        return pdfRepository.getPageSize(index)
+    }
+
+    fun updateTileSpec(spec: TilePreloadSpec) {
+        lastTileSpec = spec
+        val preloadTargets = adaptiveFlowManager.preloadTargets.value
+        if (preloadTargets.isNotEmpty()) {
+            pdfRepository.preloadTiles(
+                indices = preloadTargets,
+                tileFractions = spec.tileFractions,
+                scale = spec.scale
+            )
+        }
     }
 
     fun addAnnotation(annotation: AnnotationCommand) {

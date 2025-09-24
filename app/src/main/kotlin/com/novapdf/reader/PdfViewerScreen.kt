@@ -2,6 +2,8 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.graphics.RectF
 import android.util.Size
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -10,6 +12,7 @@ import android.view.ViewGroup
 import android.view.animation.Interpolator
 import android.view.animation.PathInterpolator
 import android.widget.OverScroller
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,12 +22,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -67,10 +72,15 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.TilePreloadSpec
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -90,7 +100,9 @@ fun PdfViewerRoute(
         onSaveAnnotations = { viewModel.persistAnnotations() },
         onSearch = { viewModel.search(it) },
         onToggleBookmark = { viewModel.toggleBookmark() },
-        renderPage = { index, size, scale -> viewModel.renderPage(index, size, scale) }
+        renderTile = { index, rect, scale -> viewModel.renderTile(index, rect, scale) },
+        requestPageSize = { viewModel.pageSize(it) },
+        onTileSpecChanged = { viewModel.updateTileSpec(it) }
     )
 }
 
@@ -105,13 +117,17 @@ fun PdfViewerScreen(
     onSaveAnnotations: () -> Unit,
     onSearch: (String) -> Unit,
     onToggleBookmark: () -> Unit,
-    renderPage: suspend (Int, Size, Float) -> Bitmap?
+    renderTile: suspend (Int, Rect, Float) -> Bitmap?,
+    requestPageSize: suspend (Int) -> Size?,
+    onTileSpecChanged: (TilePreloadSpec) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val pagerAdapter = remember(onStrokeFinished, renderPage) {
+    val pagerAdapter = remember(onStrokeFinished, renderTile, requestPageSize, onTileSpecChanged) {
         PdfPagerAdapter(
             onStrokeFinished = onStrokeFinished,
-            renderPage = renderPage
+            renderTile = renderTile,
+            requestPageSize = requestPageSize,
+            onTileSpecChanged = onTileSpecChanged
         )
     }
     val viewPagerHolder = remember { ViewPagerHolder() }
@@ -290,7 +306,9 @@ private class ViewPagerHolder {
 
 private class PdfPagerAdapter(
     private val onStrokeFinished: (AnnotationCommand) -> Unit,
-    private val renderPage: suspend (Int, Size, Float) -> Bitmap?
+    private val renderTile: suspend (Int, Rect, Float) -> Bitmap?,
+    private val requestPageSize: suspend (Int) -> Size?,
+    private val onTileSpecChanged: (TilePreloadSpec) -> Unit
 ) : RecyclerView.Adapter<PdfPagerAdapter.PageViewHolder>() {
     private var uiState: PdfViewerUiState = PdfViewerUiState()
     private var onPageFling: (Int, Int, Float) -> Unit = { _, _, _ -> }
@@ -327,7 +345,9 @@ private class PdfPagerAdapter(
             pageIndex = position,
             state = uiState,
             onStrokeFinished = onStrokeFinished,
-            renderPage = renderPage,
+            renderTile = renderTile,
+            requestPageSize = requestPageSize,
+            onTileSpecChanged = onTileSpecChanged,
             onRequestPageFling = { direction, velocity ->
                 onPageFling(position, direction, velocity)
             }
@@ -338,7 +358,9 @@ private class PdfPagerAdapter(
         private val pageIndexState = mutableIntStateOf(0)
         private val stateState = mutableStateOf(PdfViewerUiState())
         private val strokeCallbackState = mutableStateOf<(AnnotationCommand) -> Unit>({})
-        private val renderRequestState = mutableStateOf<suspend (Int, Size, Float) -> Bitmap?>({ _, _, _ -> null })
+        private val renderRequestState = mutableStateOf<suspend (Int, Rect, Float) -> Bitmap?>({ _, _, _ -> null })
+        private val pageSizeRequestState = mutableStateOf<suspend (Int) -> Size?>({ _ -> null })
+        private val tileSpecCallbackState = mutableStateOf<(TilePreloadSpec) -> Unit>({})
         private val flingRequestState = mutableStateOf<(Int, Float) -> Unit>({ _, _ -> })
 
         init {
@@ -351,7 +373,9 @@ private class PdfPagerAdapter(
                     onStrokeFinished = { command ->
                         strokeCallbackState.value(command)
                     },
-                    renderPage = renderRequestState.value,
+                    renderTile = renderRequestState.value,
+                    requestPageSize = pageSizeRequestState.value,
+                    onTileSpecChanged = tileSpecCallbackState.value,
                     onRequestPageFling = { direction, velocity ->
                         flingRequestState.value(direction, velocity)
                     }
@@ -363,17 +387,40 @@ private class PdfPagerAdapter(
             pageIndex: Int,
             state: PdfViewerUiState,
             onStrokeFinished: (AnnotationCommand) -> Unit,
-            renderPage: suspend (Int, Size, Float) -> Bitmap?,
+            renderTile: suspend (Int, Rect, Float) -> Bitmap?,
+            requestPageSize: suspend (Int) -> Size?,
+            onTileSpecChanged: (TilePreloadSpec) -> Unit,
             onRequestPageFling: (direction: Int, velocity: Float) -> Unit
         ) {
             pageIndexState.intValue = pageIndex
             stateState.value = state
             strokeCallbackState.value = onStrokeFinished
-            renderRequestState.value = renderPage
+            renderRequestState.value = renderTile
+            pageSizeRequestState.value = requestPageSize
+            tileSpecCallbackState.value = onTileSpecChanged
             flingRequestState.value = onRequestPageFling
         }
     }
 }
+
+private fun determineTilesPerAxis(scale: Float, density: Density, widthPx: Float, heightPx: Float): Int {
+    val densityScale = density.density.coerceAtLeast(0.5f)
+    val longestDimension = max(widthPx, heightPx) * scale
+    val normalized = longestDimension / (densityScale * 640f)
+    return when {
+        normalized < 1.2f -> 2
+        normalized < 2.2f -> 3
+        else -> 4
+    }
+}
+
+private data class PageTileKey(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+    val scaleBits: Int
+)
 
 private class PagerGesturePipeline(context: Context) {
     private val gestureDetector: GestureDetector
@@ -563,27 +610,88 @@ private fun PdfPageContainer(
     state: PdfViewerUiState,
     swipeSensitivity: Float,
     onStrokeFinished: (AnnotationCommand) -> Unit,
-    renderPage: suspend (Int, Size, Float) -> Bitmap?,
+    renderTile: suspend (Int, Rect, Float) -> Bitmap?,
+    requestPageSize: suspend (Int) -> Size?,
+    onTileSpecChanged: (TilePreloadSpec) -> Unit,
     onRequestPageFling: (direction: Int, velocity: Float) -> Unit
 ) {
     val density = LocalDensity.current
     val context = LocalContext.current
-    var scale by remember { mutableFloatStateOf(1f) }
-    var translation by remember { mutableStateOf(Offset.Zero) }
-    var bitmapState by remember { mutableStateOf<Bitmap?>(null) }
+    var scale by remember(pageIndex) { mutableFloatStateOf(1f) }
+    var translation by remember(pageIndex) { mutableStateOf(Offset.Zero) }
+    var pageSize by remember(pageIndex) { mutableStateOf<Size?>(null) }
+    val tileBitmaps = remember(pageIndex) { mutableStateMapOf<PageTileKey, Bitmap>() }
+    val latestRenderTile by rememberUpdatedState(renderTile)
+    val latestTileSpec by rememberUpdatedState(onTileSpecChanged)
+    val latestPageSizeRequest by rememberUpdatedState(requestPageSize)
+    val latestFling by rememberUpdatedState(onRequestPageFling)
+    val gesturePipeline = remember(pageIndex) { PagerGesturePipeline(context) }
+
+    LaunchedEffect(pageIndex) {
+        pageSize = latestPageSizeRequest(pageIndex)
+    }
+
+    DisposableEffect(pageIndex) {
+        onDispose {
+            tileBitmaps.values.forEach { bitmap ->
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+            tileBitmaps.clear()
+        }
+    }
 
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = Modifier.fillMaxSize()
     ) {
         val widthPx = with(density) { maxWidth.toPx().coerceAtLeast(1f) }
         val heightPx = with(density) { maxHeight.toPx().coerceAtLeast(1f) }
-        val latestFling by rememberUpdatedState(onRequestPageFling)
-        val gesturePipeline = remember(pageIndex) {
-            PagerGesturePipeline(context)
+        val pageSizeValue = pageSize
+        val pageWidth = pageSizeValue?.width?.coerceAtLeast(1) ?: 1
+        val pageHeight = pageSizeValue?.height?.coerceAtLeast(1) ?: 1
+        val pageAspect = if (pageSizeValue != null && pageWidth > 0) {
+            pageHeight.toFloat() / pageWidth.toFloat()
+        } else {
+            (heightPx / widthPx).coerceAtLeast(1f)
         }
+        val pageHeightPx = widthPx * pageAspect
+        val baseScale = if (pageSizeValue != null && pageWidth > 0) {
+            widthPx / pageWidth.toFloat()
+        } else {
+            1f
+        }
+        val effectiveScale = (baseScale * scale).coerceAtLeast(1f)
+        val tilesPerAxis = determineTilesPerAxis(scale, density, widthPx, pageHeightPx)
+        val tileFractions = remember(pageIndex, tilesPerAxis) {
+            buildList {
+                val step = 1f / tilesPerAxis
+                for (row in 0 until tilesPerAxis) {
+                    for (col in 0 until tilesPerAxis) {
+                        val left = col * step
+                        val top = row * step
+                        val right = if (col == tilesPerAxis - 1) 1f else (col + 1) * step
+                        val bottom = if (row == tilesPerAxis - 1) 1f else (row + 1) * step
+                        add(RectF(left, top, right, bottom))
+                    }
+                }
+            }
+        }
+        val tileInfos = if (pageSizeValue == null) {
+            emptyList()
+        } else {
+            tileFractions.map { fraction ->
+                val left = (fraction.left * pageWidth).toInt().coerceIn(0, pageWidth - 1)
+                val top = (fraction.top * pageHeight).toInt().coerceIn(0, pageHeight - 1)
+                val right = (fraction.right * pageWidth).roundToInt().coerceIn(left + 1, pageWidth)
+                val bottom = (fraction.bottom * pageHeight).roundToInt().coerceIn(top + 1, pageHeight)
+                val rect = Rect(left, top, right, bottom)
+                PageTileKey(left, top, right, bottom, effectiveScale.toBits()) to rect
+            }
+        }
+
         gesturePipeline.updateSensitivity(swipeSensitivity)
-        gesturePipeline.updatePageBounds(widthPx, heightPx)
+        gesturePipeline.updatePageBounds(widthPx, pageHeightPx)
         gesturePipeline.onScaleListener = { delta ->
             scale = (scale * delta).coerceIn(1f, 4f)
             if (scale <= 1.01f) {
@@ -594,7 +702,7 @@ private fun PdfPageContainer(
             val panMultiplier = 0.6f * swipeSensitivity
             val updated = translation + Offset(-dx * panMultiplier, -dy * panMultiplier)
             val maxTranslationX = ((scale - 1f) * widthPx) / 2f
-            val maxTranslationY = ((scale - 1f) * heightPx) / 2f
+            val maxTranslationY = ((scale - 1f) * pageHeightPx) / 2f
             translation = Offset(
                 x = updated.x.coerceIn(-maxTranslationX, maxTranslationX),
                 y = updated.y.coerceIn(-maxTranslationY, maxTranslationY)
@@ -604,15 +712,30 @@ private fun PdfPageContainer(
             latestFling(direction, velocity * swipeSensitivity)
         }
 
-        LaunchedEffect(pageIndex, widthPx, heightPx, scale) {
-            repeat(3) {
-                val targetHeight = (heightPx * scale).roundToInt().coerceAtLeast(1)
-                val bitmap = renderPage(pageIndex, Size(widthPx.roundToInt(), targetHeight), scale)
-                if (bitmap != null) {
-                    bitmapState = bitmap
-                    return@LaunchedEffect
+        LaunchedEffect(pageIndex, tilesPerAxis, effectiveScale, pageSizeValue) {
+            if (pageSizeValue == null) return@LaunchedEffect
+            latestTileSpec(TilePreloadSpec(pageIndex, tileFractions, effectiveScale))
+            val currentKeys = tileInfos.map { it.first }.toSet()
+            val staleKeys = tileBitmaps.keys.toList().filter { it !in currentKeys }
+            staleKeys.forEach { key ->
+                tileBitmaps.remove(key)?.let { bitmap ->
+                    if (!bitmap.isRecycled) {
+                        bitmap.recycle()
+                    }
                 }
-                delay(32)
+            }
+            tileInfos.forEach { (key, rect) ->
+                val cached = tileBitmaps[key]
+                if (cached == null || cached.isRecycled) {
+                    repeat(2) {
+                        val bitmap = latestRenderTile(pageIndex, rect, effectiveScale)
+                        if (bitmap != null) {
+                            tileBitmaps[key] = bitmap
+                            return@repeat
+                        }
+                        delay(32)
+                    }
+                }
             }
         }
 
@@ -624,10 +747,8 @@ private fun PdfPageContainer(
                 },
             contentAlignment = Alignment.Center
         ) {
-            bitmapState?.let { bitmap ->
-                androidx.compose.foundation.Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "PDF page",
+            if (pageSizeValue != null) {
+                Canvas(
                     modifier = Modifier
                         .graphicsLayer {
                             scaleX = scale
@@ -636,42 +757,57 @@ private fun PdfPageContainer(
                             translationY = translation.y
                         }
                         .fillMaxWidth()
+                        .aspectRatio(pageAspect)
+                ) {
+                    val drawScale = if (pageWidth > 0) size.width / pageWidth.toFloat() else 1f
+                    tileInfos.forEach { (key, rect) ->
+                        val bitmap = tileBitmaps[key]
+                        if (bitmap != null && !bitmap.isRecycled) {
+                            val destLeft = rect.left * drawScale
+                            val destTop = rect.top * drawScale
+                            val destWidth = (rect.width().toFloat() * drawScale).coerceAtLeast(1f)
+                            val destHeight = (rect.height().toFloat() * drawScale).coerceAtLeast(1f)
+                            drawImage(
+                                image = bitmap.asImageBitmap(),
+                                dstOffset = IntOffset(destLeft.roundToInt(), destTop.roundToInt()),
+                                dstSize = IntSize(destWidth.roundToInt(), destHeight.roundToInt())
+                            )
+                        }
+                    }
+                }
+
+                val sharedModifier = Modifier
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = translation.x
+                        translationY = translation.y
+                    }
+                    .fillMaxWidth()
+                    .aspectRatio(pageAspect)
+
+                SearchHighlightOverlay(
+                    modifier = sharedModifier,
+                    matches = state.searchResults.firstOrNull { it.pageIndex == pageIndex }?.matches.orEmpty()
+                )
+
+                AnnotationOverlay(
+                    modifier = sharedModifier,
+                    pageIndex = pageIndex,
+                    annotations = state.activeAnnotations.filterIsInstance<AnnotationCommand.Stroke>()
+                        .filter { it.pageIndex == pageIndex },
+                    onStrokeComplete = { points ->
+                        val command = AnnotationCommand.Stroke(
+                            pageIndex = pageIndex,
+                            points = points.map { com.novapdf.reader.model.PointSnapshot(it.x, it.y) },
+                            color = 0xFFFF4081,
+                            strokeWidth = 4f
+                        )
+                        onStrokeFinished(command)
+                    }
                 )
             }
-
-            SearchHighlightOverlay(
-                modifier = Modifier
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = translation.x
-                        translationY = translation.y
-                    }
-                    .fillMaxSize(),
-                matches = state.searchResults.firstOrNull { it.pageIndex == pageIndex }?.matches.orEmpty()
-            )
-
-            AnnotationOverlay(
-                modifier = Modifier
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = translation.x
-                        translationY = translation.y
-                    }
-                    .fillMaxSize(),
-                pageIndex = pageIndex,
-                annotations = state.activeAnnotations.filterIsInstance<AnnotationCommand.Stroke>().filter { it.pageIndex == pageIndex },
-                onStrokeComplete = { points ->
-                    val command = AnnotationCommand.Stroke(
-                        pageIndex = pageIndex,
-                        points = points.map { com.novapdf.reader.model.PointSnapshot(it.x, it.y) },
-                        color = 0xFFFF4081,
-                        strokeWidth = 4f
-                    )
-                    onStrokeFinished(command)
-                }
-            )
         }
     }
 }
+
