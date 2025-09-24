@@ -88,15 +88,17 @@ class MainActivity : ComponentActivity() {
             val alreadyPrompted = preferences.getBoolean(KEY_MANAGE_PROMPTED, false)
             if (!alreadyPrompted) {
                 preferences.edit().putBoolean(KEY_MANAGE_PROMPTED, true).apply()
-                showStorageSnackbar(R.string.storage_permission_manage_explanation)
-                launchManageAllFilesSettings()
-            } else {
-                showStorageSnackbar(
-                    messageRes = R.string.storage_permission_denied,
-                    actionRes = R.string.storage_permission_open_settings,
-                    onAction = { launchManageAllFilesSettings() }
-                )
             }
+            val messageRes = if (alreadyPrompted) {
+                R.string.storage_permission_denied
+            } else {
+                R.string.storage_permission_manage_explanation
+            }
+            showStorageSnackbar(
+                messageRes = messageRes,
+                actionRes = R.string.storage_permission_open_settings,
+                onAction = { launchManageAllFilesSettings() }
+            )
         } else {
             val permission = Manifest.permission.READ_EXTERNAL_STORAGE
             val alreadyPrompted = preferences.getBoolean(KEY_READ_PROMPTED, false)
