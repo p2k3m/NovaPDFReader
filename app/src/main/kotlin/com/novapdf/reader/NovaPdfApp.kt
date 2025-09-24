@@ -1,8 +1,11 @@
 package com.novapdf.reader
 
 import android.app.Application
+import android.content.Context
+import androidx.room.Room
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
+import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 
 class NovaPdfApp : Application() {
@@ -14,12 +17,22 @@ class NovaPdfApp : Application() {
         private set
     lateinit var bookmarkManager: BookmarkManager
         private set
+    lateinit var database: NovaPdfDatabase
+        private set
 
     override fun onCreate() {
         super.onCreate()
         annotationRepository = AnnotationRepository(this)
         pdfDocumentRepository = PdfDocumentRepository(this)
         adaptiveFlowManager = AdaptiveFlowManager(this)
-        bookmarkManager = BookmarkManager(this)
+        database = Room.databaseBuilder(
+            applicationContext,
+            NovaPdfDatabase::class.java,
+            NovaPdfDatabase.NAME
+        ).fallbackToDestructiveMigration().build()
+        bookmarkManager = BookmarkManager(
+            database.bookmarkDao(),
+            getSharedPreferences(BookmarkManager.LEGACY_PREFERENCES_NAME, Context.MODE_PRIVATE)
+        )
     }
 }
