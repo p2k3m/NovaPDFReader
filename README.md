@@ -3,6 +3,20 @@
 NovaPDF Reader is a Jetpack Compose Android application that experiments with "Adaptive Flow Reading" for fluid PDF consumption,
 annotation, and accessibility enhancements on modern Android devices.
 
+## Adaptive Flow performance tooling
+
+Adaptive Flow now records frame pacing through `Choreographer` on the main thread so that preloading logic can back off when the
+UI is under pressure. Two dedicated Gradle tasks are available to exercise the timing heuristics and frame monitoring in
+isolation:
+
+```
+./gradlew adaptiveFlowPerformance
+./gradlew frameMonitoringPerformance
+```
+
+Both tasks reuse the Robolectric unit tests backing the Adaptive Flow manager and give fast feedback without running the full
+unit test suite.
+
 ## Sample PDF fixture
 
 Automated tests and screenshot generation expect a tiny CC0 1.0 licensed document that lives outside of the repository on S3.

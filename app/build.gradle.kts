@@ -1,4 +1,6 @@
 
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -140,4 +142,29 @@ dependencies {
 
 kotlin {
     jvmToolchain(17)
+}
+
+val debugUnitTest = tasks.named<Test>("testDebugUnitTest")
+
+tasks.register<Test>("adaptiveFlowPerformance") {
+    group = "performance"
+    description = "Runs Adaptive Flow timing regression checks."
+    testClassesDirs = debugUnitTest.get().testClassesDirs
+    classpath = debugUnitTest.get().classpath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.readingSpeedRespondsToPageChanges")
+    }
+}
+
+tasks.register<Test>("frameMonitoringPerformance") {
+    group = "performance"
+    description = "Executes frame monitoring diagnostics for Adaptive Flow."
+    testClassesDirs = debugUnitTest.get().testClassesDirs
+    classpath = debugUnitTest.get().classpath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.frameMetricsReactToJank")
+    }
+    shouldRunAfter("adaptiveFlowPerformance")
 }
