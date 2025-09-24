@@ -56,11 +56,9 @@ class PdfDocumentRepository(
     private val renderScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
-    private val bitmapCache = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {}
-    private val bitmapSizes = HashMap<String, Int>()
+    private val bitmapCache = AccessOrderBitmapCache(maxCacheBytes)
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
-    private var cacheSizeBytes = 0L
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
     val session: StateFlow<PdfDocumentSession?> = openSession.asStateFlow()
     private val isRendering = AtomicBoolean(false)
@@ -85,7 +83,7 @@ class PdfDocumentRepository(
     fun closeCurrentSession() {
         if (cacheLock.tryLock()) {
             try {
-                clearCacheLocked()
+                bitmapCache.clear()
             } finally {
                 cacheLock.unlock()
             }
@@ -136,13 +134,9 @@ class PdfDocumentRepository(
         val session = openSession.value ?: return@withContextGuard null
         val key = cacheKey(request)
         cacheLock.withLock {
-            bitmapCache[key]?.let { cached ->
-                if (cached.isRecycled) {
-                    removeRecycledEntryLocked(key, cached)
-                } else {
-                    val config = cached.config ?: Bitmap.Config.ARGB_8888
-                    return@withContextGuard cached.copy(config, false)
-                }
+            bitmapCache.getBitmap(key)?.let { cached ->
+                val config = cached.config ?: Bitmap.Config.ARGB_8888
+                return@withContextGuard cached.copy(config, false)
             }
         }
         if (!isRendering.compareAndSet(false, true)) {
@@ -166,7 +160,7 @@ class PdfDocumentRepository(
             page.render(bitmap, dest, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             page.close()
             cacheLock.withLock {
-                putBitmapLocked(key, bitmap)
+                bitmapCache.putBitmap(key, bitmap)
             }
             val config = bitmap.config ?: Bitmap.Config.ARGB_8888
             bitmap.copy(config, false)
@@ -200,7 +194,7 @@ class PdfDocumentRepository(
         appContext.unregisterComponentCallbacks(componentCallbacks)
         runBlocking {
             cacheLock.withLock {
-                clearCacheLocked()
+                bitmapCache.clear()
             }
         }
         renderScope.cancel()
@@ -248,54 +242,6 @@ class PdfDocumentRepository(
         return max(1L, clamped)
     }
 
-    private fun putBitmapLocked(key: String, bitmap: Bitmap) {
-        val previous = bitmapCache.put(key, bitmap)
-        previous?.let { existing ->
-            val previousSize = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(existing).toLong()
-            cacheSizeBytes = (cacheSizeBytes - previousSize).coerceAtLeast(0L)
-            if (!existing.isRecycled) {
-                existing.recycle()
-            }
-        }
-        val size = safeByteCount(bitmap)
-        bitmapSizes[key] = size
-        cacheSizeBytes += size
-        trimToBudgetLocked()
-    }
-
-    private fun trimToBudgetLocked() {
-        if (cacheSizeBytes <= maxCacheBytes) return
-        val iterator = bitmapCache.entries.iterator()
-        while (cacheSizeBytes > maxCacheBytes && iterator.hasNext()) {
-            val entry = iterator.next()
-            iterator.remove()
-            val key = entry.key
-            val bitmap = entry.value
-            val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
-            cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-    }
-
-    private fun clearCacheLocked() {
-        bitmapCache.entries.forEach { (_, bitmap) ->
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-        bitmapCache.clear()
-        bitmapSizes.clear()
-        cacheSizeBytes = 0L
-    }
-
-    private fun removeRecycledEntryLocked(key: String, bitmap: Bitmap) {
-        bitmapCache.remove(key)
-        val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
-        cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
-    }
-
     private fun safeByteCount(bitmap: Bitmap): Int = try {
         bitmap.byteCount
     } catch (ignored: IllegalStateException) {
@@ -305,7 +251,67 @@ class PdfDocumentRepository(
     private fun scheduleCacheClear() {
         renderScope.launch {
             cacheLock.withLock {
-                clearCacheLocked()
+                bitmapCache.clear()
+            }
+        }
+    }
+
+    private inner class AccessOrderBitmapCache(
+        private val maxBytes: Long
+    ) : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+        private val bitmapSizes = HashMap<String, Int>()
+        private var cacheSizeBytes = 0L
+
+        fun getBitmap(key: String): Bitmap? {
+            val bitmap = super.get(key) ?: return null
+            if (bitmap.isRecycled) {
+                removeRecycledEntry(key, bitmap)
+                return null
+            }
+            return bitmap
+        }
+
+        fun putBitmap(key: String, bitmap: Bitmap) {
+            val previous = super.put(key, bitmap)
+            previous?.let { onEntryRemoved(key, it) }
+            val size = safeByteCount(bitmap)
+            bitmapSizes[key] = size
+            cacheSizeBytes += size
+            trimToBudget()
+        }
+
+        private fun trimToBudget() {
+            if (cacheSizeBytes <= maxBytes) return
+            val iterator = entries.iterator()
+            while (cacheSizeBytes > maxBytes && iterator.hasNext()) {
+                val entry = iterator.next()
+                iterator.remove()
+                onEntryRemoved(entry.key, entry.value)
+            }
+        }
+
+        override fun clear() {
+            values.forEach { bitmap ->
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+            super.clear()
+            bitmapSizes.clear()
+            cacheSizeBytes = 0L
+        }
+
+        private fun removeRecycledEntry(key: String, bitmap: Bitmap) {
+            super.remove(key)
+            val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
+            cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
+        }
+
+        private fun onEntryRemoved(key: String, bitmap: Bitmap) {
+            val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
+            cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
             }
         }
     }
