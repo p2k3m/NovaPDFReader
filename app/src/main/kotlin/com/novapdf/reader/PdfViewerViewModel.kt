@@ -41,7 +41,10 @@ data class PdfViewerUiState(
     val swipeSensitivity: Float = 1f,
     val searchResults: List<SearchResult> = emptyList(),
     val activeAnnotations: List<AnnotationCommand> = emptyList(),
-    val bookmarks: List<Int> = emptyList()
+    val bookmarks: List<Int> = emptyList(),
+    val dynamicColorEnabled: Boolean = true,
+    val highContrastEnabled: Boolean = false,
+    val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR
 )
 
 data class TilePreloadSpec(
@@ -66,7 +69,11 @@ class PdfViewerViewModel(
     private var lastTileSpec: TilePreloadSpec? = null
 
     init {
-        _uiState.value = _uiState.value.copy(isNightMode = isNightModeEnabled())
+        val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        _uiState.value = _uiState.value.copy(
+            isNightMode = isNightModeEnabled(),
+            dynamicColorEnabled = supportsDynamicColor
+        )
         viewModelScope.launch {
             combine(
                 adaptiveFlowManager.readingSpeedPagesPerMinute,
@@ -178,6 +185,21 @@ class PdfViewerViewModel(
             _uiState.value = _uiState.value.copy(
                 bookmarks = bookmarkManager.bookmarks(documentId)
             )
+        }
+    }
+
+    fun setDynamicColorEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(
+            dynamicColorEnabled = enabled,
+            highContrastEnabled = if (enabled) _uiState.value.highContrastEnabled else false
+        )
+    }
+
+    fun setHighContrastEnabled(enabled: Boolean) {
+        if (!_uiState.value.dynamicColorEnabled) {
+            _uiState.value = _uiState.value.copy(highContrastEnabled = false)
+        } else {
+            _uiState.value = _uiState.value.copy(highContrastEnabled = enabled)
         }
     }
 
@@ -345,5 +367,9 @@ class PdfViewerViewModel(
         val configuration = getApplication<Application>().resources.configuration
         val mask = configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         return mask == Configuration.UI_MODE_NIGHT_YES
+    }
+
+    companion object {
+        private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
     }
 }

@@ -15,7 +15,9 @@ import androidx.activity.viewModels
 import androidx.annotation.StringRes
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.novapdf.reader.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
@@ -48,7 +50,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            NovaPdfTheme {
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            NovaPdfTheme(
+                useDarkTheme = uiState.isNightMode,
+                dynamicColor = uiState.dynamicColorEnabled,
+                highContrast = uiState.highContrastEnabled,
+                seedColor = Color(uiState.themeSeedColor)
+            ) {
                 PdfViewerRoute(
                     viewModel = viewModel,
                     snackbarHost = snackbarHost,

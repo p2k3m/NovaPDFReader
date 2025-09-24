@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.ui.theme.NovaPdfTheme
@@ -33,11 +34,18 @@ class PdfViewerScreenTest {
                     onToggleBookmark = {},
                     renderTile = { _, _, _ -> null },
                     requestPageSize = { null },
-                    onTileSpecChanged = {}
+                    onTileSpecChanged = {},
+                    onToggleDynamicColor = {},
+                    onToggleHighContrast = {},
+                    dynamicColorSupported = true
                 )
             }
         }
 
         composeRule.onNodeWithText("Open a PDF to begin").assertIsDisplayed()
+        val dynamicColorLabel = composeRule.activity.getString(R.string.dynamic_color_label)
+        val highContrastLabel = composeRule.activity.getString(R.string.high_contrast_label)
+        composeRule.onNodeWithText(dynamicColorLabel).assertIsDisplayed()
+        composeRule.onNodeWithText(highContrastLabel).assertIsDisplayed()
     }
 }

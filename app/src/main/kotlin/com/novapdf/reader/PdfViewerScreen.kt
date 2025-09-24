@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Size
+import android.os.Build
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,6 +71,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -77,6 +80,10 @@ import androidx.viewpager2.widget.ViewPager2
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.TilePreloadSpec
 import kotlinx.coroutines.delay
@@ -104,7 +111,10 @@ fun PdfViewerRoute(
         onToggleBookmark = { viewModel.toggleBookmark() },
         renderTile = { index, rect, scale -> viewModel.renderTile(index, rect, scale) },
         requestPageSize = { viewModel.pageSize(it) },
-        onTileSpecChanged = { viewModel.updateTileSpec(it) }
+        onTileSpecChanged = { viewModel.updateTileSpec(it) },
+        onToggleDynamicColor = { viewModel.setDynamicColorEnabled(it) },
+        onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
+        dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     )
 }
 
@@ -121,7 +131,10 @@ fun PdfViewerScreen(
     onToggleBookmark: () -> Unit,
     renderTile: suspend (Int, Rect, Float) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
-    onTileSpecChanged: (TilePreloadSpec) -> Unit
+    onTileSpecChanged: (TilePreloadSpec) -> Unit,
+    onToggleDynamicColor: (Boolean) -> Unit,
+    onToggleHighContrast: (Boolean) -> Unit,
+    dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val pagerAdapter = remember(onStrokeFinished, renderTile, requestPageSize, onTileSpecChanged) {
@@ -174,6 +187,14 @@ fun PdfViewerScreen(
             )
 
             AdaptiveFlowStatusRow(state)
+
+            AccessibilitySettings(
+                dynamicColorEnabled = state.dynamicColorEnabled,
+                highContrastEnabled = state.highContrastEnabled,
+                dynamicColorSupported = dynamicColorSupported,
+                onDynamicColorChanged = onToggleDynamicColor,
+                onHighContrastChanged = onToggleHighContrast
+            )
 
             if (state.pageCount == 0) {
                 EmptyState(onOpenDocument)
@@ -591,6 +612,83 @@ private fun AdaptiveFlowStatusRow(state: PdfViewerUiState) {
             Icon(imageVector = icon, contentDescription = null)
         }
     )
+}
+
+@Composable
+private fun AccessibilitySettings(
+    dynamicColorEnabled: Boolean,
+    highContrastEnabled: Boolean,
+    dynamicColorSupported: Boolean,
+    onDynamicColorChanged: (Boolean) -> Unit,
+    onHighContrastChanged: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = stringResource(id = R.string.accessibility_settings_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        SettingsToggleRow(
+            label = stringResource(id = R.string.dynamic_color_label),
+            description = stringResource(
+                id = if (dynamicColorSupported) {
+                    R.string.dynamic_color_description
+                } else {
+                    R.string.dynamic_color_unsupported
+                }
+            ),
+            checked = dynamicColorEnabled && dynamicColorSupported,
+            enabled = dynamicColorSupported,
+            onCheckedChange = onDynamicColorChanged
+        )
+        SettingsToggleRow(
+            label = stringResource(id = R.string.high_contrast_label),
+            description = stringResource(id = R.string.high_contrast_description),
+            checked = highContrastEnabled && dynamicColorEnabled && dynamicColorSupported,
+            enabled = dynamicColorEnabled && dynamicColorSupported,
+            onCheckedChange = onHighContrastChanged
+        )
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            modifier = Modifier.semantics { contentDescription = label }
+        )
+    }
 }
 
 @Composable
