@@ -7,4 +7,9 @@
     <string name="adaptive_flow_off">Adaptive Flow Paused</string>
     <string name="annotation_saved">Annotations saved</string>
     <string name="annotation_discarded">Annotations discarded</string>
+    <string name="storage_permission_manage_explanation">NovaPDF Reader needs "All files access" to browse and open PDFs stored on your device. Approve the request on the next screen.</string>
+    <string name="storage_permission_read_explanation">NovaPDF Reader needs storage permission to open PDFs stored on your device.</string>
+    <string name="storage_permission_granted">Storage access granted. You can now browse your PDFs.</string>
+    <string name="storage_permission_denied">Storage access is still disabled. You can enable it anytime from Settings.</string>
+    <string name="storage_permission_open_settings">Open settings</string>
 </resources>
