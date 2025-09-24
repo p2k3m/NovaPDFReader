@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,6 +40,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -273,10 +275,11 @@ private fun SearchHighlightOverlay(
     matches: List<com.novapdf.reader.model.SearchMatch>
 ) {
     if (matches.isEmpty()) return
+    val highlight = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
     androidx.compose.foundation.Canvas(modifier = modifier) {
         matches.flatMap { it.boundingBoxes }.forEach { rect ->
             drawRect(
-                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f),
+                color = highlight,
                 topLeft = Offset(rect.left * size.width, rect.top * size.height),
                 size = androidx.compose.ui.geometry.Size(
                     (rect.right - rect.left) * size.width,
@@ -436,15 +439,19 @@ private class PagerGesturePipeline(context: Context) {
     var onFlingListener: (Int, Float) -> Unit = { _, _ -> }
 
     init {
-        val simpleListener = object : GestureDetector.SimpleOnGestureListener() {
+        val simpleListener = object : GestureDetector.OnGestureListener {
             override fun onDown(e: MotionEvent): Boolean {
                 consumedFling = false
                 return true
             }
 
+            override fun onShowPress(e: MotionEvent) = Unit
+
+            override fun onSingleTapUp(e: MotionEvent): Boolean = false
+
             override fun onScroll(
                 e1: MotionEvent?,
-                e2: MotionEvent?,
+                e2: MotionEvent,
                 distanceX: Float,
                 distanceY: Float
             ): Boolean {
@@ -453,9 +460,11 @@ private class PagerGesturePipeline(context: Context) {
                 return false
             }
 
+            override fun onLongPress(e: MotionEvent) = Unit
+
             override fun onFling(
                 e1: MotionEvent?,
-                e2: MotionEvent?,
+                e2: MotionEvent,
                 velocityX: Float,
                 velocityY: Float
             ): Boolean {
@@ -526,7 +535,7 @@ private class PhysicsBasedInterpolator : Interpolator {
     }
 
     companion object {
-        private const val DEFAULT_DURATION_MS = 320f
+        private const val DEFAULT_DURATION_MS = 320
     }
 }
 
@@ -603,7 +612,7 @@ private fun EmptyState(onOpenDocument: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun PdfPageContainer(
     pageIndex: Int,
