@@ -17,42 +17,80 @@ jobs:
             device: pixel
             avd: pixel_api21
             tag: google_apis
+            ram_mb: 2048
           - api: 28
             abi: x86_64
             device: pixel_3
             avd: pixel3_api28
             tag: google_apis
+            ram_mb: 4096
           - api: 34
             abi: x86_64
             device: pixel_fold
-            avd: fold_api34
+            avd: pixelfold_api34
             tag: google_apis
-          - api: 34
-            abi: armeabi-v7a
-            device: pixel_4
-            avd: lowram_api34
+            ram_mb: 6144
+          - api: 35
+            abi: x86_64
+            device: pixel_7
+            avd: pixel7_api35
             tag: google_apis
+            ram_mb: 8192
     env:
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
+      ARTIFACTS_DIR: artifacts
+      KEYSTORE_PATH: ${{ github.workspace }}/android-release.jks
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
     steps:
       - name: Validate required secrets
         run: |
+          set -e
           missing=false
+
           if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
-            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
-            echo "- AWS_ACCESS_KEY_ID: Generate from AWS IAM Console > Users > Your User > Security credentials > Access keys > Create access key (for S3 full access policy). Add as repo secret."
+            echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
+            echo "Remediation: Create an access key in AWS IAM (Users → Your deployment user → Security credentials → Create access key) with permissions for the target bucket, then add the value as the AWS_ACCESS_KEY_ID repository secret."
             missing=true
           fi
+
           if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
-            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
-            echo "- AWS_SECRET_ACCESS_KEY: The secret key paired with access key above. Add as repo secret (never commit)."
+            echo "::error::Missing AWS_SECRET_ACCESS_KEY secret required for S3 uploads."
+            echo "Remediation: Copy the secret key generated alongside the IAM access key above and store it as the AWS_SECRET_ACCESS_KEY repository secret. Regenerate the key if it is no longer visible."
             missing=true
           fi
+
           if [ -z "${{ secrets.S3_BUCKET_NAME }}" ]; then
-            echo "ERROR: Missing required GitHub Secrets for AWS S3 upload."
-            echo "- S3_BUCKET_NAME: Create S3 bucket in AWS Console > S3 > Create bucket (e.g., nova-pdf-artifacts). Ensure IAM policy allows s3:PutObject. Add as repo secret."
+            echo "::error::Missing S3_BUCKET_NAME secret required for S3 uploads."
+            echo "Remediation: Provision an S3 bucket (e.g., nova-pdf-artifacts) in the AWS console, ensure the IAM user has s3:PutObject/s3:ListBucket permissions, then add the bucket name as the S3_BUCKET_NAME repository secret."
             missing=true
           fi
+
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::Missing ANDROID_KEYSTORE_BASE64 secret required to sign the release bundle."
+            echo "Remediation: Generate a release keystore (keytool -genkeypair -v -keystore nova-release.jks -alias nova -keyalg RSA -keysize 4096 -validity 10000), base64 encode it (base64 nova-release.jks), and save the output as the ANDROID_KEYSTORE_BASE64 repository secret."
+            missing=true
+          fi
+
+          if [ -z "${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_STORE_PASSWORD secret required to unlock the keystore."
+            echo "Remediation: Store the keystore password selected during key creation as the ANDROID_SIGNING_STORE_PASSWORD repository secret."
+            missing=true
+          fi
+
+          if [ -z "${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_KEY_ALIAS secret required for signing."
+            echo "Remediation: Record the alias supplied when running keytool (e.g., nova) and add it as the ANDROID_SIGNING_KEY_ALIAS repository secret so jarsigner knows which key to use."
+            missing=true
+          fi
+
+          if [ -z "${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_KEY_PASSWORD secret required to access the signing key."
+            echo "Remediation: Store the key password (often the same as the store password unless you set a separate value) as the ANDROID_SIGNING_KEY_PASSWORD repository secret."
+            missing=true
+          fi
+
           if [ "$missing" = true ]; then
             exit 1
           fi
@@ -73,6 +111,22 @@ jobs:
             gradle-
       - name: Grant execute permission for Gradle
         run: chmod +x gradlew
+      - name: Decode signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "Decoding Android signing keystore to $KEYSTORE_PATH"
+          python3 - <<'PY'
+import base64
+import os
+
+encoded = os.environ["ANDROID_KEYSTORE_BASE64"].strip().encode()
+path = os.environ["KEYSTORE_PATH"]
+with open(path, "wb") as target:
+    target.write(base64.b64decode(encoded))
+PY
+          chmod 600 "$KEYSTORE_PATH"
       - name: Download Android SDK components
         env:
           API_LEVEL: ${{ matrix.api }}
@@ -80,11 +134,7 @@ jobs:
           TAG: ${{ matrix.tag }}
         run: |
           yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0"
-      - name: Assemble debug
-        run: ./gradlew assembleDebug --stacktrace
-      - name: Assemble release (unsigned if signing key missing)
-        run: ./gradlew assembleRelease --stacktrace
+          sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --info
       - name: Start emulator
@@ -92,54 +142,126 @@ jobs:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
         run: |
+          set -euo pipefail
           avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory 2048 -skin 1080x1920 &
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim &
           adb wait-for-device
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          adb shell input keyevent 82
+          boot_timeout=0
+          until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
+            sleep 5
+            boot_timeout=$((boot_timeout + 5))
+            if [ $boot_timeout -ge 300 ]; then
+              echo "Emulator failed to boot within 5 minutes" >&2
+              exit 1
+            fi
+          done
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+          adb shell input keyevent 82 || true
       - name: Run instrumentation tests
         run: ./gradlew connectedAndroidTest --stacktrace
       - name: Capture screenshots
         run: |
-          mkdir -p screenshots/${{ matrix.api }}_${{ matrix.device }}
+          set -euo pipefail
+          base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}"
+          portrait_dir="${base_dir}/portrait"
+          landscape_dir="${base_dir}/landscape"
+          mkdir -p "$portrait_dir" "$landscape_dir"
           adb shell am start -n com.novapdf.reader/.MainActivity
-          sleep 15
-          adb shell screencap -p /sdcard/screen_portrait.png
-          adb pull /sdcard/screen_portrait.png screenshots/${{ matrix.api }}_${{ matrix.device }}/screenshot_${{ matrix.api }}_${{ matrix.device }}_portrait.png
           adb shell settings put system accelerometer_rotation 0 || true
+          adb shell settings put system user_rotation 0 || true
+          sleep 10
+          for i in $(seq -w 1 15); do
+            remote="/sdcard/screen_portrait_${i}.png"
+            adb shell screencap -p "$remote"
+            adb pull "$remote" "$portrait_dir/screenshot_${i}.png"
+            adb shell rm "$remote" || true
+            sleep 1
+          done
           adb shell settings put system user_rotation 1 || true
           sleep 5
-          adb shell screencap -p /sdcard/screen_landscape.png
-          adb pull /sdcard/screen_landscape.png screenshots/${{ matrix.api }}_${{ matrix.device }}/screenshot_${{ matrix.api }}_${{ matrix.device }}_landscape.png
+          for i in $(seq -w 1 15); do
+            remote="/sdcard/screen_landscape_${i}.png"
+            adb shell screencap -p "$remote"
+            adb pull "$remote" "$landscape_dir/screenshot_${i}.png"
+            adb shell rm "$remote" || true
+            sleep 1
+          done
           adb shell settings put system user_rotation 0 || true
       - name: Collect emulator logs
         if: always()
-        run: adb logcat -d > emulator-${{ matrix.api }}-${{ matrix.device }}.log || true
+        run: |
+          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}"
+          adb logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}/emulator.log" || true
       - name: Stop emulator
         if: always()
         run: adb -s emulator-5554 emu kill || true
+      - name: Bundle release app
+        run: ./gradlew bundleRelease --stacktrace
+      - name: Sign release bundle
+        run: |
+          set -euo pipefail
+          bundle_path="app/build/outputs/bundle/release/app-release.aab"
+          if [ ! -f "$bundle_path" ]; then
+            echo "Bundle not found at $bundle_path" >&2
+            exit 1
+          fi
+          target_dir="${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}"
+          mkdir -p "$target_dir"
+          signed_bundle="$target_dir/NovaPDFReader-release-signed-api${{ matrix.api }}-${{ matrix.device }}.aab"
+          cp "$bundle_path" "$signed_bundle"
+          jarsigner -keystore "$KEYSTORE_PATH" -storepass "$SIGNING_STORE_PASSWORD" -keypass "$SIGNING_KEY_PASSWORD" "$signed_bundle" "$SIGNING_KEY_ALIAS"
+          jarsigner -verify -verbose -certs "$signed_bundle"
+      - name: Stage test and lint reports
+        if: always()
+        run: |
+          mkdir -p "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}"
+          if [ -d app/build/reports ]; then
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a app/build/reports/ "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/"
+            else
+              cp -R app/build/reports/. "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/"
+            fi
+          fi
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nova-build-${{ matrix.api }}-${{ matrix.device }}
-          path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release-unsigned.apk
-            screenshots/
-            emulator-${{ matrix.api }}-${{ matrix.device }}.log
+          path: ${{ env.ARTIFACTS_DIR }}
+          if-no-files-found: warn
       - name: Install AWS CLI
-        run: pip3 install awscli --user
+        run: |
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          if [ -d "$HOME/Library/Python/3.11/bin" ]; then
+            echo "$HOME/Library/Python/3.11/bin" >> "$GITHUB_PATH"
+          fi
+          if [ -d "$HOME/Library/Python/3.12/bin" ]; then
+            echo "$HOME/Library/Python/3.12/bin" >> "$GITHUB_PATH"
+          fi
       - name: Configure AWS credentials
         run: |
           aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws configure set default.region us-east-1
       - name: Upload build outputs to S3
+        if: success()
         env:
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
+          S3_PREFIX: ci/${{ github.run_id }}/api${{ matrix.api }}/${{ matrix.device }}
         run: |
-          aws s3 cp app/build/outputs/apk/debug/app-debug.apk s3://${BUCKET}/apks/nova-pdf-$(date +%Y%m%d)-${{ matrix.api }}-${{ matrix.device }}.apk
-          aws s3 sync screenshots/ s3://${BUCKET}/screenshots/${{ github.run_id }}/ --delete
-          aws s3 cp app/build/reports/ s3://${BUCKET}/reports/${{ github.run_id }}/ --recursive
+          set -euo pipefail
+          if [ -d "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/bundle/" --recursive
+          fi
+          if [ -d "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/screenshots/" --recursive
+          fi
+          if [ -d "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/reports/" --recursive
+          fi
+          if [ -d "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/logs/" --recursive
+          fi
