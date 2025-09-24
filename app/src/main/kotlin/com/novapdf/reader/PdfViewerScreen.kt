@@ -4,60 +4,41 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
-import android.util.Size
 import android.os.Build
+import android.util.Size
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
-import android.view.ViewGroup
-import android.view.animation.Interpolator
-import android.view.animation.PathInterpolator
-import android.widget.OverScroller
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
+import androidx.compose.foundation.gestures.snapping.snapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillParentMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Brightness4
 import androidx.compose.material.icons.outlined.Brightness7
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FileOpen
-import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -74,23 +55,50 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.recyclerview.widget.RecyclerView
-import androidx.viewpager2.widget.ViewPager2
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.R
-import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.TilePreloadSpec
-import kotlinx.coroutines.delay
+import com.novapdf.reader.model.AnnotationCommand
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -137,17 +145,6 @@ fun PdfViewerScreen(
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val pagerAdapter = remember(onStrokeFinished, renderTile, requestPageSize, onTileSpecChanged) {
-        PdfPagerAdapter(
-            onStrokeFinished = onStrokeFinished,
-            renderTile = renderTile,
-            requestPageSize = requestPageSize,
-            onTileSpecChanged = onTileSpecChanged
-        )
-    }
-    val viewPagerHolder = remember { ViewPagerHolder() }
-    val physicsInterpolator = remember { PhysicsBasedInterpolator() }
-
     val latestOnPageChange by rememberUpdatedState(onPageChange)
 
     Scaffold(
@@ -199,92 +196,15 @@ fun PdfViewerScreen(
             if (state.pageCount == 0) {
                 EmptyState(onOpenDocument)
             } else {
-                AndroidView(
+                PdfPager(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        ViewPager2(context).apply {
-                            clipToPadding = false
-                            clipChildren = false
-                            offscreenPageLimit = 1
-                            adapter = pagerAdapter
-                            viewPagerHolder.viewPager = this
-                            val recyclerView = getChildAt(0) as? RecyclerView
-                            recyclerView?.let { child ->
-                                child.overScrollMode = RecyclerView.OVER_SCROLL_NEVER
-                                child.applyPhysicsInterpolator(physicsInterpolator)
-                                viewPagerHolder.recyclerView = child
-                            }
-                            pagerAdapter.attachPagerCallbacks(
-                                onPageFling = { pageIndex, direction, velocity ->
-                                    val recyclerView = viewPagerHolder.recyclerView
-                                    val width = recyclerView?.width ?: width
-                                    val target = (pageIndex + direction).coerceIn(0, pagerAdapter.itemCount - 1)
-                                    if (target != pageIndex) {
-                                        if (width > 0) {
-                                            recyclerView?.smoothScrollBy(
-                                                direction * width,
-                                                0,
-                                                physicsInterpolator,
-                                                physicsInterpolator.durationForVelocity(abs(velocity))
-                                            )
-                                        }
-                                        setCurrentItem(target, width == 0)
-                                    }
-                                }
-                            )
-                            registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
-                                override fun onPageSelected(position: Int) {
-                                    super.onPageSelected(position)
-                                    viewPagerHolder.onPageSelected?.invoke(position)
-                                }
-                            }.also { callback ->
-                                viewPagerHolder.pageChangeCallback = callback
-                            })
-                        }
-                    },
-                    update = { pager ->
-                        if (pager.adapter !== pagerAdapter) {
-                            pager.adapter = pagerAdapter
-                        }
-                        pagerAdapter.updateState(state)
-                        pagerAdapter.attachPagerCallbacks { pageIndex, direction, velocity ->
-                            val recyclerView = viewPagerHolder.recyclerView
-                            val width = recyclerView?.width ?: pager.width
-                            val target = (pageIndex + direction).coerceIn(0, pagerAdapter.itemCount - 1)
-                            if (target != pageIndex) {
-                                if (width > 0) {
-                                    recyclerView?.smoothScrollBy(
-                                        direction * width,
-                                        0,
-                                        physicsInterpolator,
-                                        physicsInterpolator.durationForVelocity(abs(velocity))
-                                    )
-                                }
-                                pager.setCurrentItem(target, width == 0)
-                            }
-                        }
-                        if (pagerAdapter.itemCount > 0) {
-                            val target = state.currentPage.coerceIn(0, pagerAdapter.itemCount - 1)
-                            if (pager.currentItem != target) {
-                                pager.setCurrentItem(target, false)
-                            }
-                        }
-                        val recyclerView = pager.getChildAt(0) as? RecyclerView
-                        if (recyclerView != null && recyclerView !== viewPagerHolder.recyclerView) {
-                            recyclerView.overScrollMode = RecyclerView.OVER_SCROLL_NEVER
-                            recyclerView.applyPhysicsInterpolator(physicsInterpolator)
-                            viewPagerHolder.recyclerView = recyclerView
-                        }
-                    }
+                    state = state,
+                    onPageChange = latestOnPageChange,
+                    onStrokeFinished = onStrokeFinished,
+                    renderTile = renderTile,
+                    requestPageSize = requestPageSize,
+                    onTileSpecChanged = onTileSpecChanged
                 )
-                SideEffect {
-                    viewPagerHolder.onPageSelected = latestOnPageChange
-                }
-                DisposableEffect(Unit) {
-                    onDispose {
-                        viewPagerHolder.detach()
-                    }
-                }
             }
         }
     }
@@ -311,119 +231,66 @@ private fun SearchHighlightOverlay(
     }
 }
 
-private class ViewPagerHolder {
-    var viewPager: ViewPager2? = null
-    var recyclerView: RecyclerView? = null
-    var pageChangeCallback: ViewPager2.OnPageChangeCallback? = null
-    var onPageSelected: ((Int) -> Unit)? = null
 
-    fun detach() {
-        viewPager?.let { pager ->
-            pageChangeCallback?.let { pager.unregisterOnPageChangeCallback(it) }
-        }
-        pageChangeCallback = null
-        recyclerView = null
-        viewPager = null
-        onPageSelected = null
-    }
+private fun LazyListState.closestPageIndex(): Int? {
+    val layoutInfo = layoutInfo
+    val visibleItems = layoutInfo.visibleItemsInfo
+    if (visibleItems.isEmpty()) return null
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
+    return visibleItems.minByOrNull { item ->
+        abs((item.offset + item.size / 2f) - viewportCenter)
+    }?.index
 }
 
-private class PdfPagerAdapter(
-    private val onStrokeFinished: (AnnotationCommand) -> Unit,
-    private val renderTile: suspend (Int, Rect, Float) -> Bitmap?,
-    private val requestPageSize: suspend (Int) -> Size?,
-    private val onTileSpecChanged: (TilePreloadSpec) -> Unit
-) : RecyclerView.Adapter<PdfPagerAdapter.PageViewHolder>() {
-    private var uiState: PdfViewerUiState = PdfViewerUiState()
-    private var onPageFling: (Int, Int, Float) -> Unit = { _, _, _ -> }
+private class PagerSnapLayoutInfoProvider(
+    private val lazyListState: LazyListState
+) : SnapLayoutInfoProvider {
 
-    fun updateState(state: PdfViewerUiState) {
-        val previousCount = uiState.pageCount
-        uiState = state
-        if (previousCount != state.pageCount) {
-            notifyDataSetChanged()
-        } else if (state.pageCount > 0) {
-            notifyItemRangeChanged(0, state.pageCount)
-        }
-    }
+    override fun calculateApproachOffset(velocity: Float, decayOffset: Float): Float = 0f
 
-    fun attachPagerCallbacks(onPageFling: (pageIndex: Int, direction: Int, velocity: Float) -> Unit) {
-        this.onPageFling = onPageFling
-    }
+    override fun calculateSnapOffset(velocity: Float): Float {
+        val layoutInfo = lazyListState.layoutInfo
+        val visibleItems = layoutInfo.visibleItemsInfo
+        if (visibleItems.isEmpty()) return 0f
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageViewHolder {
-        val composeView = ComposeView(parent.context).apply {
-            layoutParams = RecyclerView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-        }
-        return PageViewHolder(composeView)
-    }
+        val viewportStart = layoutInfo.viewportStartOffset
+        val viewportEnd = layoutInfo.viewportEndOffset
+        val viewportCenter = viewportStart + (viewportEnd - viewportStart) / 2f
+        val closest = visibleItems.minByOrNull { item ->
+            abs((item.offset + item.size / 2f) - viewportCenter)
+        } ?: return 0f
 
-    override fun getItemCount(): Int = uiState.pageCount
+        val offsetFromStart = (closest.offset - viewportStart).toFloat()
+        val halfSize = closest.size / 2f
+        val velocityThreshold = PagerSnapVelocityThreshold
 
-    override fun onBindViewHolder(holder: PageViewHolder, position: Int) {
-        holder.bind(
-            pageIndex = position,
-            state = uiState,
-            onStrokeFinished = onStrokeFinished,
-            renderTile = renderTile,
-            requestPageSize = requestPageSize,
-            onTileSpecChanged = onTileSpecChanged,
-            onRequestPageFling = { direction, velocity ->
-                onPageFling(position, direction, velocity)
-            }
-        )
-    }
-
-    class PageViewHolder(private val composeView: ComposeView) : RecyclerView.ViewHolder(composeView) {
-        private val pageIndexState = mutableIntStateOf(0)
-        private val stateState = mutableStateOf(PdfViewerUiState())
-        private val strokeCallbackState = mutableStateOf<(AnnotationCommand) -> Unit>({})
-        private val renderRequestState = mutableStateOf<suspend (Int, Rect, Float) -> Bitmap?>({ _, _, _ -> null })
-        private val pageSizeRequestState = mutableStateOf<suspend (Int) -> Size?>({ _ -> null })
-        private val tileSpecCallbackState = mutableStateOf<(TilePreloadSpec) -> Unit>({})
-        private val flingRequestState = mutableStateOf<(Int, Float) -> Unit>({ _, _ -> })
-
-        init {
-            composeView.setContent {
-                val state = stateState.value
-                PdfPageContainer(
-                    pageIndex = pageIndexState.intValue,
-                    state = state,
-                    swipeSensitivity = state.swipeSensitivity,
-                    onStrokeFinished = { command ->
-                        strokeCallbackState.value(command)
-                    },
-                    renderTile = renderRequestState.value,
-                    requestPageSize = pageSizeRequestState.value,
-                    onTileSpecChanged = tileSpecCallbackState.value,
-                    onRequestPageFling = { direction, velocity ->
-                        flingRequestState.value(direction, velocity)
-                    }
-                )
-            }
+        val targetIndex = when {
+            velocity > velocityThreshold -> (closest.index + 1).coerceAtMost(layoutInfo.totalItemsCount - 1)
+            velocity < -velocityThreshold -> (closest.index - 1).coerceAtLeast(0)
+            offsetFromStart <= -halfSize -> (closest.index + 1).coerceAtMost(layoutInfo.totalItemsCount - 1)
+            offsetFromStart >= halfSize -> (closest.index - 1).coerceAtLeast(0)
+            else -> closest.index
         }
 
-        fun bind(
-            pageIndex: Int,
-            state: PdfViewerUiState,
-            onStrokeFinished: (AnnotationCommand) -> Unit,
-            renderTile: suspend (Int, Rect, Float) -> Bitmap?,
-            requestPageSize: suspend (Int) -> Size?,
-            onTileSpecChanged: (TilePreloadSpec) -> Unit,
-            onRequestPageFling: (direction: Int, velocity: Float) -> Unit
-        ) {
-            pageIndexState.intValue = pageIndex
-            stateState.value = state
-            strokeCallbackState.value = onStrokeFinished
-            renderRequestState.value = renderTile
-            pageSizeRequestState.value = requestPageSize
-            tileSpecCallbackState.value = onTileSpecChanged
-            flingRequestState.value = onRequestPageFling
+        return distanceToIndex(layoutInfo, targetIndex)
+    }
+
+    private fun distanceToIndex(layoutInfo: LazyListLayoutInfo, index: Int): Float {
+        val viewportStart = layoutInfo.viewportStartOffset
+        val visible = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        if (visible != null) {
+            return (visible.offset - viewportStart).toFloat()
         }
+
+        val reference = layoutInfo.visibleItemsInfo.firstOrNull() ?: return 0f
+        val pageSize = reference.size.takeIf { it != 0 } ?: return 0f
+        val deltaItems = index - reference.index
+        val predictedOffset = reference.offset + deltaItems * pageSize
+        return (predictedOffset - viewportStart).toFloat()
+    }
+
+    companion object {
+        private const val PagerSnapVelocityThreshold = 1200f
     }
 }
 
@@ -540,35 +407,9 @@ private class PagerGesturePipeline(context: Context) {
     }
 }
 
-private class PhysicsBasedInterpolator : Interpolator {
-    private val curve: Interpolator = PathInterpolator(0.16f, 0f, 0.1f, 1f)
 
-    override fun getInterpolation(input: Float): Float {
-        val clamped = input.coerceIn(0f, 1f)
-        val damped = 1f - exp(-4.5f * clamped)
-        return curve.getInterpolation(damped.coerceIn(0f, 1f))
-    }
 
-    fun durationForVelocity(velocity: Float): Int {
-        if (velocity <= 0f) return DEFAULT_DURATION_MS
-        val normalized = (velocity / 2200f).coerceIn(0.4f, 2.4f)
-        return (DEFAULT_DURATION_MS / normalized).toInt().coerceIn(180, 420)
-    }
 
-    companion object {
-        private const val DEFAULT_DURATION_MS = 320
-    }
-}
-
-private fun RecyclerView.applyPhysicsInterpolator(interpolator: Interpolator) {
-    runCatching {
-        val viewFlingerField = RecyclerView::class.java.getDeclaredField("mViewFlinger").apply { isAccessible = true }
-        val viewFlinger = viewFlingerField.get(this)
-        val scrollerField = viewFlinger.javaClass.getDeclaredField("mScroller").apply { isAccessible = true }
-        val overScroller = OverScroller(context, interpolator)
-        scrollerField.set(viewFlinger, overScroller)
-    }
-}
 
 @Composable
 private fun SearchBar(
@@ -710,6 +551,88 @@ private fun EmptyState(onOpenDocument: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PdfPager(
+    modifier: Modifier,
+    state: PdfViewerUiState,
+    onPageChange: (Int) -> Unit,
+    onStrokeFinished: (AnnotationCommand) -> Unit,
+    renderTile: suspend (Int, Rect, Float) -> Bitmap?,
+    requestPageSize: suspend (Int) -> Size?,
+    onTileSpecChanged: (TilePreloadSpec) -> Unit
+) {
+    val lazyListState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val latestOnPageChange by rememberUpdatedState(onPageChange)
+    val latestState by rememberUpdatedState(state)
+    val latestStrokeFinished by rememberUpdatedState(onStrokeFinished)
+    val latestRenderTile by rememberUpdatedState(renderTile)
+    val latestRequestPageSize by rememberUpdatedState(requestPageSize)
+    val latestTileSpecChanged by rememberUpdatedState(onTileSpecChanged)
+    val decaySpec = rememberSplineBasedDecay<Float>()
+    val snapAnimationSpec = remember { spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = 0.85f) }
+    val snapLayoutInfoProvider = remember(lazyListState) { PagerSnapLayoutInfoProvider(lazyListState) }
+    val flingBehavior = remember(decaySpec, snapAnimationSpec, snapLayoutInfoProvider) {
+        snapFlingBehavior(
+            snapLayoutInfoProvider = snapLayoutInfoProvider,
+            decayAnimationSpec = decaySpec,
+            snapAnimationSpec = snapAnimationSpec
+        )
+    }
+
+    LaunchedEffect(state.pageCount, state.currentPage) {
+        if (state.pageCount <= 0) return@LaunchedEffect
+        val target = state.currentPage.coerceIn(0, state.pageCount - 1)
+        val current = lazyListState.closestPageIndex() ?: lazyListState.firstVisibleItemIndex
+        if (current != target || lazyListState.firstVisibleItemScrollOffset != 0) {
+            lazyListState.scrollToItem(target)
+        }
+    }
+
+    LaunchedEffect(lazyListState, state.pageCount) {
+        if (state.pageCount <= 0) return@LaunchedEffect
+        snapshotFlow { lazyListState.closestPageIndex() }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .collect { latestOnPageChange(it) }
+    }
+
+    val requestPageFling: (Int, Float) -> Unit = { direction, _ ->
+        coroutineScope.launch {
+            val pageCount = latestState.pageCount
+            if (pageCount <= 0) return@launch
+            val current = lazyListState.closestPageIndex() ?: latestState.currentPage
+            val target = (current + direction).coerceIn(0, pageCount - 1)
+            if (target != current) {
+                lazyListState.animateScrollToItem(target)
+            }
+        }
+    }
+
+    LazyRow(
+        modifier = modifier,
+        state = lazyListState,
+        flingBehavior = flingBehavior,
+        userScrollEnabled = state.pageCount > 0
+    ) {
+        items(count = state.pageCount, key = { it }) { pageIndex ->
+            Box(modifier = Modifier.fillParentMaxSize()) {
+                PdfPageContainer(
+                    pageIndex = pageIndex,
+                    state = state,
+                    swipeSensitivity = state.swipeSensitivity,
+                    onStrokeFinished = latestStrokeFinished,
+                    renderTile = latestRenderTile,
+                    requestPageSize = latestRequestPageSize,
+                    onTileSpecChanged = latestTileSpecChanged,
+                    onRequestPageFling = requestPageFling
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 private fun PdfPageContainer(
@@ -797,6 +720,24 @@ private fun PdfPageContainer(
             }
         }
 
+        fun applyTranslationDelta(deltaX: Float, deltaY: Float): Offset {
+            val maxTranslationX = ((scale - 1f) * widthPx) / 2f
+            val maxTranslationY = ((scale - 1f) * pageHeightPx) / 2f
+            val newX = (translation.x + deltaX).coerceIn(-maxTranslationX, maxTranslationX)
+            val newY = (translation.y + deltaY).coerceIn(-maxTranslationY, maxTranslationY)
+            val applied = Offset(newX - translation.x, newY - translation.y)
+            translation = Offset(newX, newY)
+            return applied
+        }
+
+        fun consumeVerticalScroll(delta: Float): Float {
+            if (scale <= 1.01f) return 0f
+            val multiplier = 0.6f * swipeSensitivity
+            if (multiplier == 0f || delta == 0f) return 0f
+            val applied = applyTranslationDelta(0f, -delta * multiplier)
+            return if (applied.y == 0f) 0f else -applied.y / multiplier
+        }
+
         gesturePipeline.updateSensitivity(swipeSensitivity)
         gesturePipeline.updatePageBounds(widthPx, pageHeightPx)
         gesturePipeline.onScaleListener = { delta ->
@@ -806,17 +747,37 @@ private fun PdfPageContainer(
             }
         }
         gesturePipeline.onPanListener = { dx, dy ->
-            val panMultiplier = 0.6f * swipeSensitivity
-            val updated = translation + Offset(-dx * panMultiplier, -dy * panMultiplier)
-            val maxTranslationX = ((scale - 1f) * widthPx) / 2f
-            val maxTranslationY = ((scale - 1f) * pageHeightPx) / 2f
-            translation = Offset(
-                x = updated.x.coerceIn(-maxTranslationX, maxTranslationX),
-                y = updated.y.coerceIn(-maxTranslationY, maxTranslationY)
-            )
+            val multiplier = 0.6f * swipeSensitivity
+            applyTranslationDelta(-dx * multiplier, -dy * multiplier)
         }
         gesturePipeline.onFlingListener = { direction, velocity ->
             latestFling(direction, velocity * swipeSensitivity)
+        }
+
+        val nestedScrollConnection = remember(pageIndex, swipeSensitivity) {
+            object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    val consumedY = consumeVerticalScroll(available.y)
+                    return if (consumedY == 0f) Offset.Zero else Offset(x = 0f, y = consumedY)
+                }
+
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource
+                ): Offset {
+                    val consumedY = consumeVerticalScroll(available.y)
+                    return if (consumedY == 0f) Offset.Zero else Offset(x = 0f, y = consumedY)
+                }
+
+                override suspend fun onPreFling(available: Velocity): Velocity {
+                    return if (scale > 1.01f) Velocity(0f, available.y) else Velocity.Zero
+                }
+
+                override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                    return if (scale > 1.01f) Velocity(0f, available.y) else Velocity.Zero
+                }
+            }
         }
 
         LaunchedEffect(pageIndex, tilesPerAxis, effectiveScale, pageSizeValue) {
@@ -849,6 +810,7 @@ private fun PdfPageContainer(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .nestedScroll(nestedScrollConnection)
                 .pointerInteropFilter { event ->
                     gesturePipeline.onTouchEvent(event, scale)
                 },
