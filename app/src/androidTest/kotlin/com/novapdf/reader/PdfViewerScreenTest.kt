@@ -31,7 +31,9 @@ class PdfViewerScreenTest {
                     onSaveAnnotations = {},
                     onSearch = {},
                     onToggleBookmark = {},
-                    renderPage = { _, _, _ -> null }
+                    renderTile = { _, _, _ -> null },
+                    requestPageSize = { null },
+                    onTileSpecChanged = {}
                 )
             }
         }
