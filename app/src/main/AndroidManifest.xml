@@ -2,9 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <!-- MANAGE_EXTERNAL_STORAGE is requested through a settings flow in MainActivity to comply
-         with scoped storage policies while still allowing the app to browse the user's PDF
-         library. -->
+    <!-- MANAGE_EXTERNAL_STORAGE is declared so API 30+ users can opt in from the explicit
+         settings screen launched by MainActivity. Keeping the permission behind that settings
+         flow lets us honour scoped storage/Play policy requirements while still enabling the
+         in-app PDF library browser. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
