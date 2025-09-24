@@ -13,7 +13,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
-import com.novapdf.reader.data.PageTileRequest
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.SearchMatch
@@ -88,6 +87,18 @@ class PdfViewerViewModel(
                 )
             }
         }
+        viewModelScope.launch {
+            adaptiveFlowManager.preloadTargets.collect { targets ->
+                val spec = lastTileSpec
+                if (spec != null && targets.isNotEmpty()) {
+                    pdfRepository.preloadTiles(
+                        indices = targets,
+                        tileFractions = spec.tileFractions,
+                        scale = spec.scale
+                    )
+                }
+            }
+        }
     }
 
     fun openDocument(uri: Uri) {
@@ -131,13 +142,7 @@ class PdfViewerViewModel(
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
-        return pdfRepository.renderTile(
-            PageTileRequest(
-                pageIndex = index,
-                tileRect = rect,
-                scale = scale
-            )
-        )
+        return pdfRepository.renderTile(index, rect, scale)
     }
 
     suspend fun pageSize(index: Int): Size? {
