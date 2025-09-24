@@ -6,6 +6,10 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
+val defaultSamplePdfUrl = providers
+    .gradleProperty("novapdfSamplePdfUrl")
+    .orElse("https://novapdf-sample-assets.s3.us-west-2.amazonaws.com/sample.pdf")
+
 android {
     namespace = "com.novapdf.reader"
     compileSdk = 35
@@ -19,6 +23,12 @@ android {
 
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val samplePdfUrl = defaultSamplePdfUrl.get()
+        buildConfigField("String", "SAMPLE_PDF_URL", "\"$samplePdfUrl\"")
+        if (samplePdfUrl.isNotBlank()) {
+            testInstrumentationRunnerArguments["samplePdfUrl"] = samplePdfUrl
+        }
     }
 
     buildTypes {

@@ -1,4 +1,6 @@
 # Assets Directory
 
-The NovaPDF Reader sample build intentionally ships without a binary PDF asset so that the repository remains fully text-based.
-Place any PDFs required for local testing in this directory at development time; they should not be committed.
+This directory intentionally does not store binary fixtures. Instrumentation tests fetch the CC0 1.0 sample PDF from S3 at
+runtime (see the repository README for configuration details) and place it in the device cache instead.
+
+Feel free to drop additional local test documents here while iterating, but do not commit them to the repository.
