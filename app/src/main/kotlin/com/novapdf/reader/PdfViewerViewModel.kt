@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -206,7 +207,7 @@ class PdfViewerViewModel(
         }
     }
 
-    private suspend fun performSearch(pageIndex: Int, query: String): List<SearchMatch> {
+    internal suspend fun performSearch(pageIndex: Int, query: String): List<SearchMatch> {
         val session = pdfRepository.session.value ?: return emptyList()
         val normalizedQuery = normalizeSearchQuery(query)
         if (normalizedQuery.isEmpty()) return emptyList()
@@ -237,18 +238,74 @@ class PdfViewerViewModel(
             return emptyList()
         }
         val runs = mutableListOf<TextRunSnapshot>()
-        val textRuns = page.textContents
-        for (content in textRuns) {
-            val text = content.text
-            if (text.isEmpty()) continue
-            val bounds = content.bounds
-            if (bounds.isEmpty()) continue
-            val copies = bounds.map { RectF(it) }
-            if (copies.isNotEmpty()) {
-                runs += TextRunSnapshot(text, copies)
+        val textStructure = try {
+            page.javaClass.getMethod("getText").invoke(page)
+        } catch (_: ReflectiveOperationException) {
+            return emptyList()
+        } catch (_: Throwable) {
+            return emptyList()
+        }
+
+        fun collect(element: Any?) {
+            when (element) {
+                null -> return
+                is Collection<*> -> {
+                    element.forEach { collect(it) }
+                    return
+                }
+                is Array<*> -> {
+                    element.forEach { collect(it) }
+                    return
+                }
+            }
+            val glyphRuns = when (val glyphs = tryInvoke(element, "getGlyphRuns")) {
+                is Collection<*> -> glyphs
+                is Array<*> -> glyphs.asList()
+                else -> null
+            }
+            if (!glyphRuns.isNullOrEmpty()) {
+                glyphRuns.forEach { collect(it) }
+                return
+            }
+            val text = (tryInvoke(element, "getText") as? CharSequence)
+                ?.toString()
+                ?.takeIf { it.isNotBlank() }
+                ?: return
+            val bounds = extractBounds(element)
+            if (bounds.isNotEmpty()) {
+                runs += TextRunSnapshot(text, bounds)
             }
         }
+
+        collect(textStructure)
         return runs
+    }
+
+    private fun extractBounds(source: Any?): List<RectF> {
+        val direct = convertToRectList(source)
+        if (direct.isNotEmpty()) return direct
+        val bounds = tryInvoke(source, "getBounds") ?: return emptyList()
+        return convertToRectList(bounds)
+    }
+
+    private fun convertToRectList(candidate: Any?): List<RectF> {
+        return when (candidate) {
+            null -> emptyList()
+            is RectF -> listOf(RectF(candidate))
+            is Rect -> listOf(RectF(candidate))
+            is Collection<*> -> candidate.flatMap { convertToRectList(it) }
+            is Array<*> -> candidate.flatMap { convertToRectList(it) }
+            else -> emptyList()
+        }.filter { it.width() > 0f && it.height() > 0f }
+    }
+
+    private fun tryInvoke(target: Any?, methodName: String): Any? {
+        if (target == null) return null
+        return try {
+            target.javaClass.getMethod(methodName).invoke(target)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun approximateMatchesFromBitmap(
