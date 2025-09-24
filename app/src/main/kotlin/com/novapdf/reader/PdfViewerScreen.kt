@@ -76,7 +76,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -147,6 +149,18 @@ fun PdfViewerScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val latestOnPageChange by rememberUpdatedState(onPageChange)
+    val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
+    val echoModeController = remember(context.applicationContext) {
+        EchoModeController(context.applicationContext)
+    }
+    val fallbackHaptics by rememberUpdatedState(newValue = {
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+    })
+
+    DisposableEffect(echoModeController) {
+        onDispose { echoModeController.shutdown() }
+    }
 
     Scaffold(
         topBar = {
@@ -184,7 +198,16 @@ fun PdfViewerScreen(
                 resultsCount = state.searchResults.sumOf { it.matches.size }
             )
 
-            AdaptiveFlowStatusRow(state)
+            AdaptiveFlowStatusRow(state) {
+                val summary = state.echoSummary()
+                if (summary != null) {
+                    echoModeController.speakSummary(summary) {
+                        fallbackHaptics()
+                    }
+                } else {
+                    fallbackHaptics()
+                }
+            }
 
             AccessibilitySettings(
                 dynamicColorEnabled = state.dynamicColorEnabled,
@@ -450,13 +473,19 @@ private fun SearchBar(
 }
 
 @Composable
-private fun AdaptiveFlowStatusRow(state: PdfViewerUiState) {
+private fun AdaptiveFlowStatusRow(
+    state: PdfViewerUiState,
+    onEchoModeRequested: () -> Unit
+) {
     val status = if (state.swipeSensitivity > 1.2f) "Adaptive Flow Active" else "Adaptive Flow Ready"
     val icon = if (state.isNightMode) Icons.Outlined.Brightness4 else Icons.Outlined.Brightness7
     AssistChip(
         modifier = Modifier
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        onClick = { },
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .semantics {
+                contentDescription = "$status. Activate to hear an Echo Mode summary."
+            },
+        onClick = onEchoModeRequested,
         label = {
             Text(
                 text = "$status · ${state.readingSpeed.toInt()} ppm",
