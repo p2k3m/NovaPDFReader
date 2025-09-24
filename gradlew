@@ -100,6 +100,292 @@ die () {
     exit 1
 } >&2
 
+resolve_gradle_base() {
+    base_key=$1
+    case "$base_key" in
+        GRADLE_USER_HOME)
+            if [ -n "$GRADLE_USER_HOME" ]; then
+                printf '%s\n' "$GRADLE_USER_HOME"
+            else
+                printf '%s/.gradle\n' "$HOME"
+            fi
+            ;;
+        PROJECT)
+            printf '%s\n' "$APP_HOME"
+            ;;
+        *)
+            if [ -n "$GRADLE_USER_HOME" ]; then
+                printf '%s\n' "$GRADLE_USER_HOME"
+            else
+                printf '%s/.gradle\n' "$HOME"
+            fi
+            ;;
+    esac
+}
+
+restore_gradle_wrapper_from_base64() {
+    wrapper_jar_path=$1
+    if [ -f "$wrapper_jar_path" ]; then
+        return 0
+    fi
+
+    base64_source="$wrapper_jar_path.base64"
+    if [ ! -f "$base64_source" ]; then
+        return 1
+    fi
+
+    tmp_target="$wrapper_jar_path.tmp"
+    if command -v base64 >/dev/null 2>&1; then
+        if ! base64 --decode "$base64_source" > "$tmp_target"; then
+            rm -f "$tmp_target"
+            return 1
+        fi
+    elif command -v python3 >/dev/null 2>&1; then
+        if ! python3 - "$base64_source" "$tmp_target" <<'PY'
+import base64, sys
+src, dst = sys.argv[1:3]
+with open(src, 'rb') as fh_in, open(dst, 'wb') as fh_out:
+    fh_out.write(base64.b64decode(fh_in.read()))
+PY
+        then
+            rm -f "$tmp_target"
+            return 1
+        fi
+    else
+        return 1
+    fi
+
+    if ! mv "$tmp_target" "$wrapper_jar_path"; then
+        rm -f "$tmp_target"
+        return 1
+    fi
+
+    warn "Gradle wrapper JAR restored from embedded base64 archive"
+    return 0
+}
+
+ensure_gradle_toolchain_jdk() {
+    if [ -n "$ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS" ] && [ -x "$ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS/bin/java" ]; then
+        return 0
+    fi
+
+    install_dir="$HOME/.gradle/jdks/temurin-17"
+    if [ -x "$install_dir/bin/java" ]; then
+        export ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS="$install_dir"
+        export JAVA_HOME="$install_dir"
+        export PATH="$install_dir/bin:$PATH"
+        return 0
+    fi
+
+    os_name=$( uname | tr '[:upper:]' '[:lower:]' )
+    arch_name=$( uname -m )
+
+    case "$os_name" in
+        linux*) os_token=linux ; archive_ext=tar.gz ;;
+        darwin*) os_token=mac ; archive_ext=tar.gz ;;
+        msys*|mingw*|cygwin*) os_token=windows ; archive_ext=zip ;;
+        *) die "ERROR: Unsupported operating system for automatic JDK download: $os_name" ;;
+    esac
+
+    case "$arch_name" in
+        x86_64|amd64) arch_token=x64 ;;
+        aarch64|arm64) arch_token=aarch64 ;;
+        *) die "ERROR: Unsupported CPU architecture for automatic JDK download: $arch_name" ;;
+    esac
+
+    tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t gradle-jdk)
+    if [ ! -d "$tmp_dir" ]; then
+        die "ERROR: Could not create temporary directory for JDK download"
+    fi
+
+    download_url=""
+    if command -v python3 >/dev/null 2>&1; then
+        download_url=$(python3 - "$os_token" "$arch_token" <<'PY'
+import json, sys, urllib.request
+os_token, arch_token = sys.argv[1:3]
+url = "https://api.github.com/repos/adoptium/temurin17-binaries/releases/latest"
+with urllib.request.urlopen(url, timeout=30) as response:
+    release = json.load(response)
+for asset in release.get("assets", []):
+    name = asset.get("name", "")
+    if name.startswith(f"OpenJDK17U-jdk_{arch_token}_{os_token}_hotspot") and name.endswith(('.tar.gz', '.zip')):
+        print(asset.get("browser_download_url", ""))
+        break
+PY
+)
+    fi
+
+    if [ -z "$download_url" ]; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not determine download URL for JDK 17"
+    fi
+
+    archive_path="$tmp_dir/jdk.$archive_ext"
+
+    if command -v curl >/dev/null 2>&1; then
+        if ! curl --fail --location --silent --show-error --output "$archive_path" "$download_url"; then
+            rm -rf "$tmp_dir"
+            die "ERROR: Failed to download JDK 17 from $download_url"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if ! wget -q -O "$archive_path" "$download_url"; then
+            rm -rf "$tmp_dir"
+            die "ERROR: Failed to download JDK 17 from $download_url"
+        fi
+    else
+        rm -rf "$tmp_dir"
+        die "ERROR: Neither curl nor wget is available to download JDK 17"
+    fi
+
+    extracted_dir=""
+    case "$archive_ext" in
+        tar.gz)
+            if ! tar -xzf "$archive_path" -C "$tmp_dir"; then
+                rm -rf "$tmp_dir"
+                die "ERROR: Failed to extract downloaded JDK archive"
+            fi
+            extracted_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'jdk-*' | head -n 1)
+            ;;
+        zip)
+            if ! unzip -q "$archive_path" -d "$tmp_dir"; then
+                rm -rf "$tmp_dir"
+                die "ERROR: Failed to extract downloaded JDK archive"
+            fi
+            extracted_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'jdk-*' | head -n 1)
+            ;;
+    esac
+
+    if [ -z "$extracted_dir" ] || [ ! -d "$extracted_dir" ]; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not locate extracted JDK directory"
+    fi
+
+    if ! mkdir -p "$(dirname "$install_dir")"; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not create JDK installation directory"
+    fi
+
+    rm -rf "$install_dir"
+    if ! mv "$extracted_dir" "$install_dir"; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not install downloaded JDK into $install_dir"
+    fi
+
+    rm -rf "$tmp_dir"
+
+    if [ ! -x "$install_dir/bin/java" ]; then
+        die "ERROR: Downloaded JDK installation is invalid"
+    fi
+
+    export ORG_GRADLE_JVM_TOOLCHAIN_INSTALLATIONS_PATHS="$install_dir"
+    export JAVA_HOME="$install_dir"
+    export PATH="$install_dir/bin:$PATH"
+}
+
+prepare_gradle_execution() {
+    properties_file="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
+    if [ ! -f "$properties_file" ]; then
+        die "ERROR: Gradle wrapper properties file is missing at $properties_file"
+    fi
+
+    distribution_url=$(sed -n 's/^distributionUrl=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+    distribution_url=$(printf '%s' "$distribution_url" | sed 's#\\:#:#g')
+    if [ -z "$distribution_url" ]; then
+        die "ERROR: Could not determine Gradle distribution URL from $properties_file"
+    fi
+
+    distribution_base=$(sed -n 's/^distributionBase=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+    distribution_path=$(sed -n 's/^distributionPath=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+    zip_store_base=$(sed -n 's/^zipStoreBase=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+    zip_store_path=$(sed -n 's/^zipStorePath=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+
+    distribution_base_dir=$(resolve_gradle_base "$distribution_base")
+    zip_store_base_dir=$(resolve_gradle_base "$zip_store_base")
+
+    if [ -z "$distribution_base_dir" ] || [ -z "$zip_store_base_dir" ]; then
+        die "ERROR: Could not resolve Gradle wrapper storage directories"
+    fi
+
+    distribution_file=${distribution_url##*/}
+    distribution_dir=${distribution_file%.zip}
+
+    install_root="$distribution_base_dir/$distribution_path"
+    install_dir="$install_root/$distribution_dir"
+    gradle_executable="$install_dir/bin/gradle"
+
+    if [ -x "$gradle_executable" ]; then
+        printf '%s\n' "$gradle_executable"
+        return 0
+    fi
+
+    warn "Gradle wrapper JAR missing. Falling back to direct Gradle distribution download from $distribution_url"
+
+    zip_store_dir="$zip_store_base_dir/$zip_store_path"
+    distribution_zip="$zip_store_dir/$distribution_file"
+
+    if [ ! -f "$distribution_zip" ]; then
+        if ! mkdir -p "$zip_store_dir"; then
+            die "ERROR: Could not create directory to store Gradle distribution zip"
+        fi
+
+        tmp_zip="$distribution_zip.part"
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl --fail --location --silent --show-error --output "$tmp_zip" "$distribution_url"; then
+                rm -f "$tmp_zip"
+                die "ERROR: Failed to download Gradle distribution from $distribution_url"
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if ! wget -q -O "$tmp_zip" "$distribution_url"; then
+                rm -f "$tmp_zip"
+                die "ERROR: Failed to download Gradle distribution from $distribution_url"
+            fi
+        else
+            rm -f "$tmp_zip"
+            die "ERROR: Neither curl nor wget is available to download the Gradle distribution"
+        fi
+
+        if ! mv "$tmp_zip" "$distribution_zip"; then
+            rm -f "$tmp_zip"
+            die "ERROR: Could not save downloaded Gradle distribution to $distribution_zip"
+        fi
+    fi
+
+    tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t gradle-dist)
+    if [ ! -d "$tmp_dir" ]; then
+        die "ERROR: Could not create temporary directory to unpack Gradle distribution"
+    fi
+
+    if ! unzip -q "$distribution_zip" -d "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Failed to unpack Gradle distribution archive $distribution_zip"
+    fi
+
+    extracted_dir=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'gradle-*' | head -n 1)
+    if [ -z "$extracted_dir" ]; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not locate extracted Gradle directory"
+    fi
+
+    if ! mkdir -p "$install_root"; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not create Gradle installation directory at $install_root"
+    fi
+
+    rm -rf "$install_dir"
+    if ! mv "$extracted_dir" "$install_dir"; then
+        rm -rf "$tmp_dir"
+        die "ERROR: Could not move Gradle distribution into place"
+    fi
+
+    rm -rf "$tmp_dir"
+
+    if [ ! -x "$gradle_executable" ]; then
+        die "ERROR: Gradle executable not found after extraction at $gradle_executable"
+    fi
+
+    printf '%s\n' "$gradle_executable"
+}
+
 # OS specific support (must be 'true' or 'false').
 cygwin=false
 msys=false
@@ -112,7 +398,18 @@ case "$( uname )" in                #(
   NONSTOP* )        nonstop=true ;;
 esac
 
-CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+wrapper_jar="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+restore_gradle_wrapper_from_base64 "$wrapper_jar"
+ensure_gradle_toolchain_jdk
+if [ ! -f "$wrapper_jar" ]; then
+    gradle_cmd=$(prepare_gradle_execution) || exit 1
+fi
+
+if [ -n "$gradle_cmd" ]; then
+    exec "$gradle_cmd" "$@"
+fi
+
+CLASSPATH=$wrapper_jar
 
 
 # Determine the Java command to use to start the JVM.
