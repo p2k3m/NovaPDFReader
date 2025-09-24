@@ -34,6 +34,7 @@ class AnnotationRepositoryTest {
         repository.addAnnotation(documentId, stroke)
         val annotations = repository.annotationsForDocument(documentId)
         assertEquals(1, annotations.size)
+        assertEquals(setOf(documentId), repository.trackedDocumentIds())
 
         val file = repository.saveAnnotations(documentId)
         assertNotNull(file)

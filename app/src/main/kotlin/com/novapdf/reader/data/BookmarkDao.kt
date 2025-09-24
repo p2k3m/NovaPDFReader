@@ -25,4 +25,7 @@ interface BookmarkDao {
 
     @Query("SELECT COUNT(*) FROM bookmarks")
     suspend fun countAll(): Int
+
+    @Query("SELECT DISTINCT document_id FROM bookmarks")
+    suspend fun distinctDocumentIds(): List<String>
 }

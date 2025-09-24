@@ -7,6 +7,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
+import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 class NovaPdfApp : Application() {
     lateinit var annotationRepository: AnnotationRepository
@@ -18,6 +19,8 @@ class NovaPdfApp : Application() {
     lateinit var bookmarkManager: BookmarkManager
         private set
     lateinit var database: NovaPdfDatabase
+        private set
+    lateinit var documentMaintenanceScheduler: DocumentMaintenanceScheduler
         private set
 
     override fun onCreate() {
@@ -34,5 +37,7 @@ class NovaPdfApp : Application() {
             database.bookmarkDao(),
             getSharedPreferences(BookmarkManager.LEGACY_PREFERENCES_NAME, Context.MODE_PRIVATE)
         )
+        documentMaintenanceScheduler = DocumentMaintenanceScheduler(this)
+        documentMaintenanceScheduler.ensurePeriodicSync()
     }
 }

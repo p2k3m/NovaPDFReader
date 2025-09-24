@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 data class PdfViewerUiState(
     val documentId: String? = null,
@@ -61,6 +62,7 @@ class PdfViewerViewModel(
     private val pdfRepository: PdfDocumentRepository = app.pdfDocumentRepository
     private val adaptiveFlowManager: AdaptiveFlowManager = app.adaptiveFlowManager
     private val bookmarkManager: BookmarkManager = app.bookmarkManager
+    private val documentMaintenanceScheduler: DocumentMaintenanceScheduler = app.documentMaintenanceScheduler
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
@@ -175,6 +177,7 @@ class PdfViewerViewModel(
         _uiState.value = _uiState.value.copy(
             activeAnnotations = annotationRepository.annotationsForDocument(documentId)
         )
+        documentMaintenanceScheduler.scheduleAutosave(documentId)
     }
 
     fun toggleBookmark() {
@@ -185,6 +188,7 @@ class PdfViewerViewModel(
             _uiState.value = _uiState.value.copy(
                 bookmarks = bookmarkManager.bookmarks(documentId)
             )
+            documentMaintenanceScheduler.scheduleAutosave(documentId)
         }
     }
 
@@ -205,9 +209,7 @@ class PdfViewerViewModel(
 
     fun persistAnnotations() {
         val documentId = _uiState.value.documentId ?: return
-        viewModelScope.launch {
-            annotationRepository.saveAnnotations(documentId)
-        }
+        documentMaintenanceScheduler.requestImmediateSync(documentId)
     }
 
     fun search(query: String) {
