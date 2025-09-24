@@ -130,6 +130,10 @@ class PdfDocumentRepository(
         }
     }
 
+    suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? {
+        return renderTile(PageTileRequest(pageIndex, tileRect, scale))
+    }
+
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
         val session = openSession.value ?: return@withContextGuard null
         val key = cacheKey(request)
@@ -179,7 +183,7 @@ class PdfDocumentRepository(
                     tileFractions.forEach { fraction ->
                         val rect = fraction.toPageRect(pageSize)
                         if (!rect.isEmpty) {
-                            renderTile(PageTileRequest(pageIndex, rect, scale))
+                            renderTile(pageIndex, rect, scale)
                         }
                     }
                 }
