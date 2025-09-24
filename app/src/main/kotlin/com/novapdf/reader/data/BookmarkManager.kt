@@ -45,6 +45,11 @@ class BookmarkManager(
         }
     }
 
+    suspend fun bookmarkedDocumentIds(): List<String> {
+        ensureMigration()
+        return withContext(dispatcher) { bookmarkDao.distinctDocumentIds() }
+    }
+
     private suspend fun ensureMigration() {
         if (migrationComplete) return
         migrationMutex.withLock {

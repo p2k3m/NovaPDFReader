@@ -12,6 +12,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -55,6 +56,7 @@ class PdfViewerViewModelSearchTest {
         val pdfRepository = mockk<PdfDocumentRepository>()
         val adaptiveFlowManager = mockk<AdaptiveFlowManager>()
         val bookmarkManager = mockk<BookmarkManager>()
+        val maintenanceScheduler = mockk<DocumentMaintenanceScheduler>(relaxed = true)
 
         val readingSpeed = MutableStateFlow(30f)
         val swipeSensitivity = MutableStateFlow(1f)
@@ -97,7 +99,13 @@ class PdfViewerViewModelSearchTest {
         val sessionFlow = MutableStateFlow<PdfDocumentSession?>(session)
         every { pdfRepository.session } returns sessionFlow
 
-        app.installDependencies(annotationRepository, pdfRepository, adaptiveFlowManager, bookmarkManager)
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler
+        )
 
         val viewModel = PdfViewerViewModel(app)
 
@@ -126,6 +134,7 @@ class PdfViewerViewModelSearchTest {
         val pdfRepository = mockk<PdfDocumentRepository>()
         val adaptiveFlowManager = mockk<AdaptiveFlowManager>()
         val bookmarkManager = mockk<BookmarkManager>()
+        val maintenanceScheduler = mockk<DocumentMaintenanceScheduler>(relaxed = true)
 
         val readingSpeed = MutableStateFlow(30f)
         val swipeSensitivity = MutableStateFlow(1f)
@@ -169,7 +178,13 @@ class PdfViewerViewModelSearchTest {
         val sessionFlow = MutableStateFlow<PdfDocumentSession?>(session)
         every { pdfRepository.session } returns sessionFlow
 
-        app.installDependencies(annotationRepository, pdfRepository, adaptiveFlowManager, bookmarkManager)
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler
+        )
 
         val viewModel = PdfViewerViewModel(app)
 
@@ -198,12 +213,14 @@ class PdfViewerViewModelSearchTest {
             annotationRepository: AnnotationRepository,
             pdfRepository: PdfDocumentRepository,
             adaptiveFlowManager: AdaptiveFlowManager,
-            bookmarkManager: BookmarkManager
+            bookmarkManager: BookmarkManager,
+            documentMaintenanceScheduler: DocumentMaintenanceScheduler
         ) {
             setField("annotationRepository", annotationRepository)
             setField("pdfDocumentRepository", pdfRepository)
             setField("adaptiveFlowManager", adaptiveFlowManager)
             setField("bookmarkManager", bookmarkManager)
+            setField("documentMaintenanceScheduler", documentMaintenanceScheduler)
         }
 
         private fun setField(name: String, value: Any) {
