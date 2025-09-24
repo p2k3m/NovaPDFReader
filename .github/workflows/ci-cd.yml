@@ -117,15 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Decoding Android signing keystore to $KEYSTORE_PATH"
-          python3 - <<'PY'
-import base64
-import os
-
-encoded = os.environ["ANDROID_KEYSTORE_BASE64"].strip().encode()
-path = os.environ["KEYSTORE_PATH"]
-with open(path, "wb") as target:
-    target.write(base64.b64decode(encoded))
-PY
+          python3 -c "import base64, os; encoded = os.environ['ANDROID_KEYSTORE_BASE64'].strip().encode(); path = os.environ['KEYSTORE_PATH']; open(path, 'wb').write(base64.b64decode(encoded))"
           chmod 600 "$KEYSTORE_PATH"
       - name: Download Android SDK components
         env:
