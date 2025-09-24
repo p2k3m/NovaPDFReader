@@ -92,6 +92,7 @@ import com.novapdf.reader.R
 import com.novapdf.reader.TilePreloadSpec
 import com.novapdf.reader.model.AnnotationCommand
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -294,16 +295,29 @@ private class PagerSnapLayoutInfoProvider(
     }
 }
 
-private fun determineTilesPerAxis(scale: Float, density: Density, widthPx: Float, heightPx: Float): Int {
+private fun determineTileGrid(
+    scale: Float,
+    density: Density,
+    widthPx: Float,
+    heightPx: Float
+): TileGrid {
     val densityScale = density.density.coerceAtLeast(0.5f)
-    val longestDimension = max(widthPx, heightPx) * scale
-    val normalized = longestDimension / (densityScale * 640f)
-    return when {
-        normalized < 1.2f -> 2
-        normalized < 2.2f -> 3
-        else -> 4
+    val scaledWidth = widthPx * scale
+    val scaledHeight = heightPx * scale
+    val targetTileSize = (densityScale * 640f).coerceAtLeast(1f)
+
+    fun tilesFor(dimension: Float): Int {
+        if (dimension <= 0f) return 2
+        val raw = ceil(dimension / targetTileSize).toInt()
+        return raw.coerceIn(2, 4)
     }
+
+    val columns = tilesFor(scaledWidth)
+    val rows = tilesFor(scaledHeight)
+    return TileGrid(columns = columns, rows = rows)
 }
+
+private data class TileGrid(val columns: Int, val rows: Int)
 
 private data class PageTileKey(
     val left: Int,
@@ -692,16 +706,17 @@ private fun PdfPageContainer(
             1f
         }
         val effectiveScale = (baseScale * scale).coerceAtLeast(1f)
-        val tilesPerAxis = determineTilesPerAxis(scale, density, widthPx, pageHeightPx)
-        val tileFractions = remember(pageIndex, tilesPerAxis) {
+        val tileGrid = determineTileGrid(scale, density, widthPx, pageHeightPx)
+        val tileFractions = remember(pageIndex, tileGrid) {
             buildList {
-                val step = 1f / tilesPerAxis
-                for (row in 0 until tilesPerAxis) {
-                    for (col in 0 until tilesPerAxis) {
-                        val left = col * step
-                        val top = row * step
-                        val right = if (col == tilesPerAxis - 1) 1f else (col + 1) * step
-                        val bottom = if (row == tilesPerAxis - 1) 1f else (row + 1) * step
+                val widthStep = 1f / tileGrid.columns
+                val heightStep = 1f / tileGrid.rows
+                for (row in 0 until tileGrid.rows) {
+                    for (col in 0 until tileGrid.columns) {
+                        val left = col * widthStep
+                        val top = row * heightStep
+                        val right = if (col == tileGrid.columns - 1) 1f else (col + 1) * widthStep
+                        val bottom = if (row == tileGrid.rows - 1) 1f else (row + 1) * heightStep
                         add(RectF(left, top, right, bottom))
                     }
                 }
@@ -780,7 +795,7 @@ private fun PdfPageContainer(
             }
         }
 
-        LaunchedEffect(pageIndex, tilesPerAxis, effectiveScale, pageSizeValue) {
+        LaunchedEffect(pageIndex, tileGrid, effectiveScale, pageSizeValue) {
             if (pageSizeValue == null) return@LaunchedEffect
             latestTileSpec(TilePreloadSpec(pageIndex, tileFractions, effectiveScale))
             val currentKeys = tileInfos.map { it.first }.toSet()
