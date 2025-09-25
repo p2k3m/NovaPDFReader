@@ -2,10 +2,16 @@ package com.novapdf.reader
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import android.hardware.SensorEvent
+import android.hardware.SensorManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -66,5 +72,59 @@ class AdaptiveFlowManagerTest {
         val jankyPreload = manager.preloadTargets.value
 
         assertTrue(jankyPreload.size < smoothPreload.size)
+    }
+
+    @Test
+    fun sensorTiltBoostsPreloadTargets() = runTest {
+        var now = 0L
+        val manager = AdaptiveFlowManager(
+            context = context,
+            wallClock = { now },
+            coroutineScope = this
+        )
+
+        manager.trackPageChange(0, 12)
+        now += 2_000
+        manager.trackPageChange(1, 12)
+        advanceUntilIdle()
+        val baseline = manager.preloadTargets.value.size
+
+        manager.onSensorChanged(sensorEvent(x = 4f, y = 5f, z = SensorManager.GRAVITY_EARTH))
+        now += 2_000
+        manager.trackPageChange(2, 12)
+        advanceUntilIdle()
+
+        val boosted = manager.preloadTargets.value.size
+        assertTrue(boosted >= baseline)
+        assertTrue(manager.swipeSensitivity.value > 1f)
+    }
+
+    @Test
+    fun frameMetricsIgnoreInvalidSamples() {
+        val manager = AdaptiveFlowManager(
+            context = context,
+            wallClock = { 0L },
+            coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+
+        repeat(5) { manager.updateFrameMetrics(16f) }
+        val baseline = manager.frameIntervalMillis.value
+
+        manager.updateFrameMetrics(Float.NaN)
+        manager.updateFrameMetrics(0f)
+        manager.updateFrameMetrics(1_500f)
+
+        assertEquals(baseline, manager.frameIntervalMillis.value, 0.001f)
+    }
+
+    private fun sensorEvent(x: Float, y: Float, z: Float): SensorEvent {
+        val constructor = SensorEvent::class.java.getDeclaredConstructor(Int::class.javaPrimitiveType)
+        constructor.isAccessible = true
+        val event = constructor.newInstance(3)
+        val values = event.values
+        values[0] = x
+        values[1] = y
+        values[2] = z
+        return event
     }
 }

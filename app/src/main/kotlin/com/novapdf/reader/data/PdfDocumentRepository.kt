@@ -17,6 +17,7 @@ import android.util.Size
 import android.util.SparseArray
 import android.util.Log
 import androidx.core.graphics.createBitmap
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,11 +65,12 @@ data class PageTileRequest(
 )
 
 class PdfDocumentRepository(
-    private val context: Context
+    private val context: Context,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
-    private val renderScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val renderScope = CoroutineScope(SupervisorJob() + ioDispatcher)
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val bitmapCache = AccessOrderBitmapCache(maxCacheBytes)
@@ -279,7 +281,7 @@ class PdfDocumentRepository(
         }
     }
 
-    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(ioDispatcher) { block() }
 
     private fun validateDocumentUri(uri: Uri): Boolean {
         if (!isAllowedScheme(uri)) {
