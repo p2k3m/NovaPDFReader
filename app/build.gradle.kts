@@ -4,7 +4,10 @@ import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.tasks.testing.Test
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
+import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.io.File
+import java.math.BigDecimal
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
@@ -33,6 +36,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
     id("androidx.baselineprofile")
+    id("jacoco")
 }
 
 android {
@@ -131,6 +135,10 @@ android {
     }
 }
 
+jacoco {
+    toolVersion = "0.8.11"
+}
+
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
@@ -207,13 +215,39 @@ kotlin {
 }
 
 afterEvaluate {
-    val debugUnitTest = tasks.named<Test>("testDebugUnitTest")
+    val releaseUnitTest = tasks.named<Test>("testReleaseUnitTest")
+
+    releaseUnitTest.configure {
+        finalizedBy(
+            tasks.named("jacocoTestReleaseUnitTestReport"),
+            tasks.named("jacocoTestReleaseUnitTestCoverageVerification")
+        )
+    }
+
+    tasks.named<JacocoReport>("jacocoTestReleaseUnitTestReport") {
+        dependsOn(releaseUnitTest)
+        reports {
+            xml.required.set(true)
+            html.required.set(true)
+        }
+    }
+
+    tasks.named<JacocoCoverageVerification>("jacocoTestReleaseUnitTestCoverageVerification") {
+        dependsOn(releaseUnitTest)
+        violationRules {
+            rule {
+                limit {
+                    minimum = BigDecimal("0.80")
+                }
+            }
+        }
+    }
 
     tasks.register<Test>("adaptiveFlowPerformance") {
         group = "performance"
         description = "Runs Adaptive Flow timing regression checks."
-        testClassesDirs = debugUnitTest.get().testClassesDirs
-        classpath = debugUnitTest.get().classpath
+        testClassesDirs = releaseUnitTest.get().testClassesDirs
+        classpath = releaseUnitTest.get().classpath
         useJUnitPlatform()
         filter {
             includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.readingSpeedRespondsToPageChanges")
@@ -223,8 +257,8 @@ afterEvaluate {
     tasks.register<Test>("frameMonitoringPerformance") {
         group = "performance"
         description = "Executes frame monitoring diagnostics for Adaptive Flow."
-        testClassesDirs = debugUnitTest.get().testClassesDirs
-        classpath = debugUnitTest.get().classpath
+        testClassesDirs = releaseUnitTest.get().testClassesDirs
+        classpath = releaseUnitTest.get().classpath
         useJUnitPlatform()
         filter {
             includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.frameMetricsReactToJank")
