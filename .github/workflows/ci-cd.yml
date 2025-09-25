@@ -36,12 +36,24 @@ jobs:
             avd: pixelfold_api34
             tag: google_apis
             ram_mb: 6144
+          - api: 34
+            abi: arm64-v8a
+            device: pixel_6
+            avd: pixel6_api34
+            tag: google_apis
+            ram_mb: 6144
           - api: 35
             abi: x86_64
             device: pixel_7
             avd: pixel7_api35
             tag: google_apis
             ram_mb: 8192
+          - api: 30
+            abi: armeabi-v7a
+            device: "Nexus 10"
+            avd: nexus10_api30
+            tag: google_apis
+            ram_mb: 512
     env:
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
       ARTIFACTS_DIR: artifacts
