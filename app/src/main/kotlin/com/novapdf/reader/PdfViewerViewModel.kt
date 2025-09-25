@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
+private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
+
 data class PdfViewerUiState(
     val documentId: String? = null,
     val pageCount: Int = 0,
@@ -403,7 +405,4 @@ class PdfViewerViewModel(
         return mask == Configuration.UI_MODE_NIGHT_YES
     }
 
-    companion object {
-        private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
-    }
 }

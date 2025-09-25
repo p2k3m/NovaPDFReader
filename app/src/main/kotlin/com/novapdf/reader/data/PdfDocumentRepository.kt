@@ -32,6 +32,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
 import android.print.PageRange
+import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import com.novapdf.reader.model.PdfOutlineNode
