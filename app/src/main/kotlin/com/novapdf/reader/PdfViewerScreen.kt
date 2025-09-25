@@ -13,6 +13,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
 import androidx.compose.foundation.gestures.snapping.snapFlingBehavior
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillParentMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -39,6 +41,8 @@ import androidx.compose.material.icons.outlined.Brightness4
 import androidx.compose.material.icons.outlined.Brightness7
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.List
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -48,12 +52,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +99,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.R
 import com.novapdf.reader.TilePreloadSpec
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.PdfOutlineNode
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -111,6 +118,7 @@ fun PdfViewerRoute(
     onOpenDocument: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     PdfViewerScreen(
         state = uiState,
         snackbarHost = snackbarHost,
@@ -120,6 +128,8 @@ fun PdfViewerRoute(
         onSaveAnnotations = { viewModel.persistAnnotations() },
         onSearch = { viewModel.search(it) },
         onToggleBookmark = { viewModel.toggleBookmark() },
+        onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
+        onExportDocument = { viewModel.exportDocument(context) },
         renderTile = { index, rect, scale -> viewModel.renderTile(index, rect, scale) },
         requestPageSize = { viewModel.pageSize(it) },
         onTileSpecChanged = { viewModel.updateTileSpec(it) },
@@ -140,6 +150,8 @@ fun PdfViewerScreen(
     onSaveAnnotations: () -> Unit,
     onSearch: (String) -> Unit,
     onToggleBookmark: () -> Unit,
+    onOutlineDestinationSelected: (Int) -> Unit,
+    onExportDocument: () -> Boolean,
     renderTile: suspend (Int, Rect, Float) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onTileSpecChanged: (TilePreloadSpec) -> Unit,
@@ -157,6 +169,9 @@ fun PdfViewerScreen(
     val fallbackHaptics by rememberUpdatedState(newValue = {
         hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
     })
+    val coroutineScope = rememberCoroutineScope()
+    var showOutlineSheet by remember { mutableStateOf(false) }
+    val exportErrorMessage = stringResource(id = R.string.export_failed)
 
     DisposableEffect(echoModeController) {
         onDispose { echoModeController.shutdown() }
@@ -173,7 +188,30 @@ fun PdfViewerScreen(
                     IconButton(onClick = onSaveAnnotations) {
                         Icon(imageVector = Icons.Outlined.Download, contentDescription = "Save annotations")
                     }
-                    IconButton(onClick = onToggleBookmark, enabled = state.documentId != null) {
+                    val hasDocument = state.documentId != null
+                    if (hasDocument) {
+                        IconButton(
+                            onClick = { showOutlineSheet = true },
+                            enabled = state.outline.isNotEmpty()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.List,
+                                contentDescription = stringResource(id = R.string.pdf_outline)
+                            )
+                        }
+                        IconButton(onClick = {
+                            val success = onExportDocument()
+                            if (!success) {
+                                coroutineScope.launch { snackbarHost.showSnackbar(exportErrorMessage) }
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Share,
+                                contentDescription = stringResource(id = R.string.export_document)
+                            )
+                        }
+                    }
+                    IconButton(onClick = onToggleBookmark, enabled = hasDocument) {
                         val bookmarked = state.bookmarks.contains(state.currentPage)
                         val icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
                         Icon(imageVector = icon, contentDescription = "Toggle bookmark")
@@ -232,6 +270,17 @@ fun PdfViewerScreen(
             }
         }
     }
+
+    if (showOutlineSheet) {
+        OutlineSheet(
+            outline = state.outline,
+            onSelect = {
+                onOutlineDestinationSelected(it)
+                showOutlineSheet = false
+            },
+            onDismiss = { showOutlineSheet = false }
+        )
+    }
 }
 
 @Composable
@@ -252,6 +301,80 @@ private fun SearchHighlightOverlay(
                 )
             )
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OutlineSheet(
+    outline: List<PdfOutlineNode>,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        sheetState = sheetState,
+        onDismissRequest = onDismiss
+    ) {
+        if (outline.isEmpty()) {
+            Text(
+                text = stringResource(id = R.string.outline_empty),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else {
+            val items = remember(outline) { flattenOutline(outline) }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp)
+            ) {
+                items(items, key = { it.key }) { item ->
+                    OutlineRow(item = item, onSelect = onSelect)
+                }
+            }
+        }
+    }
+}
+
+private data class OutlineListItem(val node: PdfOutlineNode, val depth: Int) {
+    val key: String = "${depth}_${node.pageIndex}_${node.title}"
+}
+
+private fun flattenOutline(nodes: List<PdfOutlineNode>, depth: Int = 0): List<OutlineListItem> {
+    val result = mutableListOf<OutlineListItem>()
+    nodes.forEach { node ->
+        result += OutlineListItem(node, depth)
+        if (node.children.isNotEmpty()) {
+            result += flattenOutline(node.children, depth + 1)
+        }
+    }
+    return result
+}
+
+@Composable
+private fun OutlineRow(
+    item: OutlineListItem,
+    onSelect: (Int) -> Unit
+) {
+    val indent = (item.depth * 12).dp
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelect(item.node.pageIndex) }
+            .padding(start = 16.dp + indent, end = 16.dp, top = 12.dp, bottom = 12.dp)
+    ) {
+        Text(
+            text = item.node.title,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Text(
+            text = stringResource(id = R.string.outline_page_label, item.node.pageIndex + 1),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

@@ -11,6 +11,8 @@ import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.Build
+import android.os.CancellationSignal
 import android.util.Size
 import android.util.SparseArray
 import androidx.core.graphics.createBitmap
@@ -27,6 +29,12 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
+import android.print.PageRange
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import com.novapdf.reader.model.PdfOutlineNode
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
@@ -61,6 +69,8 @@ class PdfDocumentRepository(
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
     val session: StateFlow<PdfDocumentSession?> = openSession.asStateFlow()
+    private val outlineNodes = MutableStateFlow<List<PdfOutlineNode>>(emptyList())
+    val outline: StateFlow<List<PdfOutlineNode>> = outlineNodes.asStateFlow()
     private val isRendering = AtomicBoolean(false)
     private val componentCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -91,6 +101,7 @@ class PdfDocumentRepository(
             scheduleCacheClear()
         }
         pageSizeCache.clear()
+        outlineNodes.value = emptyList()
         openSession.value?.let { session ->
             try {
                 session.renderer.close()
@@ -114,6 +125,7 @@ class PdfDocumentRepository(
                 fileDescriptor = pfd
             )
             openSession.value = session
+            outlineNodes.value = parseDocumentOutline(session)
             session
         }
     }
@@ -185,6 +197,72 @@ class PdfDocumentRepository(
                         if (!rect.isEmpty) {
                             renderTile(pageIndex, rect, scale)
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    fun createPrintAdapter(context: Context): PrintDocumentAdapter? {
+        val session = openSession.value ?: return null
+        return object : PrintDocumentAdapter() {
+            private var cancelled = false
+
+            override fun onLayout(
+                oldAttributes: PrintAttributes?,
+                newAttributes: PrintAttributes?,
+                cancellationSignal: CancellationSignal?,
+                callback: LayoutResultCallback?,
+                extras: android.os.Bundle?
+            ) {
+                if (cancellationSignal?.isCanceled == true) {
+                    cancelled = true
+                    callback?.onLayoutCancelled()
+                    return
+                }
+                val docInfo = PrintDocumentInfo.Builder(session.documentId.ifEmpty { "NovaPDF-document" })
+                    .setPageCount(session.pageCount)
+                    .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                    .build()
+                callback?.onLayoutFinished(docInfo, true)
+            }
+
+            override fun onWrite(
+                pages: Array<PageRange>,
+                destination: ParcelFileDescriptor,
+                cancellationSignal: CancellationSignal,
+                callback: WriteResultCallback
+            ) {
+                if (cancelled || cancellationSignal.isCanceled) {
+                    callback.onWriteCancelled()
+                    return
+                }
+                val resolver = context.contentResolver
+                val input = resolver.openFileDescriptor(session.uri, "r")
+                if (input == null) {
+                    callback.onWriteFailed("Unable to open document")
+                    return
+                }
+                input.use { source ->
+                    try {
+                        FileInputStream(source.fileDescriptor).use { inStream ->
+                            FileOutputStream(destination.fileDescriptor).use { outStream ->
+                                val buffer = ByteArray(DEFAULT_PRINT_BUFFER_SIZE)
+                                while (true) {
+                                    if (cancellationSignal.isCanceled) {
+                                        callback.onWriteCancelled()
+                                        return
+                                    }
+                                    val read = inStream.read(buffer)
+                                    if (read == -1) break
+                                    outStream.write(buffer, 0, read)
+                                }
+                                outStream.flush()
+                            }
+                        }
+                        callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                    } catch (io: IOException) {
+                        callback.onWriteFailed(io.localizedMessage ?: "Unable to export document")
                     }
                 }
             }
@@ -318,5 +396,103 @@ class PdfDocumentRepository(
                 bitmap.recycle()
             }
         }
+    }
+
+    private fun parseDocumentOutline(session: PdfDocumentSession): List<PdfOutlineNode> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return emptyList()
+        }
+        return try {
+            val duplicate = ParcelFileDescriptor.dup(session.fileDescriptor.fileDescriptor)
+            duplicate.use { descriptor ->
+                parseOutlineFromDescriptor(descriptor)
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun parseOutlineFromDescriptor(descriptor: ParcelFileDescriptor): List<PdfOutlineNode> {
+        return try {
+            val pdfDocumentClass = Class.forName("android.graphics.pdf.PdfDocument")
+            val instance = instantiatePdfDocument(pdfDocumentClass, descriptor) ?: return emptyList()
+            try {
+                val outlineMethod = pdfDocumentClass.methods.firstOrNull { method ->
+                    method.parameterCount == 0 &&
+                        (method.name.equals("getTableOfContents", ignoreCase = true) ||
+                            method.name.equals("getDocumentOutline", ignoreCase = true) ||
+                            method.name.equals("getOutline", ignoreCase = true) ||
+                            method.name.equals("getBookmarks", ignoreCase = true))
+                } ?: return emptyList()
+                val outline = outlineMethod.invoke(instance) as? List<*> ?: return emptyList()
+                outline.mapNotNull { it?.let(::toOutlineNode) }
+            } finally {
+                pdfDocumentClass.methods.firstOrNull { it.name == "close" && it.parameterCount == 0 }
+                    ?.invoke(instance)
+            }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun instantiatePdfDocument(pdfDocumentClass: Class<*>, descriptor: ParcelFileDescriptor): Any? {
+        pdfDocumentClass.constructors.firstOrNull { constructor ->
+            constructor.parameterCount == 1 && ParcelFileDescriptor::class.java.isAssignableFrom(constructor.parameterTypes[0])
+        }?.let { constructor ->
+            return try {
+                constructor.newInstance(descriptor)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        pdfDocumentClass.methods.firstOrNull { method ->
+            method.parameterCount == 1 && method.name.equals("open", ignoreCase = true) &&
+                ParcelFileDescriptor::class.java.isAssignableFrom(method.parameterTypes[0])
+        }?.let { method ->
+            return try {
+                method.invoke(null, descriptor)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        return null
+    }
+
+    private fun toOutlineNode(bookmark: Any): PdfOutlineNode? {
+        return try {
+            val bookmarkClass = bookmark.javaClass
+            val titleMethod = bookmarkClass.methods.firstOrNull { method ->
+                method.parameterCount == 0 && method.name.contains("title", ignoreCase = true)
+            }
+            val titleValue = titleMethod?.invoke(bookmark) as? CharSequence ?: return null
+            val pageMethod = bookmarkClass.methods.firstOrNull { method ->
+                method.parameterCount == 0 && (
+                    method.name.contains("Page", ignoreCase = true) ||
+                        method.name.contains("Destination", ignoreCase = true)
+                    )
+            }
+            val pageIndex = when (val value = pageMethod?.invoke(bookmark)) {
+                is Number -> value.toInt()
+                else -> 0
+            }.coerceAtLeast(0)
+            val childrenMethod = bookmarkClass.methods.firstOrNull { method ->
+                method.parameterCount == 0 && method.name.contains("Child", ignoreCase = true) &&
+                    List::class.java.isAssignableFrom(method.returnType)
+            }
+            val children = (childrenMethod?.invoke(bookmark) as? List<*>)
+                ?.mapNotNull { it?.let(::toOutlineNode) }
+                .orEmpty()
+            PdfOutlineNode(
+                title = titleValue.toString(),
+                pageIndex = pageIndex,
+                children = children
+            )
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    companion object {
+        private const val DEFAULT_PRINT_BUFFER_SIZE = 16 * 1024
     }
 }
