@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.util.Size
 import android.util.SparseArray
+import android.util.Log
 import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,12 +36,18 @@ import android.print.PrintDocumentInfo
 import com.novapdf.reader.model.PdfOutlineNode
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
+private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
+private const val TAG = "PdfDocumentRepository"
 
 data class PdfDocumentSession(
     val documentId: String,
@@ -115,6 +122,9 @@ class PdfDocumentRepository(
     suspend fun open(uri: Uri): PdfDocumentSession? {
         closeCurrentSession()
         return withContextGuard {
+            if (!validateDocumentUri(uri)) {
+                return@withContextGuard null
+            }
             val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return@withContextGuard null
             val renderer = PdfRenderer(pfd)
             val session = PdfDocumentSession(
@@ -270,6 +280,67 @@ class PdfDocumentRepository(
     }
 
     private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    private fun validateDocumentUri(uri: Uri): Boolean {
+        if (!isAllowedScheme(uri)) {
+            Log.w(TAG, "Rejected document with unsupported scheme: ${uri.scheme}")
+            return false
+        }
+
+        val mimeType = resolveMimeType(uri)?.lowercase(Locale.US)
+        if (mimeType != "application/pdf") {
+            Log.w(TAG, "Rejected document with unsupported MIME type: $mimeType")
+            return false
+        }
+
+        val size = resolveDocumentSize(uri)
+        if (size == null || size <= 0L) {
+            Log.w(TAG, "Rejected document with unknown or empty size")
+            return false
+        }
+        if (size > MAX_DOCUMENT_BYTES) {
+            Log.w(TAG, "Rejected document exceeding size limit: $size")
+            return false
+        }
+
+        return true
+    }
+
+    private fun isAllowedScheme(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
+        return scheme == ContentResolver.SCHEME_CONTENT || scheme == ContentResolver.SCHEME_FILE
+    }
+
+    private fun resolveMimeType(uri: Uri): String? {
+        contentResolver.getType(uri)?.let { return it }
+        if (uri.scheme == ContentResolver.SCHEME_FILE) {
+            val extension = MimeTypeMap.getFileExtensionFromUrl(uri.toString())?.lowercase(Locale.US)
+            if (!extension.isNullOrEmpty()) {
+                return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            }
+        }
+        return null
+    }
+
+    private fun resolveDocumentSize(uri: Uri): Long? {
+        return when (uri.scheme?.lowercase(Locale.US)) {
+            ContentResolver.SCHEME_CONTENT ->
+                contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (index >= 0 && !cursor.isNull(index)) {
+                            cursor.getLong(index)
+                        } else {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                }
+            ContentResolver.SCHEME_FILE -> uri.path?.let { path -> File(path).takeIf { it.exists() }?.length() }
+            else -> null
+        }
+    }
 
     fun dispose() {
         closeCurrentSession()
