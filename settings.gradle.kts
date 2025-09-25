@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "NovaPDFReader"
 include(":app")
+include(":baselineprofile")
