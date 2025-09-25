@@ -1,6 +1,4 @@
 import com.android.build.api.dsl.TestExtension
-import org.gradle.api.Action
-import org.gradle.api.execution.TaskExecutionGraph
 
 plugins {
     id("com.android.test")
@@ -25,7 +23,7 @@ android {
     }
 
     targetProjectPath = ":app"
-    testBuildType = "benchmark"
+    targetVariant = "benchmark"
     experimentalProperties["android.experimental.self-instrumenting"] = true
 }
 
@@ -64,15 +62,15 @@ tasks.register("startupBenchmark") {
     dependsOn("connectedBenchmarkAndroidTest")
 }
 
-gradle.taskGraph.whenReady(Action<TaskExecutionGraph> { taskGraph ->
+gradle.taskGraph.whenReady {
     val arguments = testExtension.defaultConfig.testInstrumentationRunnerArguments
     when {
-        taskGraph.hasTask(":baselineprofile:frameRateBenchmark") ->
+        hasTask(":baselineprofile:frameRateBenchmark") ->
             arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.FrameRateMetric"
-        taskGraph.hasTask(":baselineprofile:memoryBenchmark") ->
+        hasTask(":baselineprofile:memoryBenchmark") ->
             arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.MemoryMetric"
-        taskGraph.hasTask(":baselineprofile:startupBenchmark") ->
+        hasTask(":baselineprofile:startupBenchmark") ->
             arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.StartupMetric"
         else -> arguments.remove("annotation")
     }
-})
+}
