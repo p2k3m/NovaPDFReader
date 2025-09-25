@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.view.View
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,16 +19,36 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.novapdf.reader.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
+import com.novapdf.reader.legacy.LegacyPdfPageAdapter
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.progressindicator.CircularProgressIndicator
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
     private val preferences by lazy { getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE) }
+    private var useComposeUi = true
+
+    private var legacyAdapter: LegacyPdfPageAdapter? = null
+    private var legacyRecyclerView: RecyclerView? = null
+    private var legacyStatusContainer: View? = null
+    private var legacyStatusText: TextView? = null
+    private var legacyRetryButton: MaterialButton? = null
+    private var legacyProgress: CircularProgressIndicator? = null
+    private var legacyToolbar: MaterialToolbar? = null
+    private var legacyRoot: View? = null
+    private var legacyLayoutManager: LinearLayoutManager? = null
+    private var legacyLastFocusedPage: Int = -1
 
     private val openDocumentLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.openDocument(it) }
@@ -49,20 +71,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-            NovaPdfTheme(
-                useDarkTheme = uiState.isNightMode,
-                dynamicColor = uiState.dynamicColorEnabled,
-                highContrast = uiState.highContrastEnabled,
-                seedColor = Color(uiState.themeSeedColor)
-            ) {
-                PdfViewerRoute(
-                    viewModel = viewModel,
-                    snackbarHost = snackbarHost,
-                    onOpenDocument = { openDocumentLauncher.launch("application/pdf") }
-                )
+        useComposeUi = resources.getBoolean(R.bool.config_use_compose)
+        if (useComposeUi) {
+            setContent {
+                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                NovaPdfTheme(
+                    useDarkTheme = uiState.isNightMode,
+                    dynamicColor = uiState.dynamicColorEnabled,
+                    highContrast = uiState.highContrastEnabled,
+                    seedColor = Color(uiState.themeSeedColor)
+                ) {
+                    PdfViewerRoute(
+                        viewModel = viewModel,
+                        snackbarHost = snackbarHost,
+                        onOpenDocument = { openDocumentLauncher.launch("application/pdf") }
+                    )
+                }
             }
+        } else {
+            setContentView(R.layout.activity_main)
+            setupLegacyUi()
         }
         requestStoragePermissionIfNeeded()
     }
@@ -75,6 +103,11 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         (application as? NovaPdfApp)?.adaptiveFlowManager?.stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        legacyAdapter?.dispose()
     }
 
     private fun requestStoragePermissionIfNeeded() {
@@ -158,14 +191,163 @@ class MainActivity : ComponentActivity() {
         @StringRes actionRes: Int? = null,
         onAction: (() -> Unit)? = null
     ) {
-        lifecycleScope.launch {
-            val result = snackbarHost.showSnackbar(
-                message = getString(messageRes),
-                actionLabel = actionRes?.let(::getString)
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                onAction?.invoke()
+        if (useComposeUi) {
+            lifecycleScope.launch {
+                val result = snackbarHost.showSnackbar(
+                    message = getString(messageRes),
+                    actionLabel = actionRes?.let(::getString)
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    onAction?.invoke()
+                }
             }
+        } else {
+            val root = legacyRoot ?: return
+            val snackbar = Snackbar.make(root, getString(messageRes), Snackbar.LENGTH_LONG)
+            if (actionRes != null && onAction != null) {
+                snackbar.setAction(actionRes) { onAction() }
+            }
+            snackbar.show()
+        }
+    }
+
+    private fun setupLegacyUi() {
+        legacyRoot = findViewById(R.id.legacy_root)
+        val recyclerView = findViewById<RecyclerView>(R.id.legacy_page_list).also { legacyRecyclerView = it }
+        val toolbar = findViewById<MaterialToolbar>(R.id.legacy_toolbar).also { legacyToolbar = it }
+        val statusContainer = findViewById<View>(R.id.legacy_status_container).also { legacyStatusContainer = it }
+        legacyStatusText = findViewById<TextView>(R.id.legacy_status_text)
+        legacyRetryButton = findViewById<MaterialButton>(R.id.legacy_retry_button).apply {
+            this?.setOnClickListener { openDocumentLauncher.launch("application/pdf") }
+        }
+        legacyProgress = findViewById<CircularProgressIndicator>(R.id.legacy_progress)
+        toolbar.inflateMenu(R.menu.fallback_viewer_actions)
+        toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_open -> {
+                    openDocumentLauncher.launch("application/pdf")
+                    true
+                }
+
+                R.id.action_export -> {
+                    val exported = viewModel.exportDocument(this)
+                    if (!exported) {
+                        showStorageSnackbar(R.string.export_failed)
+                    }
+                    true
+                }
+
+                else -> false
+            }
+        }
+
+        val layoutManager = LinearLayoutManager(this)
+        legacyLayoutManager = layoutManager
+        recyclerView.layoutManager = layoutManager
+        val adapter = LegacyPdfPageAdapter(this, lifecycleScope, viewModel)
+        legacyAdapter = adapter
+        recyclerView.adapter = adapter
+        recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                super.onScrolled(recyclerView, dx, dy)
+                notifyVisiblePage()
+            }
+
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                super.onScrollStateChanged(recyclerView, newState)
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    notifyVisiblePage()
+                }
+            }
+
+            private fun notifyVisiblePage() {
+                val manager = legacyLayoutManager ?: return
+                val firstComplete = manager.findFirstCompletelyVisibleItemPosition()
+                val candidate = if (firstComplete != RecyclerView.NO_POSITION) {
+                    firstComplete
+                } else {
+                    manager.findFirstVisibleItemPosition()
+                }
+                if (candidate != RecyclerView.NO_POSITION && candidate != legacyLastFocusedPage) {
+                    legacyLastFocusedPage = candidate
+                    viewModel.onPageFocused(candidate)
+                }
+            }
+        })
+
+        lifecycleScope.launch {
+            viewModel.uiState.collect { state ->
+                legacyProgress?.isVisible = state.isLoading
+                adapter.onDocumentChanged(state.documentId, state.pageCount)
+                updateLegacyToolbar(state)
+                updateLegacyStatus(state, statusContainer)
+                maybeScrollToPage(state)
+            }
+        }
+    }
+
+    private fun updateLegacyToolbar(state: PdfViewerUiState) {
+        legacyToolbar?.subtitle = if (state.documentId != null && state.pageCount > 0) {
+            getString(R.string.legacy_pdf_page, state.currentPage + 1) + " / " + state.pageCount
+        } else {
+            null
+        }
+    }
+
+    private fun updateLegacyStatus(state: PdfViewerUiState, statusContainer: View?) {
+        if (statusContainer == null) return
+        val hasDocument = state.documentId != null
+        val statusText = legacyStatusText
+        val retry = legacyRetryButton
+        when {
+            state.isLoading -> {
+                statusContainer.isVisible = false
+                retry?.isVisible = false
+            }
+
+            state.errorMessage != null -> {
+                statusContainer.isVisible = true
+                statusText?.text = getString(R.string.legacy_error_loading)
+                retry?.isVisible = true
+            }
+
+            hasDocument && state.pageCount == 0 -> {
+                statusContainer.isVisible = true
+                statusText?.text = getString(R.string.legacy_select_document)
+                retry?.isVisible = false
+            }
+
+            hasDocument -> {
+                statusContainer.isVisible = false
+                retry?.isVisible = false
+            }
+
+            else -> {
+                statusContainer.isVisible = true
+                statusText?.text = getString(R.string.legacy_select_document)
+                retry?.isVisible = true
+            }
+        }
+    }
+
+    private fun maybeScrollToPage(state: PdfViewerUiState) {
+        if (state.documentId == null || state.pageCount == 0) {
+            legacyLastFocusedPage = -1
+            return
+        }
+        val recyclerView = legacyRecyclerView ?: return
+        val manager = legacyLayoutManager ?: return
+        if (state.currentPage == RecyclerView.NO_POSITION) return
+        if (state.currentPage == legacyLastFocusedPage) return
+        val firstVisible = manager.findFirstVisibleItemPosition()
+        val lastVisible = manager.findLastVisibleItemPosition()
+        if (firstVisible != RecyclerView.NO_POSITION && state.currentPage in firstVisible..lastVisible) {
+            legacyLastFocusedPage = state.currentPage
+            return
+        }
+        recyclerView.post {
+            manager.scrollToPositionWithOffset(state.currentPage, 0)
+            legacyLastFocusedPage = state.currentPage
         }
     }
 
