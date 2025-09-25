@@ -2,8 +2,8 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.GradleException
 import org.gradle.api.Project
-import org.gradle.api.execution.TaskExecutionGraph
 import org.gradle.api.tasks.testing.Test
+import org.gradle.kotlin.dsl.closureOf
 import java.io.File
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
@@ -134,20 +134,22 @@ android {
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
-gradle.taskGraph.whenReady { graph: TaskExecutionGraph ->
-    val needsReleaseSigning = graph.allTasks.any { task ->
-        task.project == project && task.name.contains("Release")
+val targetProject = project
+
+gradle.taskGraph.whenReady(closureOf {
+    val needsReleaseSigning = allTasks.any { task ->
+        task.project == targetProject && task.name.contains("Release")
     }
     if (needsReleaseSigning) {
-        val releaseKeystore = project.resolveReleaseKeystore()
+        val releaseKeystore = targetProject.resolveReleaseKeystore()
         releaseSigningConfig.apply {
             storeFile = releaseKeystore
-            storePassword = project.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
-            keyAlias = project.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
-            keyPassword = project.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
+            storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
+            keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
+            keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
         }
     }
-}
+})
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
