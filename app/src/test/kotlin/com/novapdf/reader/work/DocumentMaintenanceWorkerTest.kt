@@ -4,10 +4,12 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
 import com.novapdf.reader.NovaPdfApp
+import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -26,7 +28,12 @@ class DocumentMaintenanceWorkerTest {
     @Before
     fun setUp() {
         app = ApplicationProvider.getApplicationContext()
-        File(app.filesDir, "annotations").deleteRecursively()
+        AnnotationRepository.preferenceFile(app).let { prefsFile ->
+            prefsFile.delete()
+            prefsFile.parentFile?.let { parent ->
+                File(parent, "${prefsFile.name}.bak").delete()
+            }
+        }
         File(app.filesDir, "exports").deleteRecursively()
     }
 
@@ -49,10 +56,13 @@ class DocumentMaintenanceWorkerTest {
         assertTrue(result is ListenableWorker.Result.Success)
 
         val encodedId = DocumentMaintenanceWorker.encodeDocumentId(documentId)
-        val annotationFile = File(app.filesDir, "annotations/$encodedId.json")
+        val annotationFile = AnnotationRepository.preferenceFile(app)
         val exportFile = File(app.filesDir, "exports/${encodedId}_bookmarks.json")
 
         assertTrue(annotationFile.exists())
         assertTrue(exportFile.exists())
+        val annotationContents = annotationFile.readText()
+        assertFalse(annotationContents.contains(documentId))
+        assertFalse(annotationContents.contains("{"))
     }
 }

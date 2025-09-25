@@ -7,6 +7,7 @@ import com.novapdf.reader.model.PointSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,6 +39,10 @@ class AnnotationRepositoryTest {
 
         val file = repository.saveAnnotations(documentId)
         assertNotNull(file)
-        assertEquals(true, file!!.exists())
+        val prefsFile = file!!
+        assertEquals(true, prefsFile.exists())
+        val fileContents = prefsFile.readText()
+        assertFalse(fileContents.contains(documentId))
+        assertFalse(fileContents.contains("{"))
     }
 }
