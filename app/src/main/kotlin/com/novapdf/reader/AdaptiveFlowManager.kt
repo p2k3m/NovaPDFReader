@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.view.Choreographer
+import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -145,6 +146,11 @@ class AdaptiveFlowManager(
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    @VisibleForTesting
+    internal fun overrideSensitivityForTesting(value: Float) {
+        _swipeSensitivity.value = value.coerceIn(0.6f, 2.5f)
+    }
 
     private fun startFrameMonitoring() {
         if (isFrameCallbackRegistered) return
