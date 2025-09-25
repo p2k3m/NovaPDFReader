@@ -150,10 +150,10 @@ gradle.taskGraph.whenReady {
     if (needsReleaseSigning) {
         val releaseKeystore = targetProject.resolveReleaseKeystore()
         releaseSigningConfig.apply {
-            storeFile.set(releaseKeystore)
-            storePassword.set(targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD"))
-            keyAlias.set(targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS"))
-            keyPassword.set(targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD"))
+            storeFile = releaseKeystore
+            storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
+            keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
+            keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
         }
     }
 }
