@@ -51,14 +51,16 @@ class AdaptiveFlowManager(
     private var lastFrameTimeNanos = 0L
     private val frameDurations = ArrayDeque<Float>()
 
-    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback { frameTimeNanos ->
-        val currentChoreographer = choreographer ?: return@FrameCallback
-        if (lastFrameTimeNanos != 0L) {
-            val deltaMillis = (frameTimeNanos - lastFrameTimeNanos) / 1_000_000f
-            updateFrameMetrics(deltaMillis)
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            val currentChoreographer = choreographer ?: return
+            if (lastFrameTimeNanos != 0L) {
+                val deltaMillis = (frameTimeNanos - lastFrameTimeNanos) / 1_000_000f
+                updateFrameMetrics(deltaMillis)
+            }
+            lastFrameTimeNanos = frameTimeNanos
+            currentChoreographer.postFrameCallback(this)
         }
-        lastFrameTimeNanos = frameTimeNanos
-        currentChoreographer.postFrameCallback(frameCallback)
     }
 
     fun start() {

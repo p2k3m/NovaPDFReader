@@ -10,6 +10,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
@@ -736,7 +737,9 @@ private fun PdfPager(
     val latestRequestPageSize by rememberUpdatedState(requestPageSize)
     val latestTileSpecChanged by rememberUpdatedState(onTileSpecChanged)
     val decaySpec = rememberSplineBasedDecay<Float>()
-    val snapAnimationSpec = remember { spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = 0.85f) }
+    val snapAnimationSpec: SpringSpec<Float> = remember {
+        spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = 0.85f)
+    }
     val snapLayoutInfoProvider = remember(lazyListState) { PagerSnapLayoutInfoProvider(lazyListState) }
     val flingBehavior = remember(decaySpec, snapAnimationSpec, snapLayoutInfoProvider) {
         snapFlingBehavior(
