@@ -2,6 +2,10 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.GradleException
 import org.gradle.api.Project
+import org.gradle.api.Task
+import org.gradle.api.UnknownTaskException
+import org.gradle.api.tasks.TaskContainer
+import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.testing.Test
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
@@ -28,6 +32,13 @@ fun Project.resolveReleaseKeystore(defaultPath: String = "signing/release.keysto
     }
     return candidate
 }
+
+inline fun <reified T : Task> TaskContainer.namedOrNull(name: String): TaskProvider<T>? =
+    try {
+        named(name, T::class.java)
+    } catch (_: UnknownTaskException) {
+        null
+    }
 
 plugins {
     id("com.android.application")
@@ -214,25 +225,25 @@ kotlin {
 }
 
 afterEvaluate {
-    val releaseUnitTest = tasks.named<Test>("testReleaseUnitTest")
+    val releaseUnitTest = tasks.namedOrNull<Test>("testReleaseUnitTest")
+    val jacocoReport = tasks.namedOrNull<JacocoReport>("jacocoTestReleaseUnitTestReport")
+    val jacocoVerification = tasks.namedOrNull<JacocoCoverageVerification>("jacocoTestReleaseUnitTestCoverageVerification")
 
-    releaseUnitTest.configure {
-        finalizedBy(
-            tasks.named("jacocoTestReleaseUnitTestReport"),
-            tasks.named("jacocoTestReleaseUnitTestCoverageVerification")
-        )
+    releaseUnitTest?.configure {
+        jacocoReport?.let { finalizedBy(it) }
+        jacocoVerification?.let { finalizedBy(it) }
     }
 
-    tasks.named<JacocoReport>("jacocoTestReleaseUnitTestReport") {
-        dependsOn(releaseUnitTest)
+    jacocoReport?.configure {
+        releaseUnitTest?.let { dependsOn(it) }
         reports {
             xml.required.set(true)
             html.required.set(true)
         }
     }
 
-    tasks.named<JacocoCoverageVerification>("jacocoTestReleaseUnitTestCoverageVerification") {
-        dependsOn(releaseUnitTest)
+    jacocoVerification?.configure {
+        releaseUnitTest?.let { dependsOn(it) }
         violationRules {
             rule {
                 limit {
@@ -242,26 +253,30 @@ afterEvaluate {
         }
     }
 
-    tasks.register<Test>("adaptiveFlowPerformance") {
-        group = "performance"
-        description = "Runs Adaptive Flow timing regression checks."
-        testClassesDirs = releaseUnitTest.get().testClassesDirs
-        classpath = releaseUnitTest.get().classpath
-        useJUnitPlatform()
-        filter {
-            includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.readingSpeedRespondsToPageChanges")
+    releaseUnitTest?.let { releaseTest ->
+        tasks.register<Test>("adaptiveFlowPerformance") {
+            group = "performance"
+            description = "Runs Adaptive Flow timing regression checks."
+            val releaseUnitTestTask = releaseTest.get()
+            testClassesDirs = releaseUnitTestTask.testClassesDirs
+            classpath = releaseUnitTestTask.classpath
+            useJUnitPlatform()
+            filter {
+                includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.readingSpeedRespondsToPageChanges")
+            }
         }
-    }
 
-    tasks.register<Test>("frameMonitoringPerformance") {
-        group = "performance"
-        description = "Executes frame monitoring diagnostics for Adaptive Flow."
-        testClassesDirs = releaseUnitTest.get().testClassesDirs
-        classpath = releaseUnitTest.get().classpath
-        useJUnitPlatform()
-        filter {
-            includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.frameMetricsReactToJank")
+        tasks.register<Test>("frameMonitoringPerformance") {
+            group = "performance"
+            description = "Executes frame monitoring diagnostics for Adaptive Flow."
+            val releaseUnitTestTask = releaseTest.get()
+            testClassesDirs = releaseUnitTestTask.testClassesDirs
+            classpath = releaseUnitTestTask.classpath
+            useJUnitPlatform()
+            filter {
+                includeTestsMatching("com.novapdf.reader.AdaptiveFlowManagerTest.frameMetricsReactToJank")
+            }
+            shouldRunAfter("adaptiveFlowPerformance")
         }
-        shouldRunAfter("adaptiveFlowPerformance")
     }
 }
