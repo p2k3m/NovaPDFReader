@@ -3,8 +3,10 @@ package com.novapdf.reader
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -13,6 +15,7 @@ import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -25,14 +28,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import com.novapdf.reader.search.TextRunSnapshot
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class PdfViewerViewModelSearchTest {
 
@@ -73,14 +80,6 @@ class PdfViewerViewModelSearchTest {
         val page = mock<PdfRenderer.Page>()
         whenever(page.width).thenReturn(220)
         whenever(page.height).thenReturn(400)
-
-        val glyphRuns = listOf(
-            FakeGlyphRun("Lorem", Rect(0, 0, 100, 40)),
-            FakeGlyphRun("ipsum", Rect(100, 0, 220, 40))
-        )
-        val textLine = FakeTextLine("Lorem ipsum", Rect(0, 0, 220, 40), glyphRuns)
-
-        whenever(page.getText()).thenReturn(listOf(textLine))
         whenever(renderer.openPage(0)).thenReturn(page)
 
         val session = PdfDocumentSession(
@@ -101,7 +100,19 @@ class PdfViewerViewModelSearchTest {
             maintenanceScheduler
         )
 
-        val viewModel = PdfViewerViewModel(app)
+        val viewModel = object : PdfViewerViewModel(app) {
+            override fun extractTextRuns(page: PdfRenderer.Page): List<TextRunSnapshot> {
+                return listOf(
+                    TextRunSnapshot(
+                        text = "Lorem ipsum",
+                        bounds = listOf(
+                            RectF(0f, 0f, 100f, 40f),
+                            RectF(100f, 0f, 220f, 40f)
+                        )
+                    )
+                )
+            }
+        }
 
         val matches = viewModel.performSearch(0, "lorem ipsum")
 
@@ -116,7 +127,6 @@ class PdfViewerViewModelSearchTest {
         assertTrue(second.left > 0.45f)
         assertTrue(second.right > 0.9f)
 
-        verify(page).getText()
         verify(page).close()
     }
 
@@ -154,7 +164,12 @@ class PdfViewerViewModelSearchTest {
             canvas.drawRect(Rect(10, 20, 90, 60), paint)
             canvas.drawRect(Rect(110, 120, 190, 160), paint)
             Unit
-        }.whenever(page).render(any(), any(), any(), any())
+        }.whenever(page).render(
+            any<Bitmap>(),
+            anyOrNull<Rect>(),
+            anyOrNull<Matrix>(),
+            eq(PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        )
         whenever(renderer.openPage(0)).thenReturn(page)
 
         val session = PdfDocumentSession(
@@ -189,7 +204,12 @@ class PdfViewerViewModelSearchTest {
         assertTrue(first.left < first.right)
         assertTrue(second.left < second.right)
 
-        verify(page).render(any(), any(), any(), any())
+        verify(page).render(
+            any<Bitmap>(),
+            anyOrNull<Rect>(),
+            anyOrNull<Matrix>(),
+            eq(PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        )
         verify(page).close()
     }
 
@@ -223,24 +243,6 @@ class PdfViewerViewModelSearchTest {
                 return androidx.test.core.app.ApplicationProvider.getApplicationContext()
             }
         }
-    }
-
-    private class FakeGlyphRun(
-        private val text: String,
-        private val bounds: Rect
-    ) {
-        fun getText(): String = text
-        fun getBounds(): Rect = bounds
-    }
-
-    private class FakeTextLine(
-        private val text: String,
-        private val bounds: Rect,
-        private val glyphRuns: List<Any>
-    ) {
-        fun getText(): String = text
-        fun getBounds(): Rect = bounds
-        fun getGlyphRuns(): List<Any> = glyphRuns
     }
 }
 

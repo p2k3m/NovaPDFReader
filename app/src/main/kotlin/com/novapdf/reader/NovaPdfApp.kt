@@ -9,7 +9,7 @@ import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
-class NovaPdfApp : Application() {
+open class NovaPdfApp : Application() {
     lateinit var annotationRepository: AnnotationRepository
         private set
     lateinit var pdfDocumentRepository: PdfDocumentRepository

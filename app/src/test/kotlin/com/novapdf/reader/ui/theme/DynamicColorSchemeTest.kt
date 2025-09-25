@@ -3,7 +3,7 @@ package com.novapdf.reader.ui.theme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.graphics.ColorUtils
-import kotlin.test.assertTrue
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DynamicColorSchemeTest {
