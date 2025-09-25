@@ -9,11 +9,11 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import com.google.android.material.color.utilities.DynamicColor
-import com.google.android.material.color.utilities.DynamicScheme
-import com.google.android.material.color.utilities.Hct
-import com.google.android.material.color.utilities.MaterialDynamicColors
-import com.google.android.material.color.utilities.SchemeTonalSpot
+import dynamiccolor.DynamicColor
+import dynamiccolor.DynamicScheme
+import dynamiccolor.MaterialDynamicColors
+import hct.Hct
+import scheme.SchemeTonalSpot
 
 private val FallbackLightColorScheme = lightColorScheme(
     primary = PrimaryRed,
