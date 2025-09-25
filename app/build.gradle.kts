@@ -1,5 +1,30 @@
 
+import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.GradleException
+import org.gradle.api.Project
 import org.gradle.api.tasks.testing.Test
+import java.io.File
+
+fun Project.resolveSigningCredential(name: String, default: String? = null): String =
+    (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: default?.takeIf { it.isNotBlank() }
+        ?: throw GradleException(
+            "Missing signing credential \"$name\". Provide it via gradle.properties or as an environment variable."
+        )
+
+fun Project.resolveReleaseKeystore(defaultPath: String = "signing/release.keystore"): File {
+    val keystorePath = resolveSigningCredential("NOVAPDF_RELEASE_KEYSTORE", defaultPath)
+    val candidate = File(keystorePath).let { path ->
+        if (path.isAbsolute) path else rootProject.file(path)
+    }
+    if (!candidate.exists()) {
+        throw GradleException(
+            "Release keystore missing. Expected it at \"${candidate.absolutePath}\" or override NOVAPDF_RELEASE_KEYSTORE."
+        )
+    }
+    return candidate
+}
 
 plugins {
     id("com.android.application")
@@ -24,21 +49,32 @@ android {
 
     }
 
+    signingConfigs {
+        create("release") {
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = true
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
         }
         getByName("release") {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
         create("benchmark") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             isDebuggable = true
         }
     }
@@ -90,6 +126,24 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = false
+    }
+}
+
+val androidExtension = extensions.getByType<ApplicationExtension>()
+val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
+
+gradle.taskGraph.whenReady { graph ->
+    val needsReleaseSigning = graph.allTasks.any { task ->
+        task.project == project && task.name.contains("Release")
+    }
+    if (needsReleaseSigning) {
+        val releaseKeystore = project.resolveReleaseKeystore()
+        releaseSigningConfig.apply {
+            storeFile = releaseKeystore
+            storePassword = project.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
+            keyAlias = project.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
+            keyPassword = project.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
+        }
     }
 }
 
