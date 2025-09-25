@@ -18,4 +18,9 @@
     <string name="dynamic_color_unsupported">Dynamic colors require Android 12 or newer.</string>
     <string name="high_contrast_label">High contrast</string>
     <string name="high_contrast_description">Increase contrast for improved readability.</string>
+    <string name="pdf_outline">Outline</string>
+    <string name="outline_empty">This document does not include an outline.</string>
+    <string name="outline_page_label">Page %1$d</string>
+    <string name="export_document">Export or share</string>
+    <string name="export_failed">Unable to export the document. Try again.</string>
 </resources>

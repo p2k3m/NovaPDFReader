@@ -3,19 +3,22 @@ package com.novapdf.reader
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.util.Size
 import android.content.res.Configuration
 import android.os.Build
+import android.print.PrintAttributes
+import android.print.PrintManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
+import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.TextRunSnapshot
@@ -45,13 +48,21 @@ data class PdfViewerUiState(
     val bookmarks: List<Int> = emptyList(),
     val dynamicColorEnabled: Boolean = true,
     val highContrastEnabled: Boolean = false,
-    val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR
+    val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
+    val outline: List<PdfOutlineNode> = emptyList()
 )
 
 data class TilePreloadSpec(
     val pageIndex: Int,
     val tileFractions: List<RectF>,
     val scale: Float
+)
+
+private data class DocumentContext(
+    val speed: Float,
+    val sensitivity: Float,
+    val session: PdfDocumentSession?,
+    val outline: List<PdfOutlineNode>
 )
 
 class PdfViewerViewModel(
@@ -80,20 +91,23 @@ class PdfViewerViewModel(
             combine(
                 adaptiveFlowManager.readingSpeedPagesPerMinute,
                 adaptiveFlowManager.swipeSensitivity,
-                pdfRepository.session
-            ) { speed, sensitivity, session ->
-                Triple(speed, sensitivity, session)
-            }.collect { (speed, sensitivity, session) ->
+                pdfRepository.session,
+                pdfRepository.outline
+            ) { speed, sensitivity, session, outline ->
+                DocumentContext(speed, sensitivity, session, outline)
+            }.collect { context ->
+                val session = context.session
                 val annotations = session?.let { annotationRepository.annotationsForDocument(it.documentId) }
                     .orEmpty()
                 val bookmarks = session?.let { bookmarkManager.bookmarks(it.documentId) } ?: emptyList()
                 _uiState.value = _uiState.value.copy(
-                    readingSpeed = speed,
-                    swipeSensitivity = sensitivity,
+                    readingSpeed = context.speed,
+                    swipeSensitivity = context.sensitivity,
                     documentId = session?.documentId,
                     pageCount = session?.pageCount ?: 0,
                     activeAnnotations = annotations,
-                    bookmarks = bookmarks
+                    bookmarks = bookmarks,
+                    outline = context.outline
                 )
             }
         }
@@ -130,7 +144,8 @@ class PdfViewerViewModel(
                 currentPage = 0,
                 errorMessage = null,
                 activeAnnotations = emptyList(),
-                bookmarks = bookmarkManager.bookmarks(session.documentId)
+                bookmarks = bookmarkManager.bookmarks(session.documentId),
+                outline = pdfRepository.outline.value
             )
         }
     }
@@ -157,6 +172,23 @@ class PdfViewerViewModel(
 
     suspend fun pageSize(index: Int): Size? {
         return pdfRepository.getPageSize(index)
+    }
+
+    fun jumpToPage(index: Int) {
+        val session = pdfRepository.session.value ?: return
+        if (index !in 0 until session.pageCount) return
+        _uiState.value = _uiState.value.copy(currentPage = index)
+    }
+
+    fun exportDocument(context: android.content.Context): Boolean {
+        val session = pdfRepository.session.value ?: return false
+        val printManager = context.getSystemService(PrintManager::class.java) ?: return false
+        val adapter = pdfRepository.createPrintAdapter(context) ?: return false
+        val jobName = session.documentId.substringAfterLast('/')
+            .ifEmpty { "NovaPDF document" }
+        val attributes = PrintAttributes.Builder().build()
+        printManager.print(jobName, adapter, attributes)
+        return true
     }
 
     fun updateTileSpec(spec: TilePreloadSpec) {
