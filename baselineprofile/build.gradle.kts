@@ -1,4 +1,5 @@
 import com.android.build.api.dsl.TestExtension
+import org.gradle.api.execution.TaskExecutionGraph
 
 plugins {
     id("com.android.test")
@@ -23,7 +24,9 @@ android {
     }
 
     targetProjectPath = ":app"
-    testBuildType = "benchmark"
+    targetVariants {
+        onlyBuildType("benchmark")
+    }
     experimentalProperties["android.experimental.self-instrumenting"] = true
 }
 
@@ -62,7 +65,7 @@ tasks.register("startupBenchmark") {
     dependsOn("connectedBenchmarkAndroidTest")
 }
 
-gradle.taskGraph.whenReady { taskGraph ->
+gradle.taskGraph.whenReady { taskGraph: TaskExecutionGraph ->
     val arguments = testExtension.defaultConfig.testInstrumentationRunnerArguments
     when {
         taskGraph.hasTask(":baselineprofile:frameRateBenchmark") ->
