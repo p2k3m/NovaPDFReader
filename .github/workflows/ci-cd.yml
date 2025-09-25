@@ -1,13 +1,19 @@
 name: Android CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-test:
     runs-on: macos-latest
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
