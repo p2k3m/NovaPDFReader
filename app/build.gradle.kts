@@ -1,9 +1,9 @@
 
 import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.tasks.testing.Test
-import org.gradle.kotlin.dsl.closureOf
 import java.io.File
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
@@ -136,8 +136,8 @@ val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
 val targetProject = project
 
-gradle.taskGraph.whenReady(closureOf {
-    val needsReleaseSigning = allTasks.any { task ->
+gradle.taskGraph.whenReady(Action { graph ->
+    val needsReleaseSigning = graph.allTasks.any { task ->
         task.project == targetProject && task.name.contains("Release")
     }
     if (needsReleaseSigning) {
