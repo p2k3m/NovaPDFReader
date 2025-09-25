@@ -2,6 +2,7 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.GradleException
 import org.gradle.api.Project
+import org.gradle.api.execution.TaskExecutionGraph
 import org.gradle.api.tasks.testing.Test
 import java.io.File
 
@@ -133,7 +134,7 @@ android {
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
-gradle.taskGraph.whenReady { graph ->
+gradle.taskGraph.whenReady { graph: TaskExecutionGraph ->
     val needsReleaseSigning = graph.allTasks.any { task ->
         task.project == project && task.name.contains("Release")
     }
