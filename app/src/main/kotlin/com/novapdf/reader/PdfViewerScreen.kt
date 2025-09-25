@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillParentMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
@@ -783,7 +782,7 @@ private fun PdfPager(
         userScrollEnabled = state.pageCount > 0
     ) {
         items(count = state.pageCount, key = { it }) { pageIndex ->
-            Box(modifier = Modifier.fillParentMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 PdfPageContainer(
                     pageIndex = pageIndex,
                     state = state,

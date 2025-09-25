@@ -108,7 +108,7 @@ class LegacyPdfPageAdapter(
     }
 
     private suspend fun renderPageBitmap(pageIndex: Int): Bitmap? {
-        val size = viewModel.requestPageSize(pageIndex) ?: return null
+        val size = viewModel.pageSize(pageIndex) ?: return null
         val metrics = context.resources.displayMetrics
         val horizontalPadding = context.resources.getDimensionPixelSize(R.dimen.legacy_page_horizontal_margin) * 2
         val targetWidth = max(1, metrics.widthPixels - horizontalPadding)
