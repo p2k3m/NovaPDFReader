@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.ui.graphics.Color
@@ -209,6 +210,16 @@ class MainActivity : ComponentActivity() {
             }
             snackbar.show()
         }
+    }
+
+    @VisibleForTesting
+    internal fun openDocumentForTest(uri: Uri) {
+        viewModel.openDocument(uri)
+    }
+
+    @VisibleForTesting
+    internal fun currentDocumentStateForTest(): PdfViewerUiState {
+        return viewModel.uiState.value
     }
 
     private fun setupLegacyUi() {
