@@ -99,7 +99,7 @@ jobs:
 
           if [ -z "${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}" ]; then
             echo "::error::Missing ANDROID_SIGNING_KEY_ALIAS secret required for signing."
-            echo "Remediation: Record the alias supplied when running keytool (e.g., nova) and add it as the ANDROID_SIGNING_KEY_ALIAS repository secret so jarsigner knows which key to use."
+            echo "Remediation: Record the alias supplied when running keytool (e.g., nova) and add it as the ANDROID_SIGNING_KEY_ALIAS repository secret so Gradle knows which key to use."
             missing=true
           fi
 
@@ -209,7 +209,7 @@ jobs:
         run: adb -s emulator-5554 emu kill || true
       - name: Bundle release app
         run: ./gradlew bundleRelease --stacktrace
-      - name: Sign release bundle
+      - name: Collect signed release bundle
         run: |
           set -euo pipefail
           bundle_path="app/build/outputs/bundle/release/app-release.aab"
@@ -221,8 +221,7 @@ jobs:
           mkdir -p "$target_dir"
           signed_bundle="$target_dir/NovaPDFReader-release-signed-api${{ matrix.api }}-${{ matrix.device }}.aab"
           cp "$bundle_path" "$signed_bundle"
-          jarsigner -keystore "$KEYSTORE_PATH" -storepass "$SIGNING_STORE_PASSWORD" -keypass "$SIGNING_KEY_PASSWORD" "$signed_bundle" "$SIGNING_KEY_ALIAS"
-          jarsigner -verify -verbose -certs "$signed_bundle"
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$signed_bundle"
       - name: Stage test and lint reports
         if: always()
         run: |
