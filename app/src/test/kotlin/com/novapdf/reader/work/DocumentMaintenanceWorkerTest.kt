@@ -43,7 +43,7 @@ class DocumentMaintenanceWorkerTest {
         val stroke = AnnotationCommand.Stroke(
             pageIndex = 0,
             points = listOf(PointSnapshot(0f, 0f), PointSnapshot(5f, 5f)),
-            color = 0xFF00FF00.toInt(),
+            color = 0xFF00FF00L,
             strokeWidth = 4f
         )
         app.annotationRepository.addAnnotation(documentId, stroke)

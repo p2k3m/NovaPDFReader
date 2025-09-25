@@ -67,7 +67,7 @@ private data class DocumentContext(
     val outline: List<PdfOutlineNode>
 )
 
-class PdfViewerViewModel(
+open class PdfViewerViewModel(
     application: Application
 ) : AndroidViewModel(application) {
     private val app = application as NovaPdfApp
@@ -291,7 +291,7 @@ class PdfViewerViewModel(
         }
     }
 
-    private fun extractTextRuns(page: PdfRenderer.Page): List<TextRunSnapshot> {
+    internal open fun extractTextRuns(page: PdfRenderer.Page): List<TextRunSnapshot> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             return emptyList()
         }
