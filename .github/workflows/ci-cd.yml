@@ -174,31 +174,67 @@ jobs:
       - name: Capture screenshots
         run: |
           set -euo pipefail
+
           base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}"
-          portrait_dir="${base_dir}/portrait"
-          landscape_dir="${base_dir}/landscape"
-          mkdir -p "$portrait_dir" "$landscape_dir"
+          mkdir -p "$base_dir"
+
           adb shell am start -n com.novapdf.reader/.MainActivity
           adb shell settings put system accelerometer_rotation 0 || true
           adb shell settings put system user_rotation 0 || true
+          adb shell cmd uimode night no || true
+          adb shell settings put secure high_text_contrast_enabled 0 || true
+          adb shell settings put secure accessibility_display_daltonizer_enabled 0 || true
           sleep 10
-          for i in $(seq -w 1 15); do
-            remote="/sdcard/screen_portrait_${i}.png"
-            adb shell screencap -p "$remote"
-            adb pull "$remote" "$portrait_dir/screenshot_${i}.png"
-            adb shell rm "$remote" || true
-            sleep 1
-          done
-          adb shell settings put system user_rotation 1 || true
-          sleep 5
-          for i in $(seq -w 1 15); do
-            remote="/sdcard/screen_landscape_${i}.png"
-            adb shell screencap -p "$remote"
-            adb pull "$remote" "$landscape_dir/screenshot_${i}.png"
-            adb shell rm "$remote" || true
-            sleep 1
-          done
+
+          capture_set() {
+            local label="$1"
+            local orientation="$2"
+            local night_mode="$3"
+            local high_contrast="$4"
+            local daltonizer="$5"
+            local count="$6"
+
+            local target_dir="${base_dir}/${label}"
+            mkdir -p "$target_dir"
+
+            if [ "$orientation" = "portrait" ]; then
+              adb shell settings put system user_rotation 0 || true
+            else
+              adb shell settings put system user_rotation 1 || true
+            fi
+
+            adb shell cmd uimode night "$night_mode" || true
+            adb shell settings put secure high_text_contrast_enabled "$high_contrast" || true
+
+            if [ "$daltonizer" = "none" ]; then
+              adb shell settings put secure accessibility_display_daltonizer_enabled 0 || true
+            else
+              adb shell settings put secure accessibility_display_daltonizer_enabled 1 || true
+              adb shell settings put secure accessibility_display_daltonizer "$daltonizer" || true
+            fi
+
+            # Allow the UI to settle after changing orientation/theme/accessibility flags
+            sleep 4
+
+            for i in $(seq -w 1 "$count"); do
+              remote="/sdcard/${label}_${i}.png"
+              adb shell screencap -p "$remote"
+              adb pull "$remote" "$target_dir/screenshot_${i}.png"
+              adb shell rm "$remote" || true
+              sleep 1
+            done
+          }
+
+          capture_set "light-portrait-standard" portrait no 0 none 5
+          capture_set "light-portrait-accessibility" portrait no 1 0 4
+          capture_set "dark-portrait-standard" portrait yes 0 none 4
+          capture_set "dark-landscape-accessibility" landscape yes 1 1 4
+          capture_set "light-landscape-standard" landscape no 0 none 3
+
           adb shell settings put system user_rotation 0 || true
+          adb shell cmd uimode night no || true
+          adb shell settings put secure high_text_contrast_enabled 0 || true
+          adb shell settings put secure accessibility_display_daltonizer_enabled 0 || true
       - name: Collect emulator logs
         if: always()
         run: |
