@@ -221,9 +221,7 @@ jobs:
           config_path="$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini"
           if [ -n "${{ matrix.hardware_overrides }}" ]; then
             echo "Applying hardware overrides for ${{ matrix.device_label }}"
-            cat <<'EOF' >> "$config_path"
-${{ matrix.hardware_overrides }}
-EOF
+            printf '%s\n' "${{ matrix.hardware_overrides }}" >> "$config_path"
           fi
 
           accel_args=()
