@@ -1,5 +1,5 @@
 import com.android.build.api.dsl.TestExtension
-import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.TestAndroidComponentsExtension
 import org.gradle.api.GradleException
 
 plugins {
@@ -45,7 +45,7 @@ dependencies {
 }
 
 val testExtension = extensions.getByType<TestExtension>()
-val androidComponents = extensions.getByType<AndroidComponentsExtension<*, *, *>>()
+val androidComponents = extensions.getByType<TestAndroidComponentsExtension>()
 
 val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     group = "verification"
