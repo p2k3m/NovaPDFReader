@@ -19,41 +19,47 @@ jobs:
       matrix:
         include:
           - api: 21
-            abi: x86_64
             device: pixel
             avd: pixel_api21
             tag: google_apis
             ram_mb: 2048
+            x86_abi: x86_64
+            arm_abi: armeabi-v7a
           - api: 28
-            abi: x86_64
             device: pixel_3
             avd: pixel3_api28
             tag: google_apis
             ram_mb: 4096
+            x86_abi: x86_64
+            arm_abi: arm64-v8a
           - api: 34
-            abi: x86_64
             device: pixel_fold
             avd: pixelfold_api34
             tag: google_apis
             ram_mb: 6144
+            x86_abi: x86_64
+            arm_abi: arm64-v8a
           - api: 34
-            abi: arm64-v8a
             device: pixel_6
             avd: pixel6_api34
             tag: google_apis
             ram_mb: 6144
+            x86_abi: x86_64
+            arm_abi: arm64-v8a
           - api: 35
-            abi: x86_64
             device: pixel_7
             avd: pixel7_api35
             tag: google_apis
             ram_mb: 8192
+            x86_abi: x86_64
+            arm_abi: arm64-v8a
           - api: 30
-            abi: armeabi-v7a
             device: "Nexus 10"
             avd: nexus10_api30
             tag: google_apis
             ram_mb: 512
+            x86_abi: armeabi-v7a
+            arm_abi: armeabi-v7a
     env:
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
       ARTIFACTS_DIR: artifacts
@@ -137,10 +143,21 @@ jobs:
           echo "Decoding Android signing keystore to $KEYSTORE_PATH"
           python3 -c "import base64, os; encoded = os.environ['ANDROID_KEYSTORE_BASE64'].strip().encode(); path = os.environ['KEYSTORE_PATH']; open(path, 'wb').write(base64.b64decode(encoded))"
           chmod 600 "$KEYSTORE_PATH"
+      - name: Select emulator ABI
+        id: select-abi
+        env:
+          RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then
+            echo "abi=${{ matrix.arm_abi }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "abi=${{ matrix.x86_abi }}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download Android SDK components
         env:
           API_LEVEL: ${{ matrix.api }}
-          ABI: ${{ matrix.abi }}
+          ABI: ${{ steps.select-abi.outputs.abi }}
           TAG: ${{ matrix.tag }}
         run: |
           yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
@@ -150,7 +167,7 @@ jobs:
       - name: Start emulator
         env:
           API_LEVEL: ${{ matrix.api }}
-          ABI: ${{ matrix.abi }}
+          ABI: ${{ steps.select-abi.outputs.abi }}
         run: |
           set -euo pipefail
           $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
