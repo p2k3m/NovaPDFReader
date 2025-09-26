@@ -171,7 +171,13 @@ jobs:
         run: |
           set -euo pipefail
           $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim &
+          accel_flag=""
+          if ! "$ANDROID_HOME"/emulator/emulator-check accel >/dev/null 2>&1; then
+            echo "Hardware acceleration unavailable; starting emulator with -accel off"
+            accel_flag="-accel off"
+          fi
+
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim $accel_flag &
           emulator_pid=$!
 
           device_timeout=0
