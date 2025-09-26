@@ -1,4 +1,6 @@
 import com.android.build.api.dsl.TestExtension
+import com.android.build.api.variant.AndroidComponentsExtension
+import org.gradle.api.GradleException
 
 plugins {
     id("com.android.test")
@@ -43,6 +45,46 @@ dependencies {
 }
 
 val testExtension = extensions.getByType<TestExtension>()
+val androidComponents = extensions.getByType<AndroidComponentsExtension<*, *, *>>()
+
+val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
+    group = "verification"
+    description = "Fails fast when required emulator acceleration is unavailable."
+
+    val emulatorDirectoryProvider = androidComponents.sdkComponents.emulatorDirectory
+
+    doLast {
+        val emulatorDirectory = emulatorDirectoryProvider.get().asFile
+        val executableName = if (System.getProperty("os.name").startsWith("Windows")) {
+            "emulator-check.exe"
+        } else {
+            "emulator-check"
+        }
+        val emulatorCheckBinary = emulatorDirectory.resolve(executableName)
+
+        if (!emulatorCheckBinary.exists()) {
+            throw GradleException("Unable to locate \"$executableName\" in the Android SDK. Ensure the emulator package is installed.")
+        }
+
+        val result = project.exec {
+            commandLine(emulatorCheckBinary.absolutePath, "accel")
+            isIgnoreExitValue = true
+        }
+
+        if (result.exitValue != 0) {
+            throw GradleException(
+                "Android Emulator acceleration is unavailable. " +
+                    "Run \"${emulatorCheckBinary.absolutePath} accel\" locally to inspect the host configuration."
+            )
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name.endsWith("AndroidTest")) {
+        dependsOn(verifyEmulatorAcceleration)
+    }
+}
 
 tasks.register("frameRateBenchmark") {
     group = "performance"
