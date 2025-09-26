@@ -20,7 +20,7 @@ import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,7 +71,7 @@ class PdfDocumentRepository(
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
-    private val renderScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val renderScope = CoroutineScope(Job() + ioDispatcher)
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val bitmapCache = AccessOrderBitmapCache(maxCacheBytes)
