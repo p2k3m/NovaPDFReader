@@ -172,11 +172,36 @@ jobs:
           set -euo pipefail
           $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim &
-          adb wait-for-device
+          emulator_pid=$!
+
+          device_timeout=0
+          while true; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo "Emulator process exited before it became available to ADB" >&2
+              wait "$emulator_pid" || true
+              exit 1
+            fi
+
+            if adb devices | awk 'NR>1 && $2 == "device" { exit 0 } END { exit 1 }'; then
+              break
+            fi
+
+            sleep 5
+            device_timeout=$((device_timeout + 5))
+            if [ $device_timeout -ge 120 ]; then
+              echo "Emulator failed to appear in adb devices output within 2 minutes" >&2
+              exit 1
+            fi
+          done
           boot_timeout=0
           until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
             sleep 5
             boot_timeout=$((boot_timeout + 5))
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo "Emulator process exited before boot completed" >&2
+              wait "$emulator_pid" || true
+              exit 1
+            fi
             if [ $boot_timeout -ge 300 ]; then
               echo "Emulator failed to boot within 5 minutes" >&2
               exit 1
