@@ -172,16 +172,16 @@ jobs:
         run: |
           set -euo pipefail
           $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
-          accel_flag=""
+          accel_args=()
           if [ "${RUNNER_OS:-}" = "macOS" ]; then
             echo "macOS runners do not expose HVF; starting emulator with -no-accel"
-            accel_flag="-no-accel"
+            accel_args=("-no-accel" "-accel" "off")
           elif ! "$ANDROID_HOME"/emulator/emulator-check accel >/dev/null 2>&1; then
             echo "Hardware acceleration unavailable; starting emulator with -no-accel"
-            accel_flag="-no-accel"
+            accel_args=("-no-accel" "-accel" "off")
           fi
 
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim $accel_flag &
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" &
           emulator_pid=$!
 
           device_timeout=0
