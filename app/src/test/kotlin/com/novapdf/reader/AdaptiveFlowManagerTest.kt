@@ -7,7 +7,7 @@ import android.hardware.SensorManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -104,7 +104,7 @@ class AdaptiveFlowManagerTest {
         val manager = AdaptiveFlowManager(
             context = context,
             wallClock = { 0L },
-            coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            coroutineScope = CoroutineScope(Job() + Dispatchers.Default)
         )
 
         repeat(5) { manager.updateFrameMetrics(16f) }
