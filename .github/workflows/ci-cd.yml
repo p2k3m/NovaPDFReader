@@ -12,54 +12,102 @@ concurrency:
 
 jobs:
   build-test:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         include:
-          - api: 21
-            device: pixel
-            avd: pixel_api21
-            tag: google_apis
-            ram_mb: 2048
-            x86_abi: x86_64
-            arm_abi: armeabi-v7a
-          - api: 28
-            device: pixel_3
-            avd: pixel3_api28
-            tag: google_apis
-            ram_mb: 4096
-            x86_abi: x86_64
-            arm_abi: arm64-v8a
           - api: 34
-            device: pixel_fold
+            avd: pixel7pro_api34
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 6144
+            device_id: pixel_7_pro
+            device_label: pixel-7-pro
+            skin: 1440x3120
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel 7 Pro
+              hw.lcd.width=1440
+              hw.lcd.height=3120
+              hw.lcd.density=512
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3120
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 34
+            avd: galaxys24ultra_api34
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 8192
+            device_id: pixel_7_pro
+            device_label: galaxy-s24-ultra
+            skin: 1440x3120
+            hardware_overrides: |
+              hw.device.manufacturer=Samsung
+              hw.device.name=Galaxy S24 Ultra
+              hw.lcd.width=1440
+              hw.lcd.height=3120
+              hw.lcd.density=500
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3120
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 34
+            avd: galaxys23ultra_api34
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 7168
+            device_id: pixel_7
+            device_label: galaxy-s23-ultra
+            skin: 1440x3088
+            hardware_overrides: |
+              hw.device.manufacturer=Samsung
+              hw.device.name=Galaxy S23 Ultra
+              hw.lcd.width=1440
+              hw.lcd.height=3088
+              hw.lcd.density=500
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3088
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 34
             avd: pixelfold_api34
             tag: google_apis
+            abi: x86_64
             ram_mb: 6144
-            x86_abi: x86_64
-            arm_abi: arm64-v8a
-          - api: 34
-            device: pixel_6
-            avd: pixel6_api34
+            device_id: pixel_fold
+            device_label: pixel-fold
+            skin: 2208x1840
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel Fold
+              hw.lcd.width=2208
+              hw.lcd.height=1840
+              hw.lcd.density=380
+              hw.displayRegion.0.width=1840
+              hw.displayRegion.0.height=2208
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 33
+            avd: pixeltablet_api33
             tag: google_apis
-            ram_mb: 6144
-            x86_abi: x86_64
-            arm_abi: arm64-v8a
-          - api: 35
-            device: pixel_7
-            avd: pixel7_api35
-            tag: google_apis
+            abi: x86_64
             ram_mb: 8192
-            x86_abi: x86_64
-            arm_abi: arm64-v8a
-          - api: 30
-            device: "Nexus 10"
-            avd: nexus10_api30
-            tag: default
-            ram_mb: 512
-            x86_abi: x86
-            arm_abi: arm64-v8a
+            device_id: pixel_tablet
+            device_label: pixel-tablet
+            skin: 2560x1600
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel Tablet
+              hw.lcd.width=2560
+              hw.lcd.height=1600
+              hw.lcd.density=280
+              hw.displayRegion.0.width=2560
+              hw.displayRegion.0.height=1600
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
     env:
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
       ARTIFACTS_DIR: artifacts
@@ -143,35 +191,41 @@ jobs:
           echo "Decoding Android signing keystore to $KEYSTORE_PATH"
           python3 -c "import base64, os; encoded = os.environ['ANDROID_KEYSTORE_BASE64'].strip().encode(); path = os.environ['KEYSTORE_PATH']; open(path, 'wb').write(base64.b64decode(encoded))"
           chmod 600 "$KEYSTORE_PATH"
-      - name: Select emulator ABI
-        id: select-abi
-        env:
-          RUNNER_ARCH: ${{ runner.arch }}
-        run: |
-          set -euo pipefail
-          if [ "$RUNNER_ARCH" = "ARM64" ]; then
-            echo "abi=${{ matrix.arm_abi }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "abi=${{ matrix.x86_abi }}" >> "$GITHUB_OUTPUT"
-          fi
       - name: Download Android SDK components
         env:
           API_LEVEL: ${{ matrix.api }}
-          ABI: ${{ steps.select-abi.outputs.abi }}
+          ABI: ${{ matrix.abi }}
           TAG: ${{ matrix.tag }}
         run: |
-          yes | sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          sudo $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --info
       - name: Start emulator
         env:
           API_LEVEL: ${{ matrix.api }}
-          ABI: ${{ steps.select-abi.outputs.abi }}
+          ABI: ${{ matrix.abi }}
           RUNNER_OS: ${{ runner.os }}
         run: |
           set -euo pipefail
-          $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --device "${{ matrix.device }}" --force
+          create_cmd=("$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force)
+          if [ -n "${{ matrix.device_id }}" ]; then
+            create_cmd+=(--device "${{ matrix.device_id }}")
+          fi
+
+          if ! "${create_cmd[@]}"; then
+            echo "Falling back to default hardware profile for ${{ matrix.avd }}"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force
+          fi
+
+          config_path="$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini"
+          if [ -n "${{ matrix.hardware_overrides }}" ]; then
+            echo "Applying hardware overrides for ${{ matrix.device_label }}"
+            cat <<'EOF' >> "$config_path"
+${{ matrix.hardware_overrides }}
+EOF
+          fi
+
           accel_args=()
           if [ "${RUNNER_OS:-}" = "macOS" ]; then
             echo "macOS runners do not expose HVF; starting emulator with -no-accel"
@@ -181,7 +235,7 @@ jobs:
             accel_args=("-no-accel" "-accel" "off")
           fi
 
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin 1080x1920 -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" &
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" &
           emulator_pid=$!
 
           device_timeout=0
@@ -227,7 +281,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}"
+          base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$base_dir"
 
           adb shell am start -n com.novapdf.reader/.MainActivity
@@ -290,8 +344,8 @@ jobs:
       - name: Collect emulator logs
         if: always()
         run: |
-          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}"
-          adb logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}/emulator.log" || true
+          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
+          adb logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/emulator.log" || true
       - name: Stop emulator
         if: always()
         run: adb -s emulator-5554 emu kill || true
@@ -305,27 +359,27 @@ jobs:
             echo "Bundle not found at $bundle_path" >&2
             exit 1
           fi
-          target_dir="${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}"
+          target_dir="${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$target_dir"
-          signed_bundle="$target_dir/NovaPDFReader-release-signed-api${{ matrix.api }}-${{ matrix.device }}.aab"
+          signed_bundle="$target_dir/NovaPDFReader-release-signed-api${{ matrix.api }}-${{ matrix.device_label }}.aab"
           cp "$bundle_path" "$signed_bundle"
           "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$signed_bundle"
       - name: Stage test and lint reports
         if: always()
         run: |
-          mkdir -p "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}"
+          mkdir -p "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device_label }}"
           if [ -d app/build/reports ]; then
             if command -v rsync >/dev/null 2>&1; then
-              rsync -a app/build/reports/ "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/"
+              rsync -a app/build/reports/ "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device_label }}/"
             else
-              cp -R app/build/reports/. "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/"
+              cp -R app/build/reports/. "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device_label }}/"
             fi
           fi
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nova-build-${{ matrix.api }}-${{ matrix.device }}
+          name: nova-build-${{ matrix.api }}-${{ matrix.device_label }}
           path: ${{ env.ARTIFACTS_DIR }}
           if-no-files-found: warn
       - name: Install AWS CLI
@@ -347,18 +401,18 @@ jobs:
         if: success()
         env:
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
-          S3_PREFIX: ci/${{ github.run_id }}/api${{ matrix.api }}/${{ matrix.device }}
+          S3_PREFIX: ci/${{ github.run_id }}/api${{ matrix.api }}/${{ matrix.device_label }}
         run: |
           set -euo pipefail
-          if [ -d "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}" ]; then
-            aws s3 cp "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/bundle/" --recursive
+          if [ -d "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device_label }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/bundles/api${{ matrix.api }}/${{ matrix.device_label }}/" "s3://${BUCKET}/${S3_PREFIX}/bundle/" --recursive
           fi
-          if [ -d "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}" ]; then
-            aws s3 cp "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/screenshots/" --recursive
+          if [ -d "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}/" "s3://${BUCKET}/${S3_PREFIX}/screenshots/" --recursive
           fi
-          if [ -d "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}" ]; then
-            aws s3 cp "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/reports/" --recursive
+          if [ -d "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device_label }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/reports/api${{ matrix.api }}/${{ matrix.device_label }}/" "s3://${BUCKET}/${S3_PREFIX}/reports/" --recursive
           fi
-          if [ -d "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}" ]; then
-            aws s3 cp "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device }}/" "s3://${BUCKET}/${S3_PREFIX}/logs/" --recursive
+          if [ -d "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}" ]; then
+            aws s3 cp "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/" "s3://${BUCKET}/${S3_PREFIX}/logs/" --recursive
           fi
