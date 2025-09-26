@@ -51,7 +51,9 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     group = "verification"
     description = "Fails fast when required emulator acceleration is unavailable."
 
-    val emulatorDirectoryProvider = androidComponents.sdkComponents.emulatorDirectory
+    val emulatorDirectoryProvider = androidComponents.sdkComponents.sdkDirectory.map { sdkDir ->
+        sdkDir.dir("emulator")
+    }
 
     doLast {
         val emulatorDirectory = emulatorDirectoryProvider.get().asFile
