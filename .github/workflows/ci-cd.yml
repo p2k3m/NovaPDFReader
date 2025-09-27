@@ -233,15 +233,21 @@ jobs:
           fi
 
           config_path=""
-          for candidate in "${config_candidates[@]}"; do
-            if [ -f "$candidate" ]; then
-              config_path="$candidate"
-              break
-            fi
+          for attempt in $(seq 1 10); do
+            for candidate in "${config_candidates[@]}"; do
+              if [ -f "$candidate" ]; then
+                config_path="$candidate"
+                break 2
+              fi
+            done
+
+            # avdmanager occasionally finishes before the config file is flushed to disk
+            # which causes flaky failures on CI runners. Wait a moment and retry.
+            sleep 2
           done
 
           if [ -z "$config_path" ]; then
-            echo "AVD configuration not found. Checked:" >&2
+            echo "AVD configuration not found after waiting 20 seconds. Checked:" >&2
             printf '  - %s\n' "${config_candidates[@]}" >&2
             exit 1
           fi
