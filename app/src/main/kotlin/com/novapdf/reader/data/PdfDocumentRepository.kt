@@ -5,18 +5,18 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.os.Build
 import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.os.Trace
 import android.util.Size
 import android.util.SparseArray
 import android.util.Log
-import androidx.core.graphics.createBitmap
+import com.github.benmanes.caffeine.cache.Caffeine
+import com.github.benmanes.caffeine.cache.RemovalCause
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,22 +30,23 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
-import java.io.IOException
 import android.print.PageRange
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import com.novapdf.reader.model.PdfOutlineNode
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import com.shockwave.pdfium.PdfDocument
+import com.shockwave.pdfium.PdfiumCore
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
@@ -55,7 +56,7 @@ data class PdfDocumentSession(
     val documentId: String,
     val uri: Uri,
     val pageCount: Int,
-    val renderer: PdfRenderer,
+    val document: PdfDocument,
     val fileDescriptor: ParcelFileDescriptor
 )
 
@@ -63,6 +64,11 @@ data class PageTileRequest(
     val pageIndex: Int,
     val tileRect: Rect,
     val scale: Float
+)
+
+private data class PageBitmapKey(
+    val pageIndex: Int,
+    val width: Int
 )
 
 class PdfDocumentRepository(
@@ -74,14 +80,24 @@ class PdfDocumentRepository(
     private val renderScope = CoroutineScope(Job() + ioDispatcher)
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
-    private val bitmapCache = AccessOrderBitmapCache(maxCacheBytes)
+    private val pdfiumCore = PdfiumCore(appContext)
+    private val pageBitmapCache = Caffeine.newBuilder()
+        .maximumWeight(maxCacheBytes)
+        .weigher<PageBitmapKey, Bitmap> { _, bitmap -> safeByteCount(bitmap) }
+        .executor { it.run() }
+        .removalListener<PageBitmapKey, Bitmap> { _, bitmap, cause ->
+            if (cause == RemovalCause.REPLACED || cause == RemovalCause.EXPLICIT || cause.wasEvicted()) {
+                bitmap?.let { recycleBitmap(it) }
+            }
+        }
+        .build<PageBitmapKey, Bitmap>()
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
     val session: StateFlow<PdfDocumentSession?> = openSession.asStateFlow()
     private val outlineNodes = MutableStateFlow<List<PdfOutlineNode>>(emptyList())
     val outline: StateFlow<List<PdfOutlineNode>> = outlineNodes.asStateFlow()
-    private val isRendering = AtomicBoolean(false)
+    private val renderMutex = Mutex()
     private val componentCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
@@ -103,7 +119,7 @@ class PdfDocumentRepository(
     fun closeCurrentSession() {
         if (cacheLock.tryLock()) {
             try {
-                bitmapCache.clear()
+                clearBitmapCacheLocked()
             } finally {
                 cacheLock.unlock()
             }
@@ -114,7 +130,7 @@ class PdfDocumentRepository(
         outlineNodes.value = emptyList()
         openSession.value?.let { session ->
             try {
-                session.renderer.close()
+                pdfiumCore.closeDocument(session.document)
                 session.fileDescriptor.close()
             } catch (_: IOException) {
             }
@@ -129,12 +145,22 @@ class PdfDocumentRepository(
                 return@withContextGuard null
             }
             val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return@withContextGuard null
-            val renderer = PdfRenderer(pfd)
+            val document = try {
+                pdfiumCore.newDocument(pfd)
+            } catch (throwable: Throwable) {
+                try {
+                    pfd.close()
+                } catch (_: IOException) {
+                }
+                Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                return@withContextGuard null
+            }
+            val pageCount = pdfiumCore.getPageCount(document)
             val session = PdfDocumentSession(
                 documentId = uri.toString(),
                 uri = uri,
-                pageCount = renderer.pageCount,
-                renderer = renderer,
+                pageCount = pageCount,
+                document = document,
                 fileDescriptor = pfd
             )
             openSession.value = session
@@ -147,12 +173,20 @@ class PdfDocumentRepository(
         val session = openSession.value ?: return@withContextGuard null
         pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
-            val page = session.renderer.openPage(pageIndex)
-            val size = Size(page.width, page.height)
-            page.close()
+            pdfiumCore.openPage(session.document, pageIndex)
+            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex).roundToInt()
+            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex).roundToInt()
+            pdfiumCore.closePage(session.document, pageIndex)
+            val size = Size(width, height)
             pageSizeCache.put(pageIndex, size)
             size
         }
+    }
+
+    suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? = withContextGuard {
+        if (targetWidth <= 0) return@withContextGuard null
+        val bitmap = ensurePageBitmap(pageIndex, targetWidth) ?: return@withContextGuard null
+        copyBitmap(bitmap)
     }
 
     suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? {
@@ -160,41 +194,34 @@ class PdfDocumentRepository(
     }
 
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
-        val session = openSession.value ?: return@withContextGuard null
-        val key = cacheKey(request)
-        cacheLock.withLock {
-            bitmapCache.getBitmap(key)?.let { cached ->
-                val config = cached.config ?: Bitmap.Config.ARGB_8888
-                return@withContextGuard cached.copy(config, false)
-            }
+        if (openSession.value == null) return@withContextGuard null
+        val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
+        val targetWidth = max(1, (pageSize.width * request.scale).roundToInt())
+        val baseBitmap = ensurePageBitmap(request.pageIndex, targetWidth) ?: return@withContextGuard null
+        val scaledLeft = (request.tileRect.left * request.scale).roundToInt().coerceIn(0, baseBitmap.width - 1)
+        val scaledTop = (request.tileRect.top * request.scale).roundToInt().coerceIn(0, baseBitmap.height - 1)
+        val scaledRight = (request.tileRect.right * request.scale).roundToInt().coerceIn(scaledLeft + 1, baseBitmap.width)
+        val scaledBottom = (request.tileRect.bottom * request.scale).roundToInt().coerceIn(scaledTop + 1, baseBitmap.height)
+        val width = (scaledRight - scaledLeft).coerceAtLeast(1)
+        val height = (scaledBottom - scaledTop).coerceAtLeast(1)
+        val tile = Bitmap.createBitmap(baseBitmap, scaledLeft, scaledTop, width, height)
+        if (tile.config != Bitmap.Config.ARGB_8888 && tile.config != Bitmap.Config.RGBA_F16) {
+            copyBitmap(tile)
+        } else {
+            tile
         }
-        if (!isRendering.compareAndSet(false, true)) {
-            return@withContextGuard null
-        }
-        try {
-            val page = session.renderer.openPage(request.pageIndex)
-            val clamped = clampRectToPage(request.tileRect, page.width, page.height)
-            if (clamped.isEmpty) {
-                page.close()
-                return@withContextGuard null
+    }
+
+    fun prefetchPages(indices: List<Int>, targetWidth: Int) {
+        if (targetWidth <= 0) return
+        val session = openSession.value ?: return
+        if (indices.isEmpty()) return
+        renderScope.launch {
+            indices.forEach { index ->
+                if (index in 0 until session.pageCount) {
+                    ensurePageBitmap(index, targetWidth)
+                }
             }
-            val width = max(1, (clamped.width() * request.scale).roundToInt())
-            val height = max(1, (clamped.height() * request.scale).roundToInt())
-            val bitmap = createBitmap(width, height)
-            val matrix = Matrix().apply {
-                postScale(request.scale, request.scale)
-                postTranslate(-clamped.left * request.scale, -clamped.top * request.scale)
-            }
-            val dest = Rect(0, 0, width, height)
-            page.render(bitmap, dest, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            page.close()
-            cacheLock.withLock {
-                bitmapCache.putBitmap(key, bitmap)
-            }
-            val config = bitmap.config ?: Bitmap.Config.ARGB_8888
-            bitmap.copy(config, false)
-        } finally {
-            isRendering.set(false)
         }
     }
 
@@ -205,12 +232,8 @@ class PdfDocumentRepository(
             indices.forEach { pageIndex ->
                 if (pageIndex in 0 until session.pageCount) {
                     val pageSize = getPageSizeInternal(pageIndex) ?: return@forEach
-                    tileFractions.forEach { fraction ->
-                        val rect = fraction.toPageRect(pageSize)
-                        if (!rect.isEmpty) {
-                            renderTile(pageIndex, rect, scale)
-                        }
-                    }
+                    val targetWidth = max(1, (pageSize.width * scale).roundToInt())
+                    ensurePageBitmap(pageIndex, targetWidth)
                 }
             }
         }
@@ -350,32 +373,74 @@ class PdfDocumentRepository(
         appContext.unregisterComponentCallbacks(componentCallbacks)
         runBlocking {
             cacheLock.withLock {
-                bitmapCache.clear()
+                clearBitmapCacheLocked()
             }
         }
         renderScope.cancel()
-    }
-
-    private fun cacheKey(request: PageTileRequest): String {
-        val rect = request.tileRect
-        return "${request.pageIndex}_${rect.left},${rect.top},${rect.right},${rect.bottom}_${request.scale.toBits()}"
-    }
-
-    private fun clampRectToPage(rect: Rect, width: Int, height: Int): Rect {
-        val clamped = Rect(rect)
-        val valid = clamped.intersect(0, 0, width, height)
-        return if (valid) clamped else Rect()
     }
 
     private suspend fun getPageSizeInternal(pageIndex: Int): Size? {
         val session = openSession.value ?: return null
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
-            val page = session.renderer.openPage(pageIndex)
-            val size = Size(page.width, page.height)
-            page.close()
+            pdfiumCore.openPage(session.document, pageIndex)
+            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex).roundToInt()
+            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex).roundToInt()
+            pdfiumCore.closePage(session.document, pageIndex)
+            val size = Size(width, height)
             pageSizeCache.put(pageIndex, size)
             size
+        }
+    }
+
+    private suspend fun ensurePageBitmap(pageIndex: Int, targetWidth: Int): Bitmap? {
+        if (targetWidth <= 0) return null
+        val session = openSession.value ?: return null
+        val key = PageBitmapKey(pageIndex, targetWidth)
+        pageBitmapCache.getIfPresent(key)?.let { existing ->
+            if (!existing.isRecycled) {
+                return existing
+            }
+        }
+        return renderMutex.withLock {
+            pageBitmapCache.getIfPresent(key)?.let { cached ->
+                if (!cached.isRecycled) {
+                    return@withLock cached
+                }
+            }
+            val pageSize = getPageSizeInternal(pageIndex) ?: return@withLock null
+            if (pageSize.width <= 0 || pageSize.height <= 0) {
+                return@withLock null
+            }
+            val aspect = pageSize.height.toDouble() / pageSize.width.toDouble()
+            val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
+            Trace.beginSection("PdfiumRender#$pageIndex")
+            try {
+                pdfiumCore.openPage(session.document, pageIndex)
+                val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
+                pageBitmapCache.put(key, bitmap)
+                bitmap
+            } catch (throwable: Throwable) {
+                Log.e(TAG, "Failed to render page $pageIndex", throwable)
+                null
+            } finally {
+                try {
+                    pdfiumCore.closePage(session.document, pageIndex)
+                } catch (_: Throwable) {
+                }
+                Trace.endSection()
+            }
+        }
+    }
+
+    private fun copyBitmap(source: Bitmap): Bitmap? {
+        val config = source.config ?: Bitmap.Config.ARGB_8888
+        return try {
+            source.copy(config, false)
+        } catch (throwable: Throwable) {
+            Log.w(TAG, "Unable to copy bitmap", throwable)
+            null
         }
     }
 
@@ -404,71 +469,21 @@ class PdfDocumentRepository(
         0
     }
 
-    private fun scheduleCacheClear() {
-        renderScope.launch {
-            cacheLock.withLock {
-                bitmapCache.clear()
-            }
+    private fun recycleBitmap(bitmap: Bitmap) {
+        if (!bitmap.isRecycled) {
+            bitmap.recycle()
         }
     }
 
-    private inner class AccessOrderBitmapCache(
-        private val maxBytes: Long
-    ) : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
-        private val bitmapSizes = HashMap<String, Int>()
-        private var cacheSizeBytes = 0L
+    private fun clearBitmapCacheLocked() {
+        pageBitmapCache.asMap().values.forEach(::recycleBitmap)
+        pageBitmapCache.invalidateAll()
+        pageBitmapCache.cleanUp()
+    }
 
-        fun getBitmap(key: String): Bitmap? {
-            val bitmap = super.get(key) ?: return null
-            if (bitmap.isRecycled) {
-                removeRecycledEntry(key, bitmap)
-                return null
-            }
-            return bitmap
-        }
-
-        fun putBitmap(key: String, bitmap: Bitmap) {
-            val previous = super.put(key, bitmap)
-            previous?.let { onEntryRemoved(key, it) }
-            val size = safeByteCount(bitmap)
-            bitmapSizes[key] = size
-            cacheSizeBytes += size
-            trimToBudget()
-        }
-
-        private fun trimToBudget() {
-            if (cacheSizeBytes <= maxBytes) return
-            val iterator = entries.iterator()
-            while (cacheSizeBytes > maxBytes && iterator.hasNext()) {
-                val entry = iterator.next()
-                iterator.remove()
-                onEntryRemoved(entry.key, entry.value)
-            }
-        }
-
-        override fun clear() {
-            values.forEach { bitmap ->
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-            }
-            super.clear()
-            bitmapSizes.clear()
-            cacheSizeBytes = 0L
-        }
-
-        private fun removeRecycledEntry(key: String, bitmap: Bitmap) {
-            super.remove(key)
-            val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
-            cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
-        }
-
-        private fun onEntryRemoved(key: String, bitmap: Bitmap) {
-            val size = bitmapSizes.remove(key)?.toLong() ?: safeByteCount(bitmap).toLong()
-            cacheSizeBytes = (cacheSizeBytes - size).coerceAtLeast(0L)
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
+    private fun scheduleCacheClear() {
+        renderScope.launch {
+            cacheLock.withLock { clearBitmapCacheLocked() }
         }
     }
 
