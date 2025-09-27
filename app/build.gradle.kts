@@ -154,54 +154,54 @@ val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
 val targetProject = project
 
-gradle.taskGraph.whenReady {
-    val signingTaskPrefixes = listOf(
-        "assemble",
-        "bundle",
-        "install",
-        "lintVital",
-        "package",
-        "publish",
-        "sign",
-        "upload"
-    )
-    val needsReleaseSigning = allTasks.any { task ->
-        if (task.project != targetProject) {
-            return@any false
+val signingTaskPrefixes = listOf(
+    "assemble",
+    "bundle",
+    "install",
+    "lintVital",
+    "package",
+    "publish",
+    "sign",
+    "upload"
+)
+
+fun String.taskNameFromPath(): String = substringAfterLast(":")
+
+fun String.targetsReleaseLikeVariant(): Boolean =
+    contains("Release", ignoreCase = true) || contains("Benchmark", ignoreCase = true)
+
+fun String.isPackagingOrPublishingTask(): Boolean =
+    signingTaskPrefixes.any { prefix -> startsWith(prefix, ignoreCase = true) }
+
+val needsReleaseSigning = gradle.startParameter.taskNames.any { taskPath ->
+    val taskName = taskPath.taskNameFromPath()
+    taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
+}
+
+if (needsReleaseSigning) {
+    val releaseKeystoreResult = runCatching { targetProject.resolveReleaseKeystore() }
+    if (releaseKeystoreResult.isSuccess) {
+        val releaseKeystore = releaseKeystoreResult.getOrThrow()
+        releaseSigningConfig.apply {
+            storeFile = releaseKeystore
+            storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
+            keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
+            keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
         }
-        val taskName = task.name
-        val targetsReleaseLikeVariant =
-            taskName.contains("Release") || taskName.contains("Benchmark")
-        val isPackagingOrPublishingTask = signingTaskPrefixes.any { prefix ->
-            taskName.startsWith(prefix, ignoreCase = true)
+    } else {
+        val debugSigningConfig = androidExtension.signingConfigs.getByName("debug")
+        releaseSigningConfig.initWith(debugSigningConfig)
+        releaseSigningConfig.apply {
+            // Ensure modern signature schemes stay enabled after initWith.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = true
         }
-        targetsReleaseLikeVariant && isPackagingOrPublishingTask
-    }
-    if (needsReleaseSigning) {
-        val releaseKeystoreResult = runCatching { targetProject.resolveReleaseKeystore() }
-        if (releaseKeystoreResult.isSuccess) {
-            val releaseKeystore = releaseKeystoreResult.getOrThrow()
-            releaseSigningConfig.apply {
-                storeFile = releaseKeystore
-                storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
-                keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
-                keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
-            }
-        } else {
-            val debugSigningConfig = androidExtension.signingConfigs.getByName("debug")
-            releaseSigningConfig.initWith(debugSigningConfig)
-            releaseSigningConfig.apply {
-                // Ensure modern signature schemes stay enabled after initWith.
-                enableV1Signing = true
-                enableV2Signing = true
-                enableV3Signing = true
-                enableV4Signing = true
-            }
-            targetProject.logger.warn(
-                "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
-                    "Falling back to the debug signing configuration."
-            )
-        }
+        targetProject.logger.warn(
+            "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
+                "Falling back to the debug signing configuration."
+        )
     }
 }
 
