@@ -1,7 +1,6 @@
 package com.novapdf.reader
 
 import android.graphics.Bitmap
-import android.graphics.Rect
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -32,8 +31,8 @@ class SamplePdfInstrumentedTest {
             assertNotNull("Sample PDF should report a page size", pageSize)
             val fullPageSize = requireNotNull(pageSize)
 
-            val fullPage = Rect(0, 0, fullPageSize.width, fullPageSize.height)
-            val bitmap = repository.renderTile(0, fullPage, scale = 1f)
+            val targetWidth = fullPageSize.width.coerceAtLeast(1)
+            val bitmap = repository.renderPage(0, targetWidth)
             assertNotNull("Sample PDF should render a bitmap", bitmap)
             val renderedPage = requireNotNull(bitmap)
 

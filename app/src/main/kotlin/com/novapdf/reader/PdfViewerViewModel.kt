@@ -4,7 +4,6 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.util.Size
 import android.content.res.Configuration
@@ -57,12 +56,6 @@ data class PdfViewerUiState(
     val outline: List<PdfOutlineNode> = emptyList()
 )
 
-data class TilePreloadSpec(
-    val pageIndex: Int,
-    val tileFractions: List<RectF>,
-    val scale: Float
-)
-
 private data class DocumentContext(
     val speed: Float,
     val sensitivity: Float,
@@ -84,7 +77,7 @@ open class PdfViewerViewModel(
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
 
     private var searchJob: Job? = null
-    private var lastTileSpec: TilePreloadSpec? = null
+    private var viewportWidthPx: Int = 1080
 
     init {
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -118,13 +111,11 @@ open class PdfViewerViewModel(
         }
         viewModelScope.launch {
             adaptiveFlowManager.preloadTargets.collect { targets ->
-                val spec = lastTileSpec
-                if (spec != null && targets.isNotEmpty()) {
-                    pdfRepository.preloadTiles(
-                        indices = targets,
-                        tileFractions = spec.tileFractions,
-                        scale = spec.scale
-                    )
+                if (targets.isNotEmpty()) {
+                    val width = viewportWidthPx
+                    if (width > 0) {
+                        pdfRepository.prefetchPages(targets, width)
+                    }
                 }
             }
         }
@@ -173,11 +164,8 @@ open class PdfViewerViewModel(
 
     private suspend fun preloadInitialPage(session: PdfDocumentSession) {
         updateUiState { it.copy(loadingProgress = 0.55f) }
-        val firstPageSize = runCatching { pdfRepository.getPageSize(0) }.getOrNull()
-        if (firstPageSize != null) {
-            val rect = Rect(0, 0, firstPageSize.width, firstPageSize.height)
-            runCatching { pdfRepository.renderTile(0, rect, 1f) }
-        }
+        val targetWidth = viewportWidthPx.coerceAtLeast(480)
+        runCatching { pdfRepository.renderPage(0, targetWidth) }
         updateUiState { it.copy(loadingProgress = 0.85f) }
     }
 
@@ -203,14 +191,16 @@ open class PdfViewerViewModel(
         adaptiveFlowManager.trackPageChange(index, session.pageCount)
         _uiState.value = _uiState.value.copy(currentPage = index)
         val preloadTargets = adaptiveFlowManager.preloadTargets.value
-        val spec = lastTileSpec
-        if (spec != null) {
-            pdfRepository.preloadTiles(
-                indices = preloadTargets,
-                tileFractions = spec.tileFractions,
-                scale = spec.scale
-            )
+        if (preloadTargets.isNotEmpty()) {
+            val width = viewportWidthPx
+            if (width > 0) {
+                pdfRepository.prefetchPages(preloadTargets, width)
+            }
         }
+    }
+
+    suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
+        return pdfRepository.renderPage(index, targetWidth)
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
@@ -227,6 +217,22 @@ open class PdfViewerViewModel(
         _uiState.value = _uiState.value.copy(currentPage = index)
     }
 
+    fun updateViewportWidth(widthPx: Int) {
+        if (widthPx <= 0) return
+        viewportWidthPx = widthPx
+        val preloadTargets = adaptiveFlowManager.preloadTargets.value
+        if (preloadTargets.isNotEmpty()) {
+            pdfRepository.prefetchPages(preloadTargets, viewportWidthPx)
+        }
+    }
+
+    fun prefetchPages(indices: List<Int>, widthPx: Int) {
+        if (indices.isEmpty() || widthPx <= 0) return
+        viewModelScope.launch(Dispatchers.IO) {
+            pdfRepository.prefetchPages(indices, widthPx)
+        }
+    }
+
     fun exportDocument(context: android.content.Context): Boolean {
         val session = pdfRepository.session.value ?: return false
         val printManager = context.getSystemService(PrintManager::class.java) ?: return false
@@ -236,18 +242,6 @@ open class PdfViewerViewModel(
         val attributes = PrintAttributes.Builder().build()
         printManager.print(jobName, adapter, attributes)
         return true
-    }
-
-    fun updateTileSpec(spec: TilePreloadSpec) {
-        lastTileSpec = spec
-        val preloadTargets = adaptiveFlowManager.preloadTargets.value
-        if (preloadTargets.isNotEmpty()) {
-            pdfRepository.preloadTiles(
-                indices = preloadTargets,
-                tileFractions = spec.tileFractions,
-                scale = spec.scale
-            )
-        }
     }
 
     fun addAnnotation(annotation: AnnotationCommand) {

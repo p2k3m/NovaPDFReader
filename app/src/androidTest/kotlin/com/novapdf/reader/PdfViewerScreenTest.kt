@@ -34,9 +34,10 @@ class PdfViewerScreenTest {
                     onToggleBookmark = {},
                     onOutlineDestinationSelected = {},
                     onExportDocument = { true },
-                    renderTile = { _, _, _ -> null },
+                    renderPage = { _, _ -> null },
                     requestPageSize = { null },
-                    onTileSpecChanged = {},
+                    onViewportWidthChanged = {},
+                    onPrefetchPages = { _, _ -> },
                     onToggleDynamicColor = {},
                     onToggleHighContrast = {},
                     dynamicColorSupported = true

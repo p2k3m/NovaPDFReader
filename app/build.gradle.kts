@@ -443,6 +443,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
+    implementation("com.github.barteksc:pdfium-android:1.9.0")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
