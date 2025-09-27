@@ -14,6 +14,7 @@ import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
@@ -48,6 +50,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,6 +63,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -221,13 +225,16 @@ fun PdfViewerScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHost) }
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
-            verticalArrangement = Arrangement.Top
+                .padding(paddingValues)
         ) {
-            SearchBar(
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Top
+            ) {
+                SearchBar(
                 query = searchQuery,
                 onQueryChange = {
                     searchQuery = it
@@ -247,26 +254,31 @@ fun PdfViewerScreen(
                 }
             }
 
-            AccessibilitySettings(
-                dynamicColorEnabled = state.dynamicColorEnabled,
-                highContrastEnabled = state.highContrastEnabled,
-                dynamicColorSupported = dynamicColorSupported,
-                onDynamicColorChanged = onToggleDynamicColor,
-                onHighContrastChanged = onToggleHighContrast
-            )
-
-            if (state.pageCount == 0) {
-                EmptyState(onOpenDocument)
-            } else {
-                PdfPager(
-                    modifier = Modifier.fillMaxSize(),
-                    state = state,
-                    onPageChange = latestOnPageChange,
-                    onStrokeFinished = onStrokeFinished,
-                    renderTile = renderTile,
-                    requestPageSize = requestPageSize,
-                    onTileSpecChanged = onTileSpecChanged
+                AccessibilitySettings(
+                    dynamicColorEnabled = state.dynamicColorEnabled,
+                    highContrastEnabled = state.highContrastEnabled,
+                    dynamicColorSupported = dynamicColorSupported,
+                    onDynamicColorChanged = onToggleDynamicColor,
+                    onHighContrastChanged = onToggleHighContrast
                 )
+
+                if (state.pageCount == 0) {
+                    EmptyState(onOpenDocument)
+                } else {
+                    PdfPager(
+                        modifier = Modifier.fillMaxSize(),
+                        state = state,
+                        onPageChange = latestOnPageChange,
+                        onStrokeFinished = onStrokeFinished,
+                        renderTile = renderTile,
+                        requestPageSize = requestPageSize,
+                        onTileSpecChanged = onTileSpecChanged
+                    )
+                }
+            }
+
+            if (state.isLoading) {
+                LoadingOverlay(progress = state.loadingProgress)
             }
         }
     }
@@ -280,6 +292,46 @@ fun PdfViewerScreen(
             },
             onDismiss = { showOutlineSheet = false }
         )
+    }
+}
+
+@Composable
+private fun LoadingOverlay(progress: Float?) {
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+        ) {
+            CircularProgressIndicator()
+            Text(
+                text = stringResource(id = R.string.loading_document),
+                modifier = Modifier.padding(top = 16.dp),
+                style = MaterialTheme.typography.titleMedium
+            )
+            progress?.let {
+                val clamped = it.coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = clamped,
+                    modifier = Modifier
+                        .padding(top = 24.dp)
+                        .fillMaxWidth()
+                )
+                Text(
+                    text = stringResource(
+                        id = R.string.loading_progress,
+                        (clamped * 100).roundToInt()
+                    ),
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
     }
 }
 
