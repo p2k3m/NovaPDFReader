@@ -141,7 +141,17 @@ android {
     }
 
     adbOptions {
-        installOptions.addAll(listOf("-t", "--no-streaming"))
+        installOptions.add("-t")
+
+        val enableNoStreaming = (
+            (findProperty("novapdf.enableNoStreamingInstallOption") as? String)
+                ?: System.getenv("NOVAPDF_ENABLE_NO_STREAMING")
+            )?.equals("true", ignoreCase = true) ?: false
+
+        if (enableNoStreaming) {
+            // Allow opting back into the no-streaming flag for environments that support it.
+            installOptions.add("--no-streaming")
+        }
     }
 
     lint {
