@@ -305,8 +305,8 @@ jobs:
 
             sleep 5
             device_timeout=$((device_timeout + 5))
-            if [ $device_timeout -ge 300 ]; then
-              echo "Emulator failed to appear in adb devices output within 5 minutes" >&2
+            if [ $device_timeout -ge 600 ]; then
+              echo "Emulator failed to appear in adb devices output within 10 minutes" >&2
               exit 1
             fi
           done
@@ -319,8 +319,8 @@ jobs:
               wait "$emulator_pid" || true
               exit 1
             fi
-            if [ $boot_timeout -ge 300 ]; then
-              echo "Emulator failed to boot within 5 minutes" >&2
+            if [ $boot_timeout -ge 600 ]; then
+              echo "Emulator failed to boot within 10 minutes" >&2
               exit 1
             fi
           done
