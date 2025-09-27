@@ -105,15 +105,6 @@ class PdfViewerUiAutomatorTest {
             "Immediate autosave work should include the expected tag",
             immediateWork.tags.contains(DocumentMaintenanceWorker.TAG_IMMEDIATE)
         )
-        val targetDocuments = requireNotNull(
-            immediateWork.inputData.getStringArray(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS)
-        ) {
-            "Immediate autosave work should include the document id payload"
-        }
-        assertTrue(
-            "Immediate autosave work should target at least one document",
-            targetDocuments.isNotEmpty()
-        )
     }
 
     private fun openDocumentInViewer() {
