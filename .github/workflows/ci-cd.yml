@@ -222,9 +222,27 @@ jobs:
             printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force
           fi
 
-          config_path="$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini"
-          if [ ! -f "$config_path" ]; then
-            echo "AVD configuration not found at $config_path" >&2
+          sdk_home="${ANDROID_SDK_HOME:-$HOME}"
+          config_candidates=()
+          if [ -n "${ANDROID_AVD_HOME:-}" ]; then
+            config_candidates+=("${ANDROID_AVD_HOME%/}/${{ matrix.avd }}.avd/config.ini")
+          fi
+          config_candidates+=("${sdk_home%/}/.android/avd/${{ matrix.avd }}.avd/config.ini")
+          if [ "$sdk_home" != "$HOME" ]; then
+            config_candidates+=("$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini")
+          fi
+
+          config_path=""
+          for candidate in "${config_candidates[@]}"; do
+            if [ -f "$candidate" ]; then
+              config_path="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$config_path" ]; then
+            echo "AVD configuration not found. Checked:" >&2
+            printf '  - %s\n' "${config_candidates[@]}" >&2
             exit 1
           fi
           if [ -n "${{ matrix.hardware_overrides }}" ]; then
