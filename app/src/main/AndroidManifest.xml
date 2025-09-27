@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <!-- MANAGE_EXTERNAL_STORAGE is declared so API 30+ users can opt in from the explicit
+    <!-- MANAGE_EXTERNAL_STORAGE is declared so API 30-33 users can opt in from the explicit
          settings screen launched by MainActivity. Keeping the permission behind that settings
          flow lets us honour scoped storage/Play policy requirements while still enabling the
          in-app PDF library browser. -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="33"
+        tools:targetApi="r" />
 
     <application
         android:name="com.novapdf.reader.NovaPdfApp"
