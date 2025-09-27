@@ -53,12 +53,17 @@ plugins {
     id("jacoco")
 }
 
+val resolvedApplicationId = (findProperty("NOVAPDF_APP_ID") as? String)
+    ?.takeIf { it.isNotBlank() }
+    ?: System.getenv("NOVAPDF_APP_ID")?.takeIf { it.isNotBlank() }
+    ?: "com.novapdf.reader"
+
 android {
     namespace = "com.novapdf.reader"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.novapdf.reader"
+        applicationId = resolvedApplicationId
         minSdk = 21
         targetSdk = 35
         versionCode = 1

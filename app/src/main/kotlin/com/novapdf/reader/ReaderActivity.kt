@@ -35,7 +35,7 @@ import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class ReaderActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
     private val preferences by lazy { getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE) }
