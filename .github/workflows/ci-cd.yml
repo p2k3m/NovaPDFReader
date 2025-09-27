@@ -208,7 +208,16 @@ jobs:
           RUNNER_OS: ${{ runner.os }}
         run: |
           set -euo pipefail
-          create_cmd=("$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force)
+
+          sdk_home="${ANDROID_SDK_HOME:-$HOME}"
+          if [ -n "${ANDROID_AVD_HOME:-}" ]; then
+            explicit_avd_dir="${ANDROID_AVD_HOME%/}/${{ matrix.avd }}.avd"
+          else
+            explicit_avd_dir="${sdk_home%/}/.android/avd/${{ matrix.avd }}.avd"
+          fi
+          mkdir -p "$(dirname "${explicit_avd_dir}")"
+
+          create_cmd=("$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force --path "${explicit_avd_dir}")
           if [ -n "${{ matrix.device_id }}" ]; then
             if "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" list device | grep -Fq "id: ${{ matrix.device_id }}"; then
               create_cmd+=(--device "${{ matrix.device_id }}")
@@ -219,11 +228,11 @@ jobs:
 
           if ! printf 'no\n' | "${create_cmd[@]}"; then
             echo "Falling back to default hardware profile for ${{ matrix.avd }}"
-            printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force
+            printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force --path "${explicit_avd_dir}"
           fi
 
-          sdk_home="${ANDROID_SDK_HOME:-$HOME}"
           config_candidates=()
+          config_candidates+=("${explicit_avd_dir%/}/config.ini")
           if [ -n "${ANDROID_AVD_HOME:-}" ]; then
             config_candidates+=("${ANDROID_AVD_HOME%/}/${{ matrix.avd }}.avd/config.ini")
           fi
