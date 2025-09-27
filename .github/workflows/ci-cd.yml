@@ -238,7 +238,7 @@ jobs:
           fi
 
           config_path=""
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             for candidate in "${config_candidates[@]}"; do
               if [ -f "$candidate" ]; then
                 config_path="$candidate"
@@ -252,7 +252,7 @@ jobs:
           done
 
           if [ -z "$config_path" ]; then
-            echo "AVD configuration not found after waiting 60 seconds. Checked:" >&2
+            echo "AVD configuration not found after waiting 180 seconds. Checked:" >&2
             printf '  - %s\n' "${config_candidates[@]}" >&2
             exit 1
           fi
