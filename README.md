@@ -19,6 +19,30 @@ Automated tests and screenshot generation rely on a tiny CC0 1.0 licensed docume
 
 See `docs/sample-pdf-license.md` for the redistribution notice covering the bundled document.
 
+## Running connected Android tests locally
+
+Instrumentation and macrobenchmark tests require an Android SDK installation that includes
+the `platform-tools`, `build-tools`, and emulator components for API level 35.
+
+1. Install the Android command-line tools and use `sdkmanager` to download the required
+   packages:
+
+   ```bash
+   sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-35" "emulator"
+   ```
+
+2. Point Gradle to your SDK installation by setting `ANDROID_SDK_ROOT`/`ANDROID_HOME` or by
+   adding an `sdk.dir=/absolute/path/to/sdk` entry to `local.properties`.
+
+3. Ensure that a device or emulator is available before invoking:
+
+   ```bash
+   ./gradlew connectedAndroidTest
+   ```
+
+When no device is present, the build gracefully skips connected tests while still verifying
+that the project compiles.
+
 ## Gradle wrapper bootstrap
 
 Binary assets such as the `gradle-wrapper.jar` are intentionally not stored in this repository. Instead, the wrapper JAR is stored as a Base64 text file at `gradle/wrapper/gradle-wrapper.jar.base64`. The included `gradlew` and `gradlew.bat` scripts automatically decode this archive to `gradle/wrapper/gradle-wrapper.jar` (Gradle 8.5) the first time you run them.

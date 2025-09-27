@@ -1,6 +1,9 @@
 import com.android.build.api.dsl.TestExtension
 import com.android.build.api.variant.TestAndroidComponentsExtension
 import org.gradle.api.GradleException
+import org.gradle.api.JavaVersion
+import java.io.File
+import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.test")
@@ -16,6 +19,15 @@ android {
         minSdk = 24
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
     }
 
     buildTypes {
@@ -47,6 +59,51 @@ dependencies {
 val testExtension = extensions.getByType<TestExtension>()
 val androidComponents = extensions.getByType<TestAndroidComponentsExtension>()
 
+val sdkDirectoryProvider = androidComponents.sdkComponents.sdkDirectory.map { it.asFile }
+
+val hasConnectedDeviceProvider = providers.provider {
+    val sdkDir = sdkDirectoryProvider.orNull ?: return@provider false
+    val platformTools = File(sdkDir, "platform-tools")
+    val adbExecutable = sequenceOf("adb", "adb.exe")
+        .map { candidate -> File(platformTools, candidate) }
+        .firstOrNull { it.exists() }
+
+    if (adbExecutable == null || !adbExecutable.exists()) {
+        logger.warn("ADB executable not found. Skipping baseline profile connected checks.")
+        return@provider false
+    }
+
+    runCatching {
+        val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
+            .redirectErrorStream(true)
+            .start()
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroy()
+            logger.warn("Timed out while checking for connected Android devices. Skipping baseline profile connected checks.")
+            false
+        } else {
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.drop(1).any { line ->
+                    val trimmed = line.trim()
+                    val isDeviceListing = '\t' in line
+                    isDeviceListing && trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
+                }
+            }
+        }
+    }.getOrElse { error ->
+        logger.warn("Unable to query connected Android devices via adb. Skipping baseline profile connected checks.", error)
+        false
+    }
+}
+
+val hasConnectedDevice by lazy { hasConnectedDeviceProvider.get() }
+
+androidComponents.beforeVariants { variantBuilder ->
+    if (!hasConnectedDevice) {
+        variantBuilder.enable = false
+    }
+}
+
 val isCiEnvironment = providers.environmentVariable("CI")
     .map { it.equals("true", ignoreCase = true) }
     .orElse(false)
@@ -77,7 +134,11 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
         val emulatorCheckBinary = emulatorDirectory.resolve(executableName)
 
         if (!emulatorCheckBinary.exists()) {
-            throw GradleException("Unable to locate \"$executableName\" in the Android SDK. Ensure the emulator package is installed.")
+            logger.warn(
+                "Emulator acceleration verification skipped because $executableName is " +
+                    "unavailable. Install the Android Emulator package to enable the check."
+            )
+            return@doLast
         }
 
         val result = project.exec {
@@ -97,6 +158,16 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
 tasks.configureEach {
     if (name.endsWith("AndroidTest")) {
         dependsOn(verifyEmulatorAcceleration)
+    }
+}
+
+tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
+    onlyIf {
+        val hasDevice = hasConnectedDevice
+        if (!hasDevice) {
+            logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+        }
+        hasDevice
     }
 }
 
