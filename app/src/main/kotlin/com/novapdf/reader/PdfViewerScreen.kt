@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.matchParentSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,26 +28,27 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.Brightness4
 import androidx.compose.material.icons.outlined.Brightness7
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -58,6 +62,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -67,6 +72,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.model.AnnotationCommand
@@ -208,16 +214,16 @@ fun PdfViewerScreen(
                     resultsCount = state.searchResults.sumOf { it.matches.size }
                 )
 
-            AdaptiveFlowStatusRow(state) {
-                val summary = state.echoSummary()
-                if (summary != null) {
-                    echoModeController.speakSummary(summary) {
+                AdaptiveFlowStatusRow(state) {
+                    val summary = state.echoSummary()
+                    if (summary != null) {
+                        echoModeController.speakSummary(summary) {
+                            fallbackHaptics()
+                        }
+                    } else {
                         fallbackHaptics()
                     }
-                } else {
-                    fallbackHaptics()
                 }
-            }
 
                 AccessibilitySettings(
                     dynamicColorEnabled = state.dynamicColorEnabled,
@@ -265,7 +271,7 @@ fun PdfViewerScreen(
 private fun LoadingOverlay(progress: Float?) {
     Box(
         modifier = Modifier
-            .matchParentSize()
+            .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
         contentAlignment = Alignment.Center
     ) {
@@ -297,6 +303,206 @@ private fun LoadingOverlay(progress: Float?) {
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    resultsCount: Int
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(text = stringResource(id = R.string.search_hint)) },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = stringResource(id = R.string.search_hint)
+                )
+            },
+            singleLine = true
+        )
+        if (query.isNotBlank()) {
+            Text(
+                text = stringResource(id = R.string.search_results_count, resultsCount),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveFlowStatusRow(
+    state: PdfViewerUiState,
+    onPlaySummary: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium
+            )
+            .padding(16.dp)
+    ) {
+        Text(
+            text = stringResource(id = R.string.adaptive_flow_summary_title),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        val isActive = state.readingSpeed > 0f
+        val description = if (isActive) {
+            stringResource(
+                id = R.string.adaptive_flow_summary_description,
+                state.readingSpeed,
+                state.swipeSensitivity
+            )
+        } else {
+            stringResource(id = R.string.adaptive_flow_summary_unavailable)
+        }
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(onClick = onPlaySummary, enabled = isActive) {
+            Icon(
+                imageVector = Icons.Outlined.Brightness7,
+                contentDescription = null,
+                tint = Color.Unspecified
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = stringResource(id = R.string.adaptive_flow_summary_button))
+        }
+    }
+}
+
+@Composable
+private fun AccessibilitySettings(
+    dynamicColorEnabled: Boolean,
+    highContrastEnabled: Boolean,
+    dynamicColorSupported: Boolean,
+    onDynamicColorChanged: (Boolean) -> Unit,
+    onHighContrastChanged: (Boolean) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 16.dp)
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium
+            )
+            .padding(16.dp)
+    ) {
+        Text(
+            text = stringResource(id = R.string.accessibility_settings_title),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(id = R.string.dynamic_color_label),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = stringResource(id = R.string.dynamic_color_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!dynamicColorSupported) {
+                    Text(
+                        text = stringResource(id = R.string.dynamic_color_unsupported),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Switch(
+                checked = dynamicColorEnabled && dynamicColorSupported,
+                onCheckedChange = {
+                    if (dynamicColorSupported) {
+                        onDynamicColorChanged(it)
+                    }
+                },
+                enabled = dynamicColorSupported
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(id = R.string.high_contrast_label),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = stringResource(id = R.string.high_contrast_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Switch(
+                checked = highContrastEnabled && dynamicColorEnabled,
+                onCheckedChange = { onHighContrastChanged(it) },
+                enabled = dynamicColorEnabled
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(onOpenDocument: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp)
+            .padding(top = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.FileOpen,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.height(64.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = stringResource(id = R.string.empty_state_message),
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onOpenDocument) {
+            Text(text = stringResource(id = R.string.empty_state_button))
         }
     }
 }
@@ -584,12 +790,12 @@ private fun PdfPageItem(
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = null,
-                    modifier = Modifier.matchParentSize()
+                    modifier = Modifier.fillMaxSize()
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .matchParentSize()
+                        .fillMaxSize()
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 )
                 if (isLoading) {
@@ -598,12 +804,12 @@ private fun PdfPageItem(
             }
 
             SearchHighlightOverlay(
-                modifier = Modifier.matchParentSize(),
+                modifier = Modifier.fillMaxSize(),
                 matches = state.searchResults.firstOrNull { it.pageIndex == pageIndex }?.matches.orEmpty()
             )
 
             AnnotationOverlay(
-                modifier = Modifier.matchParentSize(),
+                modifier = Modifier.fillMaxSize(),
                 pageIndex = pageIndex,
                 annotations = state.activeAnnotations.filterIsInstance<AnnotationCommand.Stroke>()
                     .filter { it.pageIndex == pageIndex },
