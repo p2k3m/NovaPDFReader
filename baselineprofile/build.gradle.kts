@@ -47,6 +47,10 @@ dependencies {
 val testExtension = extensions.getByType<TestExtension>()
 val androidComponents = extensions.getByType<TestAndroidComponentsExtension>()
 
+val isCiEnvironment = providers.environmentVariable("CI")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
+
 val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     group = "verification"
     description = "Fails fast when required emulator acceleration is unavailable."
@@ -56,6 +60,14 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     }
 
     doLast {
+        if (isCiEnvironment.get()) {
+            logger.warn(
+                "Skipping emulator acceleration verification because the task is running " +
+                    "in a CI environment without hardware acceleration access."
+            )
+            return@doLast
+        }
+
         val emulatorDirectory = emulatorDirectoryProvider.get().asFile
         val executableName = if (System.getProperty("os.name").startsWith("Windows")) {
             "emulator-check.exe"
