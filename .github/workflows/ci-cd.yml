@@ -217,9 +217,9 @@ jobs:
             fi
           fi
 
-          if ! "${create_cmd[@]}"; then
+          if ! printf 'no\n' | "${create_cmd[@]}"; then
             echo "Falling back to default hardware profile for ${{ matrix.avd }}"
-            "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force
+            printf 'no\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force
           fi
 
           config_path="$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini"
