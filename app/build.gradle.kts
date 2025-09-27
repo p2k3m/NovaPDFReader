@@ -137,6 +137,11 @@ android {
             it.useJUnitPlatform()
         }
         animationsDisabled = false
+        execution = "ANDROIDX_TEST_ORCHESTRATOR"
+    }
+
+    adbOptions {
+        installOptions.addAll(listOf("-t", "--no-streaming"))
     }
 
     lint {
@@ -251,6 +256,7 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestUtil("androidx.test:orchestrator:1.4.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     baselineProfile(project(":baselineprofile"))
