@@ -232,6 +232,11 @@ jobs:
             config_candidates+=("$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini")
           fi
 
+          avd_path=$("$ANDROID_HOME"/cmdline-tools/latest/bin/avdmanager list avd | awk -v avd="${{ matrix.avd }}" 'BEGIN{RS="";FS="\n"} $0 ~ "Name: " avd {for (i = 1; i <= NF; ++i) if ($i ~ /^Path: /) {sub(/^Path: /, "", $i); print $i; exit}}')
+          if [ -n "$avd_path" ]; then
+            config_candidates+=("${avd_path%/}/config.ini")
+          fi
+
           config_path=""
           for attempt in $(seq 1 30); do
             for candidate in "${config_candidates[@]}"; do
