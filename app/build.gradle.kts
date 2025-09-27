@@ -149,12 +149,10 @@ android {
             (findProperty("novapdf.enableNoStreamingInstallOption") as? String)
                 ?: System.getenv("NOVAPDF_ENABLE_NO_STREAMING")
         )
-        val enableNoStreaming = explicitNoStreaming
-            ?: parseOptionalBoolean(System.getenv("CI"))
-            ?: false
+        val enableNoStreaming = explicitNoStreaming ?: false
 
         if (enableNoStreaming) {
-            // Disable streaming installs on CI by default because some hosted emulators
+            // Allow opting into legacy installs because some hosted emulators
             // intermittently fail session commits unless the legacy path is used.
             installOptions.add("--no-streaming")
         }
