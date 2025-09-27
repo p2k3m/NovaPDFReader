@@ -289,6 +289,9 @@ jobs:
           emulator_pid=$!
 
           device_timeout=0
+          # Bootstrapping a cold AVD without hardware acceleration can take several minutes
+          # before the virtual device appears to adb. Give the emulator extra time before
+          # bailing out to reduce spurious CI flakes.
           while true; do
             if ! kill -0 "$emulator_pid" 2>/dev/null; then
               echo "Emulator process exited before it became available to ADB" >&2
@@ -302,8 +305,8 @@ jobs:
 
             sleep 5
             device_timeout=$((device_timeout + 5))
-            if [ $device_timeout -ge 120 ]; then
-              echo "Emulator failed to appear in adb devices output within 2 minutes" >&2
+            if [ $device_timeout -ge 300 ]; then
+              echo "Emulator failed to appear in adb devices output within 5 minutes" >&2
               exit 1
             fi
           done
