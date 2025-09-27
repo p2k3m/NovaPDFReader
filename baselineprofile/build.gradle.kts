@@ -45,6 +45,33 @@ baselineProfile {
     useConnectedDevices = true
 }
 
+fun parseOptionalBoolean(raw: String?): Boolean? {
+    val normalized = raw?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+    return when (normalized) {
+        "true", "1", "yes", "y" -> true
+        "false", "0", "no", "n" -> false
+        else -> null
+    }
+}
+
+val requireConnectedDevice = parseOptionalBoolean(
+    (findProperty("novapdf.requireConnectedDevice") as? String)
+        ?: providers.gradleProperty("novapdf.requireConnectedDevice").orNull
+        ?: System.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
+)
+
+val allowCiConnectedTests = parseOptionalBoolean(
+    (findProperty("novapdf.allowCiConnectedTests") as? String)
+        ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
+        ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
+)
+
+val isCiEnvironment = providers.environmentVariable("CI")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
+
+val skipConnectedTestsOnCi = isCiEnvironment.get() && allowCiConnectedTests != true && requireConnectedDevice != true
+
 dependencies {
     implementation(project(":app"))
     implementation("androidx.test.ext:junit:1.1.5")
@@ -98,15 +125,40 @@ val hasConnectedDeviceProvider = providers.provider {
 
 val hasConnectedDevice by lazy { hasConnectedDeviceProvider.get() }
 
-androidComponents.beforeVariants { variantBuilder ->
-    if (!hasConnectedDevice) {
+if (skipConnectedTestsOnCi) {
+    androidComponents.beforeVariants { variantBuilder ->
         variantBuilder.enable = false
     }
-}
 
-val isCiEnvironment = providers.environmentVariable("CI")
-    .map { it.equals("true", ignoreCase = true) }
-    .orElse(false)
+    tasks.matching { task ->
+        (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
+            task.name.startsWith("checkTestedAppObfuscation")
+    }.configureEach {
+        onlyIf {
+            logger.warn(
+                "Skipping task $name because connected Android tests are disabled on CI. " +
+                    "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
+            )
+            false
+        }
+    }
+} else {
+    androidComponents.beforeVariants { variantBuilder ->
+        if (!hasConnectedDevice) {
+            variantBuilder.enable = false
+        }
+    }
+
+    tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
+        onlyIf {
+            val hasDevice = hasConnectedDevice
+            if (!hasDevice) {
+                logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+            }
+            hasDevice
+        }
+    }
+}
 
 val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     group = "verification"
@@ -158,16 +210,6 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
 tasks.configureEach {
     if (name.endsWith("AndroidTest")) {
         dependsOn(verifyEmulatorAcceleration)
-    }
-}
-
-tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
-    onlyIf {
-        val hasDevice = hasConnectedDevice
-        if (!hasDevice) {
-            logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
-        }
-        hasDevice
     }
 }
 
