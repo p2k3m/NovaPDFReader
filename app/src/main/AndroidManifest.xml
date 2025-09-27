@@ -27,16 +27,17 @@
             android:exported="true"
             android:launchMode="singleTask" />
 
-        <activity-alias
+        <activity
             android:name=".MainActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
-            android:targetActivity="com.novapdf.reader.ReaderActivity">
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity-alias>
+        </activity>
     </application>
 
 </manifest>
