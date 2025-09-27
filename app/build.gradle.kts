@@ -280,7 +280,10 @@ if (requireConnectedDevice != true) {
                                 process.inputStream.bufferedReader().useLines { lines ->
                                     lines.drop(1).any { line ->
                                         val trimmed = line.trim()
-                                        trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
+                                        val isDeviceListing = '\t' in line
+                                        isDeviceListing &&
+                                            trimmed.isNotEmpty() &&
+                                            !trimmed.endsWith("offline", ignoreCase = true)
                                     }
                                 }
                             }
@@ -303,6 +306,21 @@ if (requireConnectedDevice != true) {
                     val hasDevice = hasConnectedDevice
                     if (!hasDevice) {
                         logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                    }
+                    hasDevice
+                }
+            }
+
+            tasks.matching { task ->
+                task.name.contains("Benchmark") &&
+                    (task.name.startsWith("assemble", ignoreCase = true) ||
+                        task.name.startsWith("bundle", ignoreCase = true) ||
+                        task.name.startsWith("package", ignoreCase = true))
+            }.configureEach {
+                onlyIf {
+                    val hasDevice = hasConnectedDevice
+                    if (!hasDevice) {
+                        logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
                     }
                     hasDevice
                 }
