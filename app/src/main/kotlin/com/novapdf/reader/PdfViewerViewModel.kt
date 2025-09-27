@@ -3,7 +3,6 @@ package com.novapdf.reader
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.graphics.RectF
 import android.net.Uri
 import android.util.Size
 import android.content.res.Configuration
@@ -20,8 +19,6 @@ import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
-import com.novapdf.reader.search.TextRunSnapshot
-import com.novapdf.reader.search.collectMatchesFromRuns
 import com.novapdf.reader.search.detectTextRegions
 import com.novapdf.reader.search.normalizeSearchQuery
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +33,8 @@ import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
+private const val SEARCH_RENDER_MIN_WIDTH = 720
+private const val SEARCH_RENDER_MAX_WIDTH = 1600
 
 data class PdfViewerUiState(
     val documentId: String? = null,
@@ -141,7 +140,6 @@ open class PdfViewerViewModel(
             }
             annotationRepository.clearInMemory(session.documentId)
             updateUiState { it.copy(loadingProgress = 0.35f) }
-            lastTileSpec = null
             adaptiveFlowManager.start()
             adaptiveFlowManager.trackPageChange(0, session.pageCount)
             preloadInitialPage(session)
@@ -309,127 +307,24 @@ open class PdfViewerViewModel(
         val session = pdfRepository.session.value ?: return emptyList()
         val normalizedQuery = normalizeSearchQuery(query)
         if (normalizedQuery.isEmpty()) return emptyList()
-        val renderer = session.renderer
-        val page = try {
-            renderer.openPage(pageIndex)
-        } catch (_: Exception) {
-            return emptyList()
-        }
+        val pageSize = pdfRepository.getPageSize(pageIndex) ?: return emptyList()
+        val targetWidth = pageSize.width.coerceIn(SEARCH_RENDER_MIN_WIDTH, SEARCH_RENDER_MAX_WIDTH)
+        val bitmap = pdfRepository.renderPage(pageIndex, targetWidth) ?: return emptyList()
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                collectMatchesFromRuns(
-                    runs = extractTextRuns(page),
-                    normalizedQuery = normalizedQuery,
-                    pageWidth = page.width,
-                    pageHeight = page.height
-                )
-            } else {
-                approximateMatchesFromBitmap(page, normalizedQuery)
-            }
+            approximateMatchesFromBitmap(bitmap)
         } finally {
-            page.close()
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
         }
     }
 
-    internal open fun extractTextRuns(page: PdfRenderer.Page): List<TextRunSnapshot> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return emptyList()
-        }
-        val runs = mutableListOf<TextRunSnapshot>()
-        val textStructure = try {
-            page.javaClass.getMethod("getText").invoke(page)
-        } catch (_: ReflectiveOperationException) {
-            return emptyList()
-        } catch (_: Throwable) {
-            return emptyList()
-        }
-
-        fun collect(element: Any?) {
-            when (element) {
-                null -> return
-                is Collection<*> -> {
-                    element.forEach { collect(it) }
-                    return
-                }
-                is Array<*> -> {
-                    element.forEach { collect(it) }
-                    return
-                }
-            }
-            val glyphRuns = when (val glyphs = tryInvoke(element, "getGlyphRuns")) {
-                is Collection<*> -> glyphs
-                is Array<*> -> glyphs.asList()
-                else -> null
-            }
-            if (!glyphRuns.isNullOrEmpty()) {
-                glyphRuns.forEach { collect(it) }
-                return
-            }
-            val text = (tryInvoke(element, "getText") as? CharSequence)
-                ?.toString()
-                ?.takeIf { it.isNotBlank() }
-                ?: return
-            val bounds = extractBounds(element)
-            if (bounds.isNotEmpty()) {
-                runs += TextRunSnapshot(text, bounds)
-            }
-        }
-
-        collect(textStructure)
-        return runs
-    }
-
-    private fun extractBounds(source: Any?): List<RectF> {
-        val direct = convertToRectList(source)
-        if (direct.isNotEmpty()) return direct
-        val bounds = tryInvoke(source, "getBounds") ?: return emptyList()
-        return convertToRectList(bounds)
-    }
-
-    private fun convertToRectList(candidate: Any?): List<RectF> {
-        return when (candidate) {
-            null -> emptyList()
-            is RectF -> listOf(RectF(candidate))
-            is Rect -> listOf(RectF(candidate))
-            is Collection<*> -> candidate.flatMap { convertToRectList(it) }
-            is Array<*> -> candidate.flatMap { convertToRectList(it) }
-            else -> emptyList()
-        }.filter { it.width() > 0f && it.height() > 0f }
-    }
-
-    private fun tryInvoke(target: Any?, methodName: String): Any? {
-        if (target == null) return null
-        return try {
-            target.javaClass.getMethod(methodName).invoke(target)
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    private fun approximateMatchesFromBitmap(
-        page: PdfRenderer.Page,
-        normalizedQuery: String
-    ): List<SearchMatch> {
-        val width = page.width
-        val height = page.height
-        if (width <= 0 || height <= 0) return emptyList()
-        val bitmap = try {
-            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        } catch (_: OutOfMemoryError) {
-            return emptyList()
-        }
-        return try {
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            val regions = detectTextRegions(bitmap)
-            if (regions.isEmpty()) {
-                emptyList()
-            } else {
-                val tokenCount = normalizedQuery.split(' ').count { it.isNotBlank() }.coerceAtLeast(1)
-                val limitedRegions = regions.take(tokenCount)
-                if (limitedRegions.isEmpty()) emptyList() else listOf(SearchMatch(0, limitedRegions))
-            }
-        } finally {
-            bitmap.recycle()
+    private fun approximateMatchesFromBitmap(bitmap: Bitmap): List<SearchMatch> {
+        val regions = detectTextRegions(bitmap)
+        return if (regions.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(SearchMatch(indexInPage = 0, boundingBoxes = regions))
         }
     }
 
