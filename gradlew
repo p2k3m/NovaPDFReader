@@ -326,6 +326,72 @@ PY
     export PATH="$install_dir/bin:$PATH"
 }
 
+setup_proxy_trust_store() {
+    if [ -z "$CODEX_PROXY_CERT" ] || [ ! -f "$CODEX_PROXY_CERT" ]; then
+        return 0
+    fi
+
+    if [ -z "$JAVA_HOME" ]; then
+        return 0
+    fi
+
+    cacerts_path="$JAVA_HOME/lib/security/cacerts"
+    if [ ! -f "$cacerts_path" ]; then
+        return 0
+    fi
+
+    trust_store_dir="${GRADLE_USER_HOME:-$HOME/.gradle}/certs"
+    trust_store="$trust_store_dir/nova-cacerts.jks"
+
+    if [ ! -d "$trust_store_dir" ]; then
+        if ! mkdir -p "$trust_store_dir"; then
+            warn "Could not create directory for custom trust store at $trust_store_dir"
+            return 0
+        fi
+    fi
+
+    refresh_store=false
+    if [ ! -f "$trust_store" ]; then
+        refresh_store=true
+    elif [ "$CODEX_PROXY_CERT" -nt "$trust_store" ]; then
+        refresh_store=true
+    fi
+
+    if [ "$refresh_store" = true ]; then
+        tmp_store="$trust_store.tmp"
+        if ! cp "$cacerts_path" "$tmp_store"; then
+            warn "Failed to copy default cacerts from $cacerts_path"
+            rm -f "$tmp_store"
+            return 0
+        fi
+
+        if ! "$JAVA_HOME/bin/keytool" -importcert -noprompt -trustcacerts \
+            -alias codex-proxy-cert \
+            -file "$CODEX_PROXY_CERT" \
+            -keystore "$tmp_store" \
+            -storepass changeit >/dev/null 2>&1; then
+            warn "Failed to import proxy certificate from $CODEX_PROXY_CERT into custom trust store"
+            rm -f "$tmp_store"
+            return 0
+        fi
+
+        if ! mv "$tmp_store" "$trust_store"; then
+            warn "Failed to finalize custom trust store at $trust_store"
+            rm -f "$tmp_store"
+            return 0
+        fi
+    fi
+
+    export NOVAPDF_CUSTOM_TRUST_STORE="$trust_store"
+    export NOVAPDF_CUSTOM_TRUST_STORE_PASSWORD="changeit"
+
+    GRADLE_OPTS="${GRADLE_OPTS:-} -Djavax.net.ssl.trustStore=$NOVAPDF_CUSTOM_TRUST_STORE -Djavax.net.ssl.trustStorePassword=$NOVAPDF_CUSTOM_TRUST_STORE_PASSWORD"
+    JAVA_OPTS="${JAVA_OPTS:-} -Djavax.net.ssl.trustStore=$NOVAPDF_CUSTOM_TRUST_STORE -Djavax.net.ssl.trustStorePassword=$NOVAPDF_CUSTOM_TRUST_STORE_PASSWORD"
+    export GRADLE_OPTS
+    export JAVA_OPTS
+}
+
+
 prepare_gradle_execution() {
     properties_file="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
     if [ ! -f "$properties_file" ]; then
@@ -342,6 +408,7 @@ prepare_gradle_execution() {
     distribution_path=$(sed -n 's/^distributionPath=//p' "$properties_file" | tail -n 1 | tr -d '\r')
     zip_store_base=$(sed -n 's/^zipStoreBase=//p' "$properties_file" | tail -n 1 | tr -d '\r')
     zip_store_path=$(sed -n 's/^zipStorePath=//p' "$properties_file" | tail -n 1 | tr -d '\r')
+    distribution_sha=$(sed -n 's/^distributionSha256Sum=//p' "$properties_file" | tail -n 1 | tr -d '\r')
 
     distribution_base_dir=$(resolve_gradle_base "$distribution_base")
     zip_store_base_dir=$(resolve_gradle_base "$zip_store_base")
@@ -391,6 +458,22 @@ prepare_gradle_execution() {
         if ! mv "$tmp_zip" "$distribution_zip"; then
             rm -f "$tmp_zip"
             die "ERROR: Could not save downloaded Gradle distribution to $distribution_zip"
+        fi
+    fi
+
+    if [ -n "$distribution_sha" ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual_sha=$(sha256sum "$distribution_zip" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            actual_sha=$(shasum -a 256 "$distribution_zip" | awk '{print $1}')
+        else
+            warn "Could not verify Gradle distribution checksum: no sha256sum or shasum found"
+            actual_sha=$distribution_sha
+        fi
+
+        if [ "${actual_sha:-}" != "$distribution_sha" ]; then
+            rm -f "$distribution_zip"
+            die "ERROR: Gradle distribution checksum mismatch for $distribution_zip"
         fi
     fi
 
@@ -445,6 +528,15 @@ esac
 wrapper_jar="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
 restore_gradle_wrapper_from_base64 "$wrapper_jar"
 ensure_gradle_toolchain_jdk
+setup_proxy_trust_store
+
+if [ "${NOVAPDF_FORCE_WRAPPER_JAR:-}" != "true" ]; then
+    gradle_cmd=$(prepare_gradle_execution) || exit 1
+    if [ -n "$gradle_cmd" ]; then
+        exec "$gradle_cmd" "$@"
+    fi
+fi
+
 if [ ! -f "$wrapper_jar" ]; then
     gradle_cmd=$(prepare_gradle_execution) || exit 1
 fi
