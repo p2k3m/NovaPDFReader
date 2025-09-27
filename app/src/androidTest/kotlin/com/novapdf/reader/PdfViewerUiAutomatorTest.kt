@@ -71,7 +71,10 @@ class PdfViewerUiAutomatorTest {
             Until.hasObject(By.textContains("Adaptive Flow Active")),
             UI_WAIT_TIMEOUT
         )
-        assertTrue(adaptiveFlowActive, "Adaptive Flow status chip should report Active")
+        assertTrue(
+            "Adaptive Flow status chip should report Active",
+            adaptiveFlowActive
+        )
 
         activityRule.scenario.onActivity { activity ->
             val state = activity.currentDocumentStateForTest()
@@ -84,7 +87,7 @@ class PdfViewerUiAutomatorTest {
         openDocumentInViewer()
 
         val saveButton = device.wait(Until.findObject(By.desc("Save annotations")), UI_WAIT_TIMEOUT)
-        assertNotNull(saveButton, "Save annotations action should be visible")
+        assertNotNull("Save annotations action should be visible", saveButton)
         saveButton.click()
         device.waitForIdle()
 
@@ -93,16 +96,24 @@ class PdfViewerUiAutomatorTest {
                 .getWorkInfosForUniqueWork(DocumentMaintenanceWorker.IMMEDIATE_WORK_NAME)
                 .get(5, TimeUnit.SECONDS)
         }
-        assertTrue(workInfos.isNotEmpty(), "Immediate autosave work should be enqueued")
+        assertTrue(
+            "Immediate autosave work should be enqueued",
+            workInfos.isNotEmpty()
+        )
         val immediateWork = workInfos.first()
         assertTrue(
-            immediateWork.tags.contains(DocumentMaintenanceWorker.TAG_IMMEDIATE),
-            "Immediate autosave work should include the expected tag"
+            "Immediate autosave work should include the expected tag",
+            immediateWork.tags.contains(DocumentMaintenanceWorker.TAG_IMMEDIATE)
         )
-        val targetDocuments = assertNotNull(
+        val targetDocuments = requireNotNull(
             immediateWork.inputData.getStringArray(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS)
+        ) {
+            "Immediate autosave work should include the document id payload"
+        }
+        assertTrue(
+            "Immediate autosave work should target at least one document",
+            targetDocuments.isNotEmpty()
         )
-        assertTrue(targetDocuments.isNotEmpty())
     }
 
     private fun openDocumentInViewer() {
@@ -113,7 +124,10 @@ class PdfViewerUiAutomatorTest {
             Until.hasObject(By.textContains("Adaptive Flow")),
             UI_WAIT_TIMEOUT
         )
-        assertTrue(statusVisible, "Adaptive Flow status chip should appear after opening a document")
+        assertTrue(
+            "Adaptive Flow status chip should appear after opening a document",
+            statusVisible
+        )
         device.waitForIdle()
     }
 
