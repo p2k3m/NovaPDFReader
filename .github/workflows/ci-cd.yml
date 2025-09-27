@@ -210,7 +210,11 @@ jobs:
           set -euo pipefail
           create_cmd=("$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force)
           if [ -n "${{ matrix.device_id }}" ]; then
-            create_cmd+=(--device "${{ matrix.device_id }}")
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" list device | grep -Fq "id: ${{ matrix.device_id }}"; then
+              create_cmd+=(--device "${{ matrix.device_id }}")
+            else
+              echo "Requested device id ${{ matrix.device_id }} not found; proceeding without explicit hardware profile"
+            fi
           fi
 
           if ! "${create_cmd[@]}"; then
@@ -219,6 +223,10 @@ jobs:
           fi
 
           config_path="$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini"
+          if [ ! -f "$config_path" ]; then
+            echo "AVD configuration not found at $config_path" >&2
+            exit 1
+          fi
           if [ -n "${{ matrix.hardware_overrides }}" ]; then
             echo "Applying hardware overrides for ${{ matrix.device_label }}"
             printf '%s\n' "${{ matrix.hardware_overrides }}" >> "$config_path"
