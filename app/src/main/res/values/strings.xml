@@ -23,6 +23,8 @@
     <string name="outline_page_label">Page %1$d</string>
     <string name="export_document">Export or share</string>
     <string name="export_failed">Unable to export the document. Try again.</string>
+    <string name="loading_document">Loading your document…</string>
+    <string name="loading_progress">%1$d%% processed</string>
     <string name="legacy_select_document">Open a PDF to start reading.</string>
     <string name="legacy_error_loading">Something went wrong while opening the PDF.</string>
     <string name="legacy_retry">Try again</string>

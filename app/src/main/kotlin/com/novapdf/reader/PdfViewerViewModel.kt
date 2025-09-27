@@ -27,11 +27,13 @@ import com.novapdf.reader.search.detectTextRegions
 import com.novapdf.reader.search.normalizeSearchQuery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
@@ -41,6 +43,7 @@ data class PdfViewerUiState(
     val pageCount: Int = 0,
     val currentPage: Int = 0,
     val isLoading: Boolean = false,
+    val loadingProgress: Float? = null,
     val errorMessage: String? = null,
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
@@ -128,26 +131,68 @@ open class PdfViewerViewModel(
     }
 
     fun openDocument(uri: Uri) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            val session = pdfRepository.open(uri)
+        viewModelScope.launch(Dispatchers.IO) {
+            updateUiState { current ->
+                current.copy(isLoading = true, loadingProgress = 0f, errorMessage = null)
+            }
+            val openResult = runCatching { pdfRepository.open(uri) }
+            val session = openResult.getOrNull()
             if (session == null) {
-                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = "Unable to open document")
+                val throwable = openResult.exceptionOrNull()
+                if (throwable != null) {
+                    handleDocumentError(throwable)
+                } else {
+                    updateUiState { current ->
+                        current.copy(isLoading = false, loadingProgress = null, errorMessage = "Unable to open document")
+                    }
+                }
                 return@launch
             }
             annotationRepository.clearInMemory(session.documentId)
+            updateUiState { it.copy(loadingProgress = 0.35f) }
             lastTileSpec = null
             adaptiveFlowManager.start()
             adaptiveFlowManager.trackPageChange(0, session.pageCount)
-            _uiState.value = _uiState.value.copy(
+            preloadInitialPage(session)
+            val bookmarks = bookmarkManager.bookmarks(session.documentId)
+            updateUiState { current ->
+                current.copy(
+                    isLoading = false,
+                    loadingProgress = null,
+                    documentId = session.documentId,
+                    pageCount = session.pageCount,
+                    currentPage = 0,
+                    errorMessage = null,
+                    activeAnnotations = emptyList(),
+                    bookmarks = bookmarks,
+                    outline = pdfRepository.outline.value
+                )
+            }
+        }
+    }
+
+    private suspend fun preloadInitialPage(session: PdfDocumentSession) {
+        updateUiState { it.copy(loadingProgress = 0.55f) }
+        val firstPageSize = runCatching { pdfRepository.getPageSize(0) }.getOrNull()
+        if (firstPageSize != null) {
+            val rect = Rect(0, 0, firstPageSize.width, firstPageSize.height)
+            runCatching { pdfRepository.renderTile(0, rect, 1f) }
+        }
+        updateUiState { it.copy(loadingProgress = 0.85f) }
+    }
+
+    private suspend fun updateUiState(transform: (PdfViewerUiState) -> PdfViewerUiState) {
+        withContext(Dispatchers.Main) {
+            _uiState.value = transform(_uiState.value)
+        }
+    }
+
+    private suspend fun handleDocumentError(throwable: Throwable) {
+        updateUiState { current ->
+            current.copy(
                 isLoading = false,
-                documentId = session.documentId,
-                pageCount = session.pageCount,
-                currentPage = 0,
-                errorMessage = null,
-                activeAnnotations = emptyList(),
-                bookmarks = bookmarkManager.bookmarks(session.documentId),
-                outline = pdfRepository.outline.value
+                loadingProgress = null,
+                errorMessage = throwable.message ?: "Unable to open document"
             )
         }
     }
@@ -256,12 +301,13 @@ open class PdfViewerViewModel(
             val session = pdfRepository.session.value ?: return@launch
             val results = mutableListOf<SearchResult>()
             for (pageIndex in 0 until session.pageCount) {
+                ensureActive()
                 val matches = performSearch(pageIndex, query)
                 if (matches.isNotEmpty()) {
                     results += SearchResult(pageIndex, matches)
                 }
             }
-            _uiState.value = _uiState.value.copy(searchResults = results)
+            updateUiState { it.copy(searchResults = results) }
         }
     }
 
