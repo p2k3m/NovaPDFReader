@@ -199,6 +199,8 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
+      - name: Add Android platform tools to PATH
+        run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --info
       - name: Start emulator
@@ -209,13 +211,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          sdk_home="${ANDROID_SDK_HOME:-$HOME}"
           if [ -n "${ANDROID_AVD_HOME:-}" ]; then
-            explicit_avd_dir="${ANDROID_AVD_HOME%/}/${{ matrix.avd }}.avd"
+            avd_root="${ANDROID_AVD_HOME%/}"
+          elif [ -n "${ANDROID_SDK_HOME:-}" ]; then
+            avd_root="${ANDROID_SDK_HOME%/}/avd"
           else
-            explicit_avd_dir="${sdk_home%/}/.android/avd/${{ matrix.avd }}.avd"
+            avd_root="${HOME%/}/.android/avd"
           fi
-          mkdir -p "$(dirname "${explicit_avd_dir}")"
+
+          mkdir -p "$avd_root"
+          export ANDROID_AVD_HOME="$avd_root"
+          explicit_avd_dir="${avd_root}/${{ matrix.avd }}.avd"
 
           create_cmd=("$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ${{ matrix.avd }} -k "system-images;android-${API_LEVEL};${{ matrix.tag }};${ABI}" --force --path "${explicit_avd_dir}")
           if [ -n "${{ matrix.device_id }}" ]; then
@@ -236,10 +242,10 @@ jobs:
           if [ -n "${ANDROID_AVD_HOME:-}" ]; then
             config_candidates+=("${ANDROID_AVD_HOME%/}/${{ matrix.avd }}.avd/config.ini")
           fi
-          config_candidates+=("${sdk_home%/}/.android/avd/${{ matrix.avd }}.avd/config.ini")
-          if [ "$sdk_home" != "$HOME" ]; then
-            config_candidates+=("$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini")
+          if [ -n "${ANDROID_SDK_HOME:-}" ]; then
+            config_candidates+=("${ANDROID_SDK_HOME%/}/avd/${{ matrix.avd }}.avd/config.ini")
           fi
+          config_candidates+=("$HOME/.android/avd/${{ matrix.avd }}.avd/config.ini")
 
           avd_path=$("$ANDROID_HOME"/cmdline-tools/latest/bin/avdmanager list avd | awk -v avd="${{ matrix.avd }}" 'BEGIN{RS="";FS="\n"} $0 ~ "Name: " avd {for (i = 1; i <= NF; ++i) if ($i ~ /^Path: /) {sub(/^Path: /, "", $i); print $i; exit}}')
           if [ -n "$avd_path" ]; then
