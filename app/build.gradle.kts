@@ -1,9 +1,11 @@
 
 import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
+import org.gradle.api.execution.TaskExecutionGraph
 import org.gradle.api.tasks.TaskContainer
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.testing.Test
@@ -390,15 +392,19 @@ fun configureReleaseSigning() {
 if (needsReleaseSigning) {
     configureReleaseSigning()
 } else {
-    gradle.taskGraph.whenReady { taskGraph ->
-        if (taskGraph.allTasks.any { task ->
-                val taskName = task.name
-                taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
+    gradle.taskGraph.whenReady(
+        object : Action<TaskExecutionGraph> {
+            override fun execute(taskGraph: TaskExecutionGraph) {
+                if (taskGraph.allTasks.any { task ->
+                        val taskName = task.name
+                        taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
+                    }
+                ) {
+                    configureReleaseSigning()
+                }
             }
-        ) {
-            configureReleaseSigning()
         }
-    }
+    )
 }
 
 dependencies {
