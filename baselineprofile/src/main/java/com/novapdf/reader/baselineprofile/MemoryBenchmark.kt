@@ -1,5 +1,6 @@
 package com.novapdf.reader.baselineprofile
 
+import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.MemoryUsageMetric
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
@@ -18,9 +19,10 @@ class MemoryBenchmark {
 
     @MemoryMetric
     @Test
+    @OptIn(ExperimentalMetricApi::class)
     fun coldStartMemory() = benchmarkRule.measureRepeated(
         packageName = TARGET_PACKAGE,
-        metrics = listOf(MemoryUsageMetric()),
+        metrics = listOf(MemoryUsageMetric(mode = MemoryUsageMetric.Mode.Max)),
         iterations = 3,
         startupMode = StartupMode.COLD
     ) {
