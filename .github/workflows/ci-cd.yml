@@ -420,7 +420,7 @@ jobs:
           mkdir -p "$target_dir"
           signed_bundle="$target_dir/NovaPDFReader-release-signed-api${{ matrix.api }}-${{ matrix.device_label }}.aab"
           cp "$bundle_path" "$signed_bundle"
-          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$signed_bundle"
+          jarsigner -verify -verbose -certs "$signed_bundle"
       - name: Stage test and lint reports
         if: always()
         run: |
