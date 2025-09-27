@@ -66,12 +66,39 @@ class AdaptiveFlowManagerTest {
         assertTrue(smoothPreload.isNotEmpty())
 
         repeat(12) { manager.updateFrameMetrics(45f) }
-        now += 1_500
         manager.trackPageChange(2, 12)
         advanceUntilIdle()
         val jankyPreload = manager.preloadTargets.value
 
-        assertTrue(jankyPreload.size < smoothPreload.size)
+        assertTrue(jankyPreload.isEmpty())
+    }
+
+    @Test
+    fun preloadingResumesAfterCooldown() = runTest {
+        var now = 0L
+        val manager = AdaptiveFlowManager(
+            context = context,
+            wallClock = { now },
+            coroutineScope = this
+        )
+
+        manager.trackPageChange(0, 10)
+        now += 1_000
+        manager.trackPageChange(1, 10)
+        advanceUntilIdle()
+        val baseline = manager.preloadTargets.value
+        assertTrue(baseline.isNotEmpty())
+
+        manager.updateFrameMetrics(40f)
+        manager.trackPageChange(2, 10)
+        advanceUntilIdle()
+        assertTrue(manager.preloadTargets.value.isEmpty())
+
+        now += BuildConfig.ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS + 200
+        manager.trackPageChange(3, 10)
+        advanceUntilIdle()
+
+        assertTrue(manager.preloadTargets.value.isNotEmpty())
     }
 
     @Test
