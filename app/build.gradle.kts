@@ -11,6 +11,8 @@ import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import java.io.File
 import java.math.BigDecimal
+import java.util.Properties
+import java.util.concurrent.TimeUnit
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
@@ -168,6 +170,119 @@ val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 
 val targetProject = project
+
+fun parseOptionalBoolean(raw: String?): Boolean? {
+    val normalized = raw?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+    return when (normalized) {
+        "true", "1", "yes", "y" -> true
+        "false", "0", "no", "n" -> false
+        else -> null
+    }
+}
+
+val requireConnectedDevice = parseOptionalBoolean(
+    (findProperty("novapdf.requireConnectedDevice") as? String)
+        ?: providers.gradleProperty("novapdf.requireConnectedDevice").orNull
+        ?: System.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
+)
+
+fun locateAndroidSdkDir(): File? {
+    val localProperties = rootProject.file("local.properties")
+    if (localProperties.exists()) {
+        val properties = Properties()
+        localProperties.inputStream().use { input ->
+            properties.load(input)
+        }
+        properties.getProperty("sdk.dir")?.takeIf { it.isNotBlank() }?.let { sdkPath ->
+            val sdkDirCandidate = File(sdkPath)
+            if (sdkDirCandidate.exists()) {
+                return sdkDirCandidate
+            }
+        }
+    }
+
+    return sequenceOf("ANDROID_SDK_ROOT", "ANDROID_HOME")
+        .mapNotNull { key -> System.getenv(key)?.takeIf { it.isNotBlank() } }
+        .map { path -> File(path) }
+        .firstOrNull { it.exists() }
+}
+
+if (requireConnectedDevice != true) {
+    val sdkDirectory = locateAndroidSdkDir()
+    if (sdkDirectory == null) {
+        afterEvaluate {
+            tasks.namedOrNull<Task>("connectedAndroidTest")?.configure {
+                setDependsOn(emptyList<Any>())
+                doFirst {
+                    logger.warn(
+                        "Skipping connectedAndroidTest because the Android SDK was not found. " +
+                            "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
+                    )
+                }
+            }
+        }
+    } else {
+        val platformTools = File(sdkDirectory, "platform-tools")
+        val adbExecutable = sequenceOf("adb", "adb.exe")
+            .map { executable -> File(platformTools, executable) }
+            .firstOrNull { it.exists() }
+
+        val hasConnectedDevice by lazy {
+            when {
+                adbExecutable == null -> {
+                    logger.warn("ADB executable not found. Skipping connected Android tests.")
+                    false
+                }
+                !adbExecutable.exists() -> {
+                    logger.warn(
+                        "ADB executable not found at ${adbExecutable.absolutePath}. Skipping connected Android tests."
+                    )
+                    false
+                }
+                else -> {
+                    runCatching {
+                        val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
+                            .redirectErrorStream(true)
+                            .start()
+                        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                            process.destroy()
+                            logger.warn(
+                                "Timed out while checking for connected Android devices. Skipping connected Android tests."
+                            )
+                            false
+                        } else {
+                            process.inputStream.bufferedReader().useLines { lines ->
+                                lines.drop(1).any { line ->
+                                    val trimmed = line.trim()
+                                    trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
+                                }
+                            }
+                        }
+                    }.getOrElse { error ->
+                        logger.warn(
+                            "Unable to query connected Android devices via adb. Skipping connected Android tests.",
+                            error
+                        )
+                        false
+                    }
+                }
+            }
+        }
+
+        tasks.matching { task ->
+            task.name == "connectedAndroidTest" ||
+                (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
+        }.configureEach {
+            onlyIf {
+                val hasDevice = hasConnectedDevice
+                if (!hasDevice) {
+                    logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                }
+                hasDevice
+            }
+        }
+    }
+}
 
 val signingTaskPrefixes = listOf(
     "assemble",
