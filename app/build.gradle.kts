@@ -178,12 +178,29 @@ gradle.taskGraph.whenReady {
         targetsReleaseLikeVariant && isPackagingOrPublishingTask
     }
     if (needsReleaseSigning) {
-        val releaseKeystore = targetProject.resolveReleaseKeystore()
-        releaseSigningConfig.apply {
-            storeFile = releaseKeystore
-            storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
-            keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
-            keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
+        val releaseKeystoreResult = runCatching { targetProject.resolveReleaseKeystore() }
+        if (releaseKeystoreResult.isSuccess) {
+            val releaseKeystore = releaseKeystoreResult.getOrThrow()
+            releaseSigningConfig.apply {
+                storeFile = releaseKeystore
+                storePassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_STORE_PASSWORD")
+                keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
+                keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
+            }
+        } else {
+            val debugSigningConfig = androidExtension.signingConfigs.getByName("debug")
+            releaseSigningConfig.initWith(debugSigningConfig)
+            releaseSigningConfig.apply {
+                // Ensure modern signature schemes stay enabled after initWith.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+            targetProject.logger.warn(
+                "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
+                    "Falling back to the debug signing configuration."
+            )
         }
     }
 }
