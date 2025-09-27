@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <!-- MANAGE_EXTERNAL_STORAGE is declared so API 30-33 users can opt in from the explicit
-         settings screen launched by MainActivity. Keeping the permission behind that settings
+         settings screen launched by ReaderActivity. Keeping the permission behind that settings
          flow lets us honour scoped storage/Play policy requirements while still enabling the
          in-app PDF library browser. -->
     <uses-permission
@@ -22,16 +22,21 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.NovaPDFReader">
         <activity
-            android:name="com.novapdf.reader.MainActivity"
+            android:name="com.novapdf.reader.ReaderActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask" />
+
+        <activity-alias
+            android:name=".MainActivity"
+            android:exported="true"
+            android:targetActivity="com.novapdf.reader.ReaderActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
     </application>
 
 </manifest>

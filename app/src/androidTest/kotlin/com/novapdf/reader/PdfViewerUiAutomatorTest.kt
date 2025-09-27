@@ -28,7 +28,7 @@ import org.junit.runner.RunWith
 class PdfViewerUiAutomatorTest {
 
     @get:Rule
-    val activityRule = ActivityScenarioRule(MainActivity::class.java)
+    val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
