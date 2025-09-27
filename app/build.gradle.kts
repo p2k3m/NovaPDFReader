@@ -188,6 +188,14 @@ val requireConnectedDevice = parseOptionalBoolean(
         ?: System.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
 )
 
+val allowCiConnectedTests = parseOptionalBoolean(
+    (findProperty("novapdf.allowCiConnectedTests") as? String)
+        ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
+        ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
+)
+
+val isCiEnvironment = parseOptionalBoolean(System.getenv("CI")) ?: false
+
 fun locateAndroidSdkDir(): File? {
     val localProperties = rootProject.file("local.properties")
     if (localProperties.exists()) {
@@ -210,77 +218,94 @@ fun locateAndroidSdkDir(): File? {
 }
 
 if (requireConnectedDevice != true) {
-    val sdkDirectory = locateAndroidSdkDir()
-    if (sdkDirectory == null) {
+    if (isCiEnvironment && allowCiConnectedTests != true) {
         afterEvaluate {
-            tasks.namedOrNull<Task>("connectedAndroidTest")?.configure {
-                setDependsOn(emptyList<Any>())
-                doFirst {
+            tasks.matching { task ->
+                task.name == "connectedAndroidTest" ||
+                    (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
+            }.configureEach {
+                onlyIf {
                     logger.warn(
-                        "Skipping connectedAndroidTest because the Android SDK was not found. " +
-                            "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
+                        "Skipping task $name because connected Android tests are disabled on CI. " +
+                            "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
                     )
+                    false
                 }
             }
         }
     } else {
-        val platformTools = File(sdkDirectory, "platform-tools")
-        val adbExecutable = sequenceOf("adb", "adb.exe")
-            .map { executable -> File(platformTools, executable) }
-            .firstOrNull { it.exists() }
-
-        val hasConnectedDevice by lazy {
-            when {
-                adbExecutable == null -> {
-                    logger.warn("ADB executable not found. Skipping connected Android tests.")
-                    false
-                }
-                !adbExecutable.exists() -> {
-                    logger.warn(
-                        "ADB executable not found at ${adbExecutable.absolutePath}. Skipping connected Android tests."
-                    )
-                    false
-                }
-                else -> {
-                    runCatching {
-                        val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
-                            .redirectErrorStream(true)
-                            .start()
-                        if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                            process.destroy()
-                            logger.warn(
-                                "Timed out while checking for connected Android devices. Skipping connected Android tests."
-                            )
-                            false
-                        } else {
-                            process.inputStream.bufferedReader().useLines { lines ->
-                                lines.drop(1).any { line ->
-                                    val trimmed = line.trim()
-                                    trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
-                                }
-                            }
-                        }
-                    }.getOrElse { error ->
+        val sdkDirectory = locateAndroidSdkDir()
+        if (sdkDirectory == null) {
+            afterEvaluate {
+                tasks.namedOrNull<Task>("connectedAndroidTest")?.configure {
+                    setDependsOn(emptyList<Any>())
+                    doFirst {
                         logger.warn(
-                            "Unable to query connected Android devices via adb. Skipping connected Android tests.",
-                            error
+                            "Skipping connectedAndroidTest because the Android SDK was not found. " +
+                                "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
                         )
-                        false
                     }
                 }
             }
-        }
+        } else {
+            val platformTools = File(sdkDirectory, "platform-tools")
+            val adbExecutable = sequenceOf("adb", "adb.exe")
+                .map { executable -> File(platformTools, executable) }
+                .firstOrNull { it.exists() }
 
-        tasks.matching { task ->
-            task.name == "connectedAndroidTest" ||
-                (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
-        }.configureEach {
-            onlyIf {
-                val hasDevice = hasConnectedDevice
-                if (!hasDevice) {
-                    logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+            val hasConnectedDevice by lazy {
+                when {
+                    adbExecutable == null -> {
+                        logger.warn("ADB executable not found. Skipping connected Android tests.")
+                        false
+                    }
+                    !adbExecutable.exists() -> {
+                        logger.warn(
+                            "ADB executable not found at ${adbExecutable.absolutePath}. Skipping connected Android tests."
+                        )
+                        false
+                    }
+                    else -> {
+                        runCatching {
+                            val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
+                                .redirectErrorStream(true)
+                                .start()
+                            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                                process.destroy()
+                                logger.warn(
+                                    "Timed out while checking for connected Android devices. Skipping connected Android tests."
+                                )
+                                false
+                            } else {
+                                process.inputStream.bufferedReader().useLines { lines ->
+                                    lines.drop(1).any { line ->
+                                        val trimmed = line.trim()
+                                        trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
+                                    }
+                                }
+                            }
+                        }.getOrElse { error ->
+                            logger.warn(
+                                "Unable to query connected Android devices via adb. Skipping connected Android tests.",
+                                error
+                            )
+                            false
+                        }
+                    }
                 }
-                hasDevice
+            }
+
+            tasks.matching { task ->
+                task.name == "connectedAndroidTest" ||
+                    (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
+            }.configureEach {
+                onlyIf {
+                    val hasDevice = hasConnectedDevice
+                    if (!hasDevice) {
+                        logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                    }
+                    hasDevice
+                }
             }
         }
     }
