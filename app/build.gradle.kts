@@ -155,8 +155,27 @@ val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 val targetProject = project
 
 gradle.taskGraph.whenReady {
+    val signingTaskPrefixes = listOf(
+        "assemble",
+        "bundle",
+        "install",
+        "lintVital",
+        "package",
+        "publish",
+        "sign",
+        "upload"
+    )
     val needsReleaseSigning = allTasks.any { task ->
-        task.project == targetProject && task.name.contains("Release")
+        if (task.project != targetProject) {
+            return@any false
+        }
+        val taskName = task.name
+        val targetsReleaseLikeVariant =
+            taskName.contains("Release") || taskName.contains("Benchmark")
+        val isPackagingOrPublishingTask = signingTaskPrefixes.any { prefix ->
+            taskName.startsWith(prefix, ignoreCase = true)
+        }
+        targetsReleaseLikeVariant && isPackagingOrPublishingTask
     }
     if (needsReleaseSigning) {
         val releaseKeystore = targetProject.resolveReleaseKeystore()
