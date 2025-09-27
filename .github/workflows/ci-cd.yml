@@ -289,6 +289,7 @@ jobs:
           emulator_pid=$!
 
           device_timeout=0
+          device_deadline=$((15 * 60))
           # Bootstrapping a cold AVD without hardware acceleration can take several minutes
           # before the virtual device appears to adb. Give the emulator extra time before
           # bailing out to reduce spurious CI flakes.
@@ -305,12 +306,13 @@ jobs:
 
             sleep 5
             device_timeout=$((device_timeout + 5))
-            if [ $device_timeout -ge 600 ]; then
-              echo "Emulator failed to appear in adb devices output within 10 minutes" >&2
+            if [ $device_timeout -ge $device_deadline ]; then
+              echo "Emulator failed to appear in adb devices output within $((device_deadline / 60)) minutes" >&2
               exit 1
             fi
           done
           boot_timeout=0
+          boot_deadline=$((15 * 60))
           until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
             sleep 5
             boot_timeout=$((boot_timeout + 5))
@@ -319,8 +321,8 @@ jobs:
               wait "$emulator_pid" || true
               exit 1
             fi
-            if [ $boot_timeout -ge 600 ]; then
-              echo "Emulator failed to boot within 10 minutes" >&2
+            if [ $boot_timeout -ge $boot_deadline ]; then
+              echo "Emulator failed to boot within $((boot_deadline / 60)) minutes" >&2
               exit 1
             fi
           done
