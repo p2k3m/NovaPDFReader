@@ -300,7 +300,10 @@ jobs:
               exit 1
             fi
 
-            if adb devices | awk 'NR>1 && $2 == "device" { exit 0 } END { exit 1 }'; then
+            if adb devices |
+              tail -n +2 |
+              tr -d '\r' |
+              grep -qE '\sdevice$'; then
               break
             fi
 
