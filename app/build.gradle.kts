@@ -353,7 +353,14 @@ val needsReleaseSigning = gradle.startParameter.taskNames.any { taskPath ->
     taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
 }
 
-if (needsReleaseSigning) {
+var releaseSigningConfigured = false
+
+fun configureReleaseSigning() {
+    if (releaseSigningConfigured) {
+        return
+    }
+    releaseSigningConfigured = true
+
     val releaseKeystoreResult = runCatching { targetProject.resolveReleaseKeystore() }
     if (releaseKeystoreResult.isSuccess) {
         val releaseKeystore = releaseKeystoreResult.getOrThrow()
@@ -377,6 +384,20 @@ if (needsReleaseSigning) {
             "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
                 "Falling back to the debug signing configuration."
         )
+    }
+}
+
+if (needsReleaseSigning) {
+    configureReleaseSigning()
+} else {
+    gradle.taskGraph.whenReady { taskGraph ->
+        if (taskGraph.allTasks.any { task ->
+                val taskName = task.name
+                taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
+            }
+        ) {
+            configureReleaseSigning()
+        }
     }
 }
 
