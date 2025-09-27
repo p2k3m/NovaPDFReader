@@ -1,12 +1,18 @@
 package com.novapdf.reader
 
+import android.app.Activity
+import android.app.ActivityManager
+import android.app.Application
 import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
+import android.os.Bundle
 import android.view.Choreographer
 import androidx.annotation.VisibleForTesting
+import androidx.core.app.FrameMetricsAggregator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,8 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.math.max
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.sqrt
 
 private const val MAX_TRACKED_PAGES = 8
@@ -26,11 +32,30 @@ private const val DEFAULT_FRAME_INTERVAL_MS = 16.6f
 class AdaptiveFlowManager(
     context: Context,
     private val wallClock: () -> Long = System::currentTimeMillis,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Job() + Dispatchers.Default)
+    private val coroutineScope: CoroutineScope = CoroutineScope(Job() + Dispatchers.Default),
+    private val frameMetricsAggregatorProvider: () -> FrameMetricsAggregator? = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            FrameMetricsAggregator(FrameMetricsAggregator.TOTAL_DURATION)
+        } else {
+            null
+        }
+    }
 ) : SensorEventListener {
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accelerometer: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private var choreographer: Choreographer? = null
+    private val application: Application? = context.applicationContext as? Application
+    private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    private val frameMetricsAggregator: FrameMetricsAggregator? = frameMetricsAggregatorProvider()
+    private val isLowRamDevice: Boolean = activityManager?.isLowRamDevice == true
+    private val minPagesPerMinute: Float
+    private val maxPagesPerMinute: Float
+    private val jankThresholdMillis: Float = BuildConfig.ADAPTIVE_FLOW_JANK_FRAME_THRESHOLD_MS
+
+    private var preloadSuspendedUntilMillis = 0L
+    private var aggregatedTotalFrames = 0
+    private var aggregatedJankyFrames = 0
+    private var frameMetricsCallbacksRegistered = false
 
     private val pageHistory = ArrayDeque<Pair<Int, Long>>()
     private val _swipeSensitivity = MutableStateFlow(1f)
@@ -63,6 +88,36 @@ class AdaptiveFlowManager(
         }
     }
 
+    private val activityLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityResumed(activity: Activity) {
+            frameMetricsAggregator?.add(activity)
+        }
+
+        override fun onActivityPaused(activity: Activity) {
+            frameMetricsAggregator?.remove(activity)
+        }
+
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+
+    init {
+        if (isLowRamDevice) {
+            minPagesPerMinute = BuildConfig.LOW_END_MIN_PPM.toFloat()
+            maxPagesPerMinute = BuildConfig.LOW_END_MAX_PPM.toFloat()
+        } else {
+            minPagesPerMinute = BuildConfig.HIGH_END_MIN_PPM.toFloat()
+            maxPagesPerMinute = BuildConfig.HIGH_END_MAX_PPM.toFloat()
+        }
+        _readingSpeedPagesPerMinute.value = _readingSpeedPagesPerMinute.value.coerceIn(
+            minPagesPerMinute,
+            maxPagesPerMinute
+        )
+    }
+
     fun start() {
         if (!isRegistered) {
             accelerometer?.also { sensor ->
@@ -70,6 +125,7 @@ class AdaptiveFlowManager(
                 isRegistered = true
             }
         }
+        registerFrameMetricsCallbacks()
         startFrameMonitoring()
     }
 
@@ -78,6 +134,7 @@ class AdaptiveFlowManager(
             sensorManager.unregisterListener(this)
             isRegistered = false
         }
+        unregisterFrameMetricsCallbacks()
         stopFrameMonitoring()
     }
 
@@ -97,18 +154,26 @@ class AdaptiveFlowManager(
         if (intervals.isEmpty()) return
         val averageMillis = intervals.average().toFloat().coerceAtLeast(50f)
         val ppm = 60_000f / averageMillis
-        _readingSpeedPagesPerMinute.value = ppm.coerceIn(5f, 240f)
+        _readingSpeedPagesPerMinute.value = ppm.coerceIn(minPagesPerMinute, maxPagesPerMinute)
     }
 
     private fun updatePreloadTargets(currentPage: Int, totalPages: Int) {
         coroutineScope.launch {
+            if (isPreloadingSuspended()) {
+                if (_preloadTargets.value.isNotEmpty()) {
+                    _preloadTargets.value = emptyList()
+                }
+                return@launch
+            }
             val speed = readingSpeedPagesPerMinute.value
             val frameInterval = frameIntervalMillis.value
-            val predictedAdvance = (speed / 60f).coerceAtLeast(0.5f)
+            val normalizedSpeed = (speed / maxPagesPerMinute).coerceIn(0f, 1f)
             val additionalPages = when {
-                predictedAdvance > 3f -> 4
-                predictedAdvance > 1.5f -> 3
-                else -> 2
+                normalizedSpeed > 0.85f -> 5
+                normalizedSpeed > 0.55f -> 4
+                normalizedSpeed > 0.35f -> 3
+                normalizedSpeed > 0.15f -> 2
+                else -> 1
             }
             val frameAdjustment = when {
                 frameInterval > 28f -> -2
@@ -160,6 +225,8 @@ class AdaptiveFlowManager(
             frameDurations.clear()
             _frameIntervalMillis.value = DEFAULT_FRAME_INTERVAL_MS
             lastFrameTimeNanos = 0L
+            resetFrameHealthTracking()
+            frameMetricsAggregator?.reset()
             it.postFrameCallback(frameCallback)
             isFrameCallbackRegistered = true
         }
@@ -173,6 +240,7 @@ class AdaptiveFlowManager(
         lastFrameTimeNanos = 0L
         frameDurations.clear()
         _frameIntervalMillis.value = DEFAULT_FRAME_INTERVAL_MS
+        resetFrameHealthTracking()
     }
 
     internal fun updateFrameMetrics(frameDurationMillis: Float) {
@@ -190,5 +258,73 @@ class AdaptiveFlowManager(
             frameDurations.forEach { sum += it }
             _frameIntervalMillis.value = sum / frameDurations.size
         }
+        evaluateFrameHealth(frameDurationMillis)
+    }
+
+    private fun evaluateFrameHealth(frameDurationMillis: Float) {
+        val now = wallClock()
+        if (frameDurationMillis > jankThresholdMillis) {
+            suspendPreloading(now)
+        }
+
+        val aggregator = frameMetricsAggregator ?: return
+        val metrics = aggregator.metrics ?: return
+        val totalDurations = metrics.getOrNull(FrameMetricsAggregator.TOTAL_INDEX) ?: return
+        var totalFrames = 0
+        var jankyFrames = 0
+        for (i in 0 until totalDurations.size()) {
+            val durationMs = totalDurations.keyAt(i)
+            val count = totalDurations.valueAt(i)
+            totalFrames += count
+            if (durationMs > jankThresholdMillis.toInt()) {
+                jankyFrames += count
+            }
+        }
+        if (totalFrames == 0) {
+            return
+        }
+        if (totalFrames > aggregatedTotalFrames) {
+            val newJank = jankyFrames - aggregatedJankyFrames
+            aggregatedTotalFrames = totalFrames
+            aggregatedJankyFrames = jankyFrames
+            if (newJank > 0) {
+                suspendPreloading(now)
+            }
+        }
+    }
+
+    private fun suspendPreloading(now: Long) {
+        preloadSuspendedUntilMillis = now + BuildConfig.ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS
+        if (_preloadTargets.value.isNotEmpty()) {
+            _preloadTargets.value = emptyList()
+        }
+    }
+
+    private fun isPreloadingSuspended(now: Long = wallClock()): Boolean = now < preloadSuspendedUntilMillis
+
+    private fun resetFrameHealthTracking() {
+        preloadSuspendedUntilMillis = 0L
+        aggregatedTotalFrames = 0
+        aggregatedJankyFrames = 0
+    }
+
+    private fun registerFrameMetricsCallbacks() {
+        val app = application ?: return
+        if (frameMetricsCallbacksRegistered || frameMetricsAggregator == null) {
+            return
+        }
+        frameMetricsCallbacksRegistered = true
+        app.registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
+    }
+
+    private fun unregisterFrameMetricsCallbacks() {
+        val app = application ?: return
+        if (!frameMetricsCallbacksRegistered || frameMetricsAggregator == null) {
+            return
+        }
+        frameMetricsCallbacksRegistered = false
+        app.unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks)
+        frameMetricsAggregator.stop()
+        frameMetricsAggregator.reset()
     }
 }

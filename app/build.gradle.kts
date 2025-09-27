@@ -72,6 +72,13 @@ android {
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        buildConfigField("int", "LOW_END_MIN_PPM", "8")
+        buildConfigField("int", "LOW_END_MAX_PPM", "90")
+        buildConfigField("int", "HIGH_END_MIN_PPM", "12")
+        buildConfigField("int", "HIGH_END_MAX_PPM", "210")
+        buildConfigField("float", "ADAPTIVE_FLOW_JANK_FRAME_THRESHOLD_MS", "16.0f")
+        buildConfigField("long", "ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS", "750L")
+
     }
 
     signingConfigs {
