@@ -32,6 +32,8 @@ class PdfViewerScreenTest {
                     onSaveAnnotations = {},
                     onSearch = {},
                     onToggleBookmark = {},
+                    onOutlineDestinationSelected = {},
+                    onExportDocument = { true },
                     renderTile = { _, _, _ -> null },
                     requestPageSize = { null },
                     onTileSpecChanged = {},
