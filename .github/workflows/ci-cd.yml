@@ -335,6 +335,8 @@ jobs:
           adb shell input keyevent 82 || true
       - name: Run instrumentation tests
         run: ./gradlew connectedAndroidTest --stacktrace
+      - name: Install debug build for screenshots
+        run: ./gradlew :app:installDebug --stacktrace
       - name: Capture screenshots
         run: |
           set -euo pipefail
@@ -381,10 +383,7 @@ jobs:
             sleep 4
 
             for i in $(seq -w 1 "$count"); do
-              remote="/sdcard/${label}_${i}.png"
-              adb shell screencap -p "$remote"
-              adb pull "$remote" "$target_dir/screenshot_${i}.png"
-              adb shell rm "$remote" || true
+              adb exec-out screencap -p > "$target_dir/screenshot_${i}.png"
               sleep 1
             done
           }
