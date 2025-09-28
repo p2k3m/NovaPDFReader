@@ -26,7 +26,10 @@ class PdfViewerScreenTest {
                 PdfViewerScreen(
                     state = PdfViewerUiState(),
                     snackbarHost = androidx.compose.material3.SnackbarHostState(),
-                    onOpenDocument = {},
+                    onOpenLocalDocument = {},
+                    onOpenCloudDocument = {},
+                    onOpenRemoteDocument = { _ -> },
+                    onDismissError = {},
                     onPageChange = {},
                     onStrokeFinished = {},
                     onSaveAnnotations = {},
