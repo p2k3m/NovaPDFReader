@@ -336,7 +336,32 @@ jobs:
       - name: Run instrumentation tests
         run: ./gradlew connectedAndroidTest --stacktrace
       - name: Install debug build for screenshots
-        run: ./gradlew :app:installDebug --stacktrace
+        run: |
+          set -euo pipefail
+
+          apk_path="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$apk_path" ]; then
+            echo "Debug APK not found; assembling it now"
+            ./gradlew :app:assembleDebug --stacktrace
+          fi
+
+          echo "Waiting for emulator to report as online"
+          adb wait-for-device
+
+          boot_deadline=$((5 * 60))
+          boot_elapsed=0
+          until adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
+            sleep 5
+            boot_elapsed=$((boot_elapsed + 5))
+            if [ $boot_elapsed -ge $boot_deadline ]; then
+              echo "Emulator failed to report boot completion within $((boot_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
+          echo "Installing $apk_path onto the emulator"
+          adb install -r "$apk_path"
       - name: Capture screenshots
         run: |
           set -euo pipefail
