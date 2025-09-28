@@ -3,7 +3,6 @@ package com.novapdf.reader.ui.theme
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.novapdf.reader.R
@@ -11,28 +10,23 @@ import com.novapdf.reader.R
 private val robotoFlexFamily = FontFamily(
     Font(
         resId = R.font.roboto_flex_variable,
-        weight = FontWeight.Light,
-        variationSettings = FontVariation.Settings(FontVariation.Axis.Weight, 300f)
+        weight = FontWeight.Light
     ),
     Font(
         resId = R.font.roboto_flex_variable,
-        weight = FontWeight.Normal,
-        variationSettings = FontVariation.Settings(FontVariation.Axis.Weight, 400f)
+        weight = FontWeight.Normal
     ),
     Font(
         resId = R.font.roboto_flex_variable,
-        weight = FontWeight.Medium,
-        variationSettings = FontVariation.Settings(FontVariation.Axis.Weight, 500f)
+        weight = FontWeight.Medium
     ),
     Font(
         resId = R.font.roboto_flex_variable,
-        weight = FontWeight.SemiBold,
-        variationSettings = FontVariation.Settings(FontVariation.Axis.Weight, 600f)
+        weight = FontWeight.SemiBold
     ),
     Font(
         resId = R.font.roboto_flex_variable,
-        weight = FontWeight.Bold,
-        variationSettings = FontVariation.Settings(FontVariation.Axis.Weight, 700f)
+        weight = FontWeight.Bold
     )
 )
 
