@@ -376,7 +376,7 @@ jobs:
           install_attempt=1
           install_attempts_max=3
           while true; do
-            if adb install -r "$apk_path"; then
+            if adb install --no-streaming -r "$apk_path"; then
               break
             fi
 
