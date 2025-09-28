@@ -793,7 +793,7 @@ private fun AccessibilityManager?.sendAnnouncement(message: String) {
         eventType = AccessibilityEvent.TYPE_ANNOUNCEMENT
         text.add(message)
     }
-    manager.sendEvent(event)
+    manager.sendAccessibilityEvent(event)
 }
 
 @Composable
