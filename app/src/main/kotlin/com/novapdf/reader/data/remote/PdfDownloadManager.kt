@@ -42,9 +42,11 @@ class PdfDownloadManager(
         )
         val request = ImageRequest.Builder(appContext)
             .data(url)
-            .extras { set(PdfDownloadDecoder.PAYLOAD_KEY, payload) }
+            .apply {
+                extras.set(PdfDownloadDecoder.PAYLOAD_KEY, payload)
+            }
             .listener(
-                onError = { _, result ->
+                onError = { _: ImageRequest, result: ErrorResult ->
                     if (!deferred.isCompleted) {
                         deferred.completeExceptionally(result.throwable)
                     }
