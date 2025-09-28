@@ -9,7 +9,6 @@ import coil3.decode.Decoder
 import coil3.fetch.SourceFetchResult
 import coil3.getExtra
 import coil3.request.Options
-import coil3.util.closeQuietly
 import java.io.File
 import okio.buffer
 import okio.sink
@@ -33,7 +32,7 @@ internal class PdfDownloadDecoder(
             payload.onDownloadFailed(throwable)
             throw throwable
         } finally {
-            imageSource.closeQuietly()
+            runCatching { imageSource.close() }
         }
         val placeholder = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.TRANSPARENT)
