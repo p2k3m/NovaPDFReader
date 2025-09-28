@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
 import android.util.Log

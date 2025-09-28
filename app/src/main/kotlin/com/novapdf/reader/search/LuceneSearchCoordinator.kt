@@ -75,7 +75,7 @@ class LuceneSearchCoordinator(
         ensureIndexReady(session)
         val searcher = indexSearcher ?: return emptyList()
         val luceneQuery = buildQuery(query)
-        val maxDocs = max(1, searcher.indexReader.maxDoc)
+        val maxDocs = max(1, searcher.indexReader.maxDoc())
         val topDocs = try {
             searcher.search(luceneQuery, maxDocs)
         } catch (parse: Exception) {
