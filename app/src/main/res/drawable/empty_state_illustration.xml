@@ -1,0 +1,51 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="200dp"
+    android:viewportWidth="200"
+    android:viewportHeight="200">
+    <path
+        android:name="bg"
+        android:fillColor="#FFEFF7"
+        android:pathData="M100,12a88,88 0 1,1 -0.01,0z" />
+    <path
+        android:name="shadow"
+        android:fillColor="#14000000"
+        android:pathData="M50,148c20,16 80,16 100,0 8,-6 12,-2 12,4 0,18 -30,32 -62,32s-62,-14 -62,-32c0,-6 4,-10 12,-4z" />
+    <group android:name="book">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M64,60h72a8,8 0 0,1 8,8v70a10,10 0 0,1 -10,10H66a10,10 0 0,1 -10,-10V68a8,8 0 0,1 8,-8z" />
+        <path
+            android:fillColor="#FFDEE8"
+            android:pathData="M70,68h24a6,6 0 0,1 6,6v70H64V74a6,6 0 0,1 6,-6z" />
+        <path
+            android:fillColor="#FFD9F1"
+            android:pathData="M106,68h24a6,6 0 0,1 6,6v70H100V74a6,6 0 0,1 6,-6z" />
+        <path
+            android:fillColor="#FFB8D9"
+            android:pathData="M70,82h24v8H70z" />
+        <path
+            android:fillColor="#FFA7C9"
+            android:pathData="M106,82h24v8h-24z" />
+        <path
+            android:fillColor="#FF6E9ED"
+            android:pathData="M82,106h12v8H82z" />
+        <path
+            android:fillColor="#FF6E9ED"
+            android:pathData="M118,106h12v8h-12z" />
+        <path
+            android:fillColor="#FFEF4982"
+            android:pathData="M82,124h12v8H82z" />
+        <path
+            android:fillColor="#FFEF4982"
+            android:pathData="M118,124h12v8h-12z" />
+    </group>
+    <path
+        android:name="spark"
+        android:fillColor="#FFEF4982"
+        android:pathData="M44,54l6,-2 2,-6 2,6 6,2 -6,2 -2,6 -2,-6z" />
+    <path
+        android:name="spark2"
+        android:fillColor="#FF6E9ED"
+        android:pathData="M148,40l4,-2 2,-4 2,4 4,2 -4,2 -2,4 -2,-4z" />
+</vector>

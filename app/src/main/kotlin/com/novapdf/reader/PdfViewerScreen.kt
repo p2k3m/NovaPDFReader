@@ -3,10 +3,19 @@ package com.novapdf.reader
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Size
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,8 +28,9 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -49,6 +59,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,13 +72,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -75,12 +90,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.rememberLottieComposition
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -488,19 +508,47 @@ private fun EmptyState(onOpenDocument: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = Icons.Outlined.FileOpen,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.height(64.dp)
-        )
-        Spacer(modifier = Modifier.height(24.dp))
+        val illustrationShape = MaterialTheme.shapes.extraLarge
+        Box(
+            modifier = Modifier
+                .size(220.dp)
+                .background(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                            MaterialTheme.colorScheme.surface
+                        )
+                    ),
+                    shape = illustrationShape
+                )
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = illustrationShape
+                )
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.empty_state_illustration),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Spacer(modifier = Modifier.height(32.dp))
         Text(
             text = stringResource(id = R.string.empty_state_message),
-            style = MaterialTheme.typography.titleMedium,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = stringResource(id = R.string.empty_state_supporting),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(24.dp))
         Button(onClick = onOpenDocument) {
             Text(text = stringResource(id = R.string.empty_state_button))
         }
@@ -691,22 +739,56 @@ private fun PdfPager(
         }
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        state = lazyListState,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(vertical = 24.dp)
-    ) {
-        items(state.pageCount, key = { it }) { pageIndex ->
-            PdfPageItem(
-                pageIndex = pageIndex,
-                state = state,
-                renderPage = latestRenderPage,
-                requestPageSize = latestRequestPageSize,
-                onStrokeFinished = latestStrokeFinished
-            )
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            state = lazyListState,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(vertical = 24.dp)
+        ) {
+            items(state.pageCount, key = { it }) { pageIndex ->
+                PdfPageItem(
+                    pageIndex = pageIndex,
+                    state = state,
+                    renderPage = latestRenderPage,
+                    requestPageSize = latestRequestPageSize,
+                    onStrokeFinished = latestStrokeFinished
+                )
+            }
+        }
+
+        PageTransitionScrim(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(96.dp)
+        )
+        PageTransitionScrim(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(96.dp),
+            reverse = true
+        )
+    }
+}
+
+@Composable
+private fun PageTransitionScrim(modifier: Modifier, reverse: Boolean = false) {
+    val surface = MaterialTheme.colorScheme.surface
+    val gradient = remember(surface, reverse) {
+        if (reverse) {
+            listOf(Color.Transparent, surface.copy(alpha = 0.92f))
+        } else {
+            listOf(surface.copy(alpha = 0.92f), Color.Transparent)
         }
     }
+
+    Box(
+        modifier = modifier.background(
+            brush = Brush.verticalGradient(colors = gradient)
+        )
+    )
 }
 
 private data class PrefetchSnapshot(
@@ -779,11 +861,56 @@ private fun PdfPageItem(
         } ?: pageSize?.let { size ->
             size.height.toFloat() / size.width.coerceAtLeast(1)
         } ?: 1.4142f
+        val isActive = state.currentPage == pageIndex
+        val gradientAlpha by animateFloatAsState(
+            targetValue = if (isActive) 1f else 0f,
+            animationSpec = tween(durationMillis = 550, easing = LinearOutSlowInEasing),
+            label = "PageTransitionGradient"
+        )
+        val pageShape = MaterialTheme.shapes.extraLarge
+        val elevatedSurface = MaterialTheme.colorScheme.surfaceColorAtElevation(6.dp)
+        val gradientColors = remember(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary) {
+            listOf(
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                Color.Transparent,
+                MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
+            )
+        }
+        var showPageFlip by remember(state.documentId, pageIndex) { mutableStateOf(false) }
+        val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.page_flip))
+
+        LaunchedEffect(isActive) {
+            if (isActive) {
+                showPageFlip = true
+                delay(600)
+                showPageFlip = false
+            } else {
+                showPageFlip = false
+            }
+        }
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspect.coerceIn(0.2f, 5f))
+                .shadow(
+                    elevation = 18.dp,
+                    shape = pageShape,
+                    clip = false,
+                    ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                )
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = pageShape
+                )
+                .clip(pageShape)
+                .background(
+                    brush = Brush.linearGradient(
+                        colors = listOf(elevatedSurface, MaterialTheme.colorScheme.surface)
+                    )
+                )
         ) {
             val bitmap = pageBitmap
             if (bitmap != null && !bitmap.isRecycled) {
@@ -800,6 +927,15 @@ private fun PdfPageItem(
                 )
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+            }
+
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (gradientAlpha > 0.01f) {
+                    drawRect(
+                        brush = Brush.verticalGradient(colors = gradientColors),
+                        alpha = gradientAlpha * 0.35f
+                    )
                 }
             }
 
@@ -823,6 +959,28 @@ private fun PdfPageItem(
                     latestStroke(command)
                 }
             )
+
+            AnimatedVisibility(
+                visible = showPageFlip && composition != null,
+                modifier = Modifier.align(Alignment.Center),
+                enter = fadeIn(animationSpec = tween(220)) + scaleIn(
+                    initialScale = 0.85f,
+                    animationSpec = tween(220)
+                ),
+                exit = fadeOut(animationSpec = tween(200)) + scaleOut(
+                    targetScale = 0.95f,
+                    animationSpec = tween(200)
+                )
+            ) {
+                composition?.let {
+                    LottieAnimation(
+                        composition = it,
+                        iterations = 1,
+                        speed = 1.2f,
+                        modifier = Modifier.size(160.dp)
+                    )
+                }
+            }
         }
     }
 }
