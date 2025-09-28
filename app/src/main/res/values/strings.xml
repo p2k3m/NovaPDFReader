@@ -73,6 +73,10 @@
     <string name="navigation_settings">Settings</string>
     <string name="save_annotations">Save annotations</string>
     <string name="toggle_bookmark">Toggle bookmark</string>
+    <string name="thumbnail_strip_label">Quick thumbnails</string>
+    <string name="thumbnail_strip_filter_label">Bookmarks only</string>
+    <string name="thumbnail_strip_empty">Add bookmarks to see them here for faster navigation.</string>
+    <string name="thumbnail_page_content_description">Thumbnail for page %1$d</string>
     <string name="open_source_dialog_title">Where is your PDF?</string>
     <string name="open_source_dialog_body">Choose how you\'d like to open your document.</string>
     <string name="open_source_device">Browse device storage</string>

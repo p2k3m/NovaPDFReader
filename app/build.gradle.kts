@@ -452,6 +452,10 @@ dependencies {
     }
     // Caffeine 3.x requires minSdk 26+ due to MethodHandle usage; stick to 2.x for API 24 support
     implementation("com.github.ben-manes.caffeine:caffeine:2.9.3")
+    implementation("org.apache.lucene:lucene-core:9.10.0")
+    implementation("org.apache.lucene:lucene-analyzers-common:9.10.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
