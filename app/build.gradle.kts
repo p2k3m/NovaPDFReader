@@ -66,7 +66,7 @@ android {
 
     defaultConfig {
         applicationId = resolvedApplicationId
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
@@ -450,7 +450,7 @@ dependencies {
     implementation("com.github.barteksc:pdfium-android:1.9.0") {
         exclude(group = "com.android.support", module = "support-compat")
     }
-    // Caffeine 3.x requires minSdk 26+ due to MethodHandle usage; stick to 2.x for API 24 support
+    // Caffeine 3.x requires MethodHandle support; stay on 2.x until we evaluate the upgrade impact
     implementation("com.github.ben-manes.caffeine:caffeine:2.9.3")
     implementation("org.apache.lucene:lucene-core:8.11.4")
     implementation("org.apache.lucene:lucene-analyzers-common:8.11.4")
