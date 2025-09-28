@@ -459,6 +459,8 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("io.coil-kt.coil3:coil-android:3.0.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")

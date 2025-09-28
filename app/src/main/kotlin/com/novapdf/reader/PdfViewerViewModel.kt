@@ -15,6 +15,8 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfDocumentRepository
+import com.novapdf.reader.data.PdfOpenException
+import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.SearchMatch
@@ -127,19 +129,11 @@ open class PdfViewerViewModel(
             updateUiState { current ->
                 current.copy(isLoading = true, loadingProgress = 0f, errorMessage = null)
             }
-            val openResult = runCatching { pdfRepository.open(uri) }
-            val session = openResult.getOrNull()
-            if (session == null) {
-                val throwable = openResult.exceptionOrNull()
-                if (throwable != null) {
+            val session = runCatching { pdfRepository.open(uri) }
+                .getOrElse { throwable ->
                     handleDocumentError(throwable)
-                } else {
-                    updateUiState { current ->
-                        current.copy(isLoading = false, loadingProgress = null, errorMessage = "Unable to open document")
-                    }
+                    return@launch
                 }
-                return@launch
-            }
             annotationRepository.clearInMemory(session.documentId)
             updateUiState { it.copy(loadingProgress = 0.35f) }
             adaptiveFlowManager.start()
@@ -176,12 +170,38 @@ open class PdfViewerViewModel(
     }
 
     private suspend fun handleDocumentError(throwable: Throwable) {
+        val message = when (throwable) {
+            is PdfOpenException -> when (throwable.reason) {
+                PdfOpenException.Reason.CORRUPTED -> app.getString(R.string.error_pdf_corrupted)
+                PdfOpenException.Reason.UNSUPPORTED -> app.getString(R.string.error_pdf_unsupported)
+                PdfOpenException.Reason.ACCESS_DENIED -> app.getString(R.string.error_pdf_permission)
+            }
+            else -> app.getString(R.string.error_document_open_generic)
+        }
         updateUiState { current ->
             current.copy(
                 isLoading = false,
                 loadingProgress = null,
-                errorMessage = throwable.message ?: "Unable to open document"
+                errorMessage = message
             )
+        }
+    }
+
+    fun reportRemoteOpenFailure(@Suppress("UNUSED_PARAMETER") throwable: Throwable) {
+        viewModelScope.launch {
+            updateUiState { current ->
+                current.copy(
+                    isLoading = false,
+                    loadingProgress = null,
+                    errorMessage = app.getString(R.string.error_remote_open_failed)
+                )
+            }
+        }
+    }
+
+    fun dismissError() {
+        viewModelScope.launch {
+            updateUiState { it.copy(errorMessage = null) }
         }
     }
 
