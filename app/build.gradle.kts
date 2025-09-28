@@ -58,6 +58,8 @@ val resolvedApplicationId = (findProperty("NOVAPDF_APP_ID") as? String)
     ?: System.getenv("NOVAPDF_APP_ID")?.takeIf { it.isNotBlank() }
     ?: "com.novapdf.reader"
 
+val baselineProfileProject = rootProject.findProject(":baselineprofile")
+
 android {
     namespace = "com.novapdf.reader"
     compileSdk = 35
@@ -475,7 +477,7 @@ dependencies {
     androidTestUtil("androidx.test:orchestrator:1.4.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-    baselineProfile(project(":baselineprofile"))
+    baselineProfileProject?.let { baselineProfile(it) }
 }
 
 kotlin {
