@@ -1,9 +1,13 @@
 package com.novapdf.reader
 
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.util.Size
+import android.util.Patterns
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.annotation.StringRes
@@ -46,6 +50,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -121,8 +126,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.R
 import com.novapdf.reader.accessibility.HapticFeedbackManager
@@ -141,20 +148,27 @@ import kotlinx.coroutines.launch
 
 private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
+private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PdfViewerRoute(
     viewModel: PdfViewerViewModel,
     snackbarHost: SnackbarHostState,
-    onOpenDocument: () -> Unit
+    onOpenLocalDocument: () -> Unit,
+    onOpenCloudDocument: () -> Unit,
+    onOpenRemoteDocument: (String) -> Unit,
+    onDismissError: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     PdfViewerScreen(
         state = uiState,
         snackbarHost = snackbarHost,
-        onOpenDocument = onOpenDocument,
+        onOpenLocalDocument = onOpenLocalDocument,
+        onOpenCloudDocument = onOpenCloudDocument,
+        onOpenRemoteDocument = onOpenRemoteDocument,
+        onDismissError = onDismissError,
         onPageChange = { viewModel.onPageFocused(it) },
         onStrokeFinished = { viewModel.addAnnotation(it) },
         onSaveAnnotations = { viewModel.persistAnnotations() },
@@ -179,7 +193,10 @@ fun PdfViewerRoute(
 fun PdfViewerScreen(
     state: PdfViewerUiState,
     snackbarHost: SnackbarHostState,
-    onOpenDocument: () -> Unit,
+    onOpenLocalDocument: () -> Unit,
+    onOpenCloudDocument: () -> Unit,
+    onOpenRemoteDocument: (String) -> Unit,
+    onDismissError: () -> Unit,
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onSaveAnnotations: () -> Unit,
@@ -198,6 +215,9 @@ fun PdfViewerScreen(
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showSourceDialog by remember { mutableStateOf(false) }
+    var showUrlDialog by remember { mutableStateOf(false) }
+    val requestDocument: () -> Unit = { showSourceDialog = true }
     val latestOnPageChange by rememberUpdatedState(onPageChange)
     val baseDensity = LocalDensity.current
     val adjustedDensity = remember(baseDensity, state.fontScale) {
@@ -293,7 +313,7 @@ fun PdfViewerScreen(
                         )
                     },
                     actions = {
-                        IconButton(onClick = onOpenDocument) {
+                        IconButton(onClick = { showSourceDialog = true }) {
                             Icon(
                                 imageVector = Icons.Outlined.FileOpen,
                                 contentDescription = stringResource(id = R.string.open_pdf)
@@ -392,7 +412,7 @@ fun PdfViewerScreen(
                 when (selectedDestination) {
                     MainDestination.Home -> {
                         HomeContent(
-                            onOpenDocument = onOpenDocument,
+                            onOpenDocument = requestDocument,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -406,7 +426,7 @@ fun PdfViewerScreen(
                                 onSearch(it)
                             },
                             totalSearchResults = totalSearchResults,
-                            onOpenDocument = onOpenDocument,
+                            onOpenDocument = requestDocument,
                             onPlayAdaptiveSummary = playAdaptiveSummary,
                             onOpenAccessibilityOptions = { showAccessibilitySheet = true },
                             focusRequester = searchFocusRequester,
@@ -451,6 +471,13 @@ fun PdfViewerScreen(
                     LoadingOverlay(progress = state.loadingProgress)
                 }
 
+                state.errorMessage?.let { errorMessage ->
+                    DocumentErrorDialog(
+                        message = errorMessage,
+                        onDismiss = onDismissError
+                    )
+                }
+
                 if (showOnboarding) {
                     OnboardingOverlay(
                         pages = onboardingPages,
@@ -461,6 +488,34 @@ fun PdfViewerScreen(
                 }
             }
         }
+
+    if (showSourceDialog) {
+        DocumentSourceDialog(
+            onDismiss = { showSourceDialog = false },
+            onSelectDevice = {
+                showSourceDialog = false
+                onOpenLocalDocument()
+            },
+            onSelectCloud = {
+                showSourceDialog = false
+                onOpenCloudDocument()
+            },
+            onSelectRemote = {
+                showSourceDialog = false
+                showUrlDialog = true
+            }
+        )
+    }
+
+    if (showUrlDialog) {
+        DocumentUrlDialog(
+            onDismiss = { showUrlDialog = false },
+            onConfirm = { url ->
+                showUrlDialog = false
+                onOpenRemoteDocument(url)
+            }
+        )
+    }
 
     if (showOutlineSheet) {
         OutlineSheet(
@@ -498,6 +553,146 @@ fun PdfViewerScreen(
     }
 }
 
+}
+
+@Composable
+private fun DocumentSourceDialog(
+    onDismiss: () -> Unit,
+    onSelectDevice: () -> Unit,
+    onSelectCloud: () -> Unit,
+    onSelectRemote: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(id = R.string.open_source_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(text = stringResource(id = R.string.open_source_dialog_body))
+                FilledTonalButton(
+                    onClick = onSelectDevice,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = stringResource(id = R.string.open_source_device))
+                }
+                FilledTonalButton(
+                    onClick = onSelectCloud,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = stringResource(id = R.string.open_source_cloud))
+                }
+                FilledTonalButton(
+                    onClick = onSelectRemote,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = stringResource(id = R.string.open_source_url))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = R.string.action_cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun DocumentUrlDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var url by remember { mutableStateOf("") }
+    var showError by remember { mutableStateOf(false) }
+    val trimmedUrl = url.trim()
+    val isValidUrl = remember(trimmedUrl) {
+        Patterns.WEB_URL.matcher(trimmedUrl).matches()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(id = R.string.enter_pdf_url)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(text = stringResource(id = R.string.enter_pdf_url_hint))
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        if (showError) {
+                            showError = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(text = stringResource(id = R.string.enter_pdf_url_label)) },
+                    placeholder = { Text(text = stringResource(id = R.string.enter_pdf_url_placeholder)) },
+                    singleLine = true,
+                    isError = showError && !isValidUrl,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+                )
+                if (showError && !isValidUrl) {
+                    Text(
+                        text = stringResource(id = R.string.enter_pdf_url_error),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (isValidUrl) {
+                    onConfirm(trimmedUrl)
+                } else {
+                    showError = true
+                }
+            }) {
+                Text(text = stringResource(id = R.string.action_open))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = R.string.action_cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun DocumentErrorDialog(
+    message: String,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(id = R.string.error_pdf_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(text = message)
+                Text(text = stringResource(id = R.string.error_pdf_dialog_body))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = R.string.action_try_again))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PDF_REPAIR_URL))
+                try {
+                    context.startActivity(intent)
+                } catch (error: ActivityNotFoundException) {
+                    Toast.makeText(context, R.string.error_no_browser, Toast.LENGTH_LONG).show()
+                } finally {
+                    onDismiss()
+                }
+            }) {
+                Text(text = stringResource(id = R.string.action_repair_pdf))
+            }
+        }
+    )
 }
 
 @Composable

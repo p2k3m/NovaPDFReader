@@ -52,6 +52,17 @@ private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
 private const val TAG = "PdfDocumentRepository"
 
+class PdfOpenException(
+    val reason: Reason,
+    cause: Throwable? = null,
+) : Exception(reason.name, cause) {
+    enum class Reason {
+        UNSUPPORTED,
+        ACCESS_DENIED,
+        CORRUPTED,
+    }
+}
+
 data class PdfDocumentSession(
     val documentId: String,
     val uri: Uri,
@@ -138,13 +149,17 @@ class PdfDocumentRepository(
         openSession.value = null
     }
 
-    suspend fun open(uri: Uri): PdfDocumentSession? {
+    suspend fun open(uri: Uri): PdfDocumentSession {
         closeCurrentSession()
         return withContextGuard {
             if (!validateDocumentUri(uri)) {
-                return@withContextGuard null
+                throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
             }
-            val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return@withContextGuard null
+            val pfd = try {
+                contentResolver.openFileDescriptor(uri, "r")
+            } catch (security: SecurityException) {
+                throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
+            } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
             val document = try {
                 pdfiumCore.newDocument(pfd)
             } catch (throwable: Throwable) {
@@ -153,7 +168,7 @@ class PdfDocumentRepository(
                 } catch (_: IOException) {
                 }
                 Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
-                return@withContextGuard null
+                throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
             }
             val pageCount = pdfiumCore.getPageCount(document)
             val session = PdfDocumentSession(

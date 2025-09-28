@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -27,6 +28,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.novapdf.reader.R
+import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
 import com.google.android.material.appbar.MaterialToolbar
@@ -56,6 +58,18 @@ open class ReaderActivity : ComponentActivity() {
         uri?.let { viewModel.openDocument(it) }
     }
 
+    private val cloudDocumentLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+            val uri = result.data?.data ?: return@registerForActivityResult
+            val takeFlags = (result.data?.flags ?: 0) and
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            runCatching {
+                contentResolver.takePersistableUriPermission(uri, takeFlags)
+            }
+            viewModel.openDocument(uri)
+        }
+
     private val manageAllFilesPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             handleManageAllFilesResult()
@@ -70,6 +84,8 @@ open class ReaderActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             handleReadStoragePermissionResult(granted)
         }
+
+    private val downloadManager by lazy { PdfDownloadManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,7 +102,10 @@ open class ReaderActivity : ComponentActivity() {
                     PdfViewerRoute(
                         viewModel = viewModel,
                         snackbarHost = snackbarHost,
-                        onOpenDocument = { openDocumentLauncher.launch("application/pdf") }
+                        onOpenLocalDocument = { openDocumentLauncher.launch("application/pdf") },
+                        onOpenCloudDocument = { launchCloudDocumentPicker() },
+                        onOpenRemoteDocument = { url -> openRemoteDocument(url) },
+                        onDismissError = { viewModel.dismissError() }
                     )
                 }
             }
@@ -112,7 +131,7 @@ open class ReaderActivity : ComponentActivity() {
         legacyAdapter?.dispose()
     }
 
-    private fun requestStoragePermissionIfNeeded() {
+    protected open fun requestStoragePermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
         val manageStorage = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
         val currentlyGranted = if (manageStorage) {
@@ -186,6 +205,39 @@ open class ReaderActivity : ComponentActivity() {
             Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
         }
         manageAllFilesPermissionLauncher.launch(intent)
+    }
+
+    private fun launchCloudDocumentPicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/pdf"))
+        }
+        cloudDocumentLauncher.launch(intent)
+    }
+
+    private fun openRemoteDocument(url: String) {
+        lifecycleScope.launch {
+            showUserSnackbar(getString(R.string.remote_pdf_download_started))
+            val result = downloadManager.download(url)
+            result.onSuccess { uri ->
+                viewModel.openDocument(uri)
+            }.onFailure { error ->
+                showUserSnackbar(getString(R.string.remote_pdf_download_failed))
+                viewModel.reportRemoteOpenFailure(error)
+            }
+        }
+    }
+
+    private fun showUserSnackbar(message: String) {
+        if (useComposeUi) {
+            lifecycleScope.launch {
+                snackbarHost.showSnackbar(message)
+            }
+        } else {
+            val root = legacyRoot ?: return
+            Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
+        }
     }
 
     private fun showStorageSnackbar(
