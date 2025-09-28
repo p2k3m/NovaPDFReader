@@ -40,15 +40,15 @@ class PdfViewerScreenTest {
                     onPrefetchPages = { _, _ -> },
                     onToggleDynamicColor = {},
                     onToggleHighContrast = {},
+                    onToggleTalkBackIntegration = {},
+                    onFontScaleChanged = {},
                     dynamicColorSupported = true
                 )
             }
         }
 
         composeRule.onNodeWithText("Open a PDF to begin").assertIsDisplayed()
-        val dynamicColorLabel = composeRule.activity.getString(R.string.dynamic_color_label)
-        val highContrastLabel = composeRule.activity.getString(R.string.high_contrast_label)
-        composeRule.onNodeWithText(dynamicColorLabel).assertIsDisplayed()
-        composeRule.onNodeWithText(highContrastLabel).assertIsDisplayed()
+        val accessibilityTrigger = composeRule.activity.getString(R.string.accessibility_open_options)
+        composeRule.onNodeWithText(accessibilityTrigger).assertIsDisplayed()
     }
 }

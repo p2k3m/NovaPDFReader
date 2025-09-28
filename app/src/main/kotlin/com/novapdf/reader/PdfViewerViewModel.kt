@@ -51,6 +51,8 @@ data class PdfViewerUiState(
     val bookmarks: List<Int> = emptyList(),
     val dynamicColorEnabled: Boolean = true,
     val highContrastEnabled: Boolean = false,
+    val talkBackIntegrationEnabled: Boolean = false,
+    val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList()
 )
@@ -276,6 +278,15 @@ open class PdfViewerViewModel(
         } else {
             _uiState.value = _uiState.value.copy(highContrastEnabled = enabled)
         }
+    }
+
+    fun setTalkBackIntegrationEnabled(enabled: Boolean) {
+        _uiState.value = _uiState.value.copy(talkBackIntegrationEnabled = enabled)
+    }
+
+    fun setFontScale(scale: Float) {
+        val clamped = scale.coerceIn(0.8f, 2f)
+        _uiState.value = _uiState.value.copy(fontScale = clamped)
     }
 
     fun persistAnnotations() {
