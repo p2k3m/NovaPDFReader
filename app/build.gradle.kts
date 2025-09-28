@@ -66,7 +66,7 @@ android {
 
     defaultConfig {
         applicationId = resolvedApplicationId
-        minSdk = 21
+        minSdk = 24
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
@@ -450,7 +450,7 @@ dependencies {
     implementation("com.github.barteksc:pdfium-android:1.9.0") {
         exclude(group = "com.android.support", module = "support-compat")
     }
-    // Caffeine 3.x requires minSdk 26+ due to MethodHandle usage; stick to 2.x for API 21 support
+    // Caffeine 3.x requires minSdk 26+ due to MethodHandle usage; stick to 2.x for API 24 support
     implementation("com.github.ben-manes.caffeine:caffeine:2.9.3")
 
     implementation("androidx.room:room-runtime:2.6.1")
