@@ -360,6 +360,18 @@ jobs:
             fi
           done
 
+          echo "Waiting for package manager service to become available"
+          pm_deadline=$((5 * 60))
+          pm_elapsed=0
+          until adb shell cmd package list packages >/dev/null 2>&1; do
+            sleep 5
+            pm_elapsed=$((pm_elapsed + 5))
+            if [ $pm_elapsed -ge $pm_deadline ]; then
+              echo "Package manager service did not become available within $((pm_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
           echo "Installing $apk_path onto the emulator"
           adb install -r "$apk_path"
       - name: Capture screenshots
