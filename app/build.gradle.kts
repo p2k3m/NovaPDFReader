@@ -443,7 +443,9 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
-    implementation("com.github.barteksc:pdfium-android:1.9.0")
+    implementation("com.github.barteksc:pdfium-android:1.9.0") {
+        exclude(group = "com.android.support", module = "support-compat")
+    }
     // Caffeine 3.x requires minSdk 26+ due to MethodHandle usage; stick to 2.x for API 21 support
     implementation("com.github.ben-manes.caffeine:caffeine:2.9.3")
 
