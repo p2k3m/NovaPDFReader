@@ -43,36 +43,49 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Accessibility
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Brightness7
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
@@ -95,7 +108,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -122,6 +138,9 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
+private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -203,121 +222,245 @@ fun PdfViewerScreen(
         var showOutlineSheet by remember { mutableStateOf(false) }
         var showAccessibilitySheet by remember { mutableStateOf(false) }
         val exportErrorMessage = stringResource(id = R.string.export_failed)
+        var selectedDestination by rememberSaveable { mutableStateOf(MainDestination.Reader) }
+        val onboardingPreferences = remember(context) {
+            context.getSharedPreferences(ONBOARDING_PREFS, Context.MODE_PRIVATE)
+        }
+        var showOnboarding by rememberSaveable {
+            mutableStateOf(!onboardingPreferences.getBoolean(ONBOARDING_COMPLETE_KEY, false))
+        }
+        val onboardingPages = remember {
+            listOf(
+                OnboardingPage(
+                    icon = Icons.Outlined.MenuBook,
+                    titleRes = R.string.onboarding_page_library_title,
+                    descriptionRes = R.string.onboarding_page_library_description
+                ),
+                OnboardingPage(
+                    icon = Icons.Outlined.Edit,
+                    titleRes = R.string.onboarding_page_annotation_title,
+                    descriptionRes = R.string.onboarding_page_annotation_description
+                ),
+                OnboardingPage(
+                    icon = Icons.Filled.Search,
+                    titleRes = R.string.onboarding_page_search_title,
+                    descriptionRes = R.string.onboarding_page_search_description
+                )
+            )
+        }
+        val pagerState = rememberPagerState(pageCount = { onboardingPages.size })
+        val totalSearchResults = state.searchResults.sumOf { it.matches.size }
+        val searchFocusRequester = remember { FocusRequester() }
+        var requestSearchFocus by remember { mutableStateOf(false) }
+        val navigationItems = remember {
+            listOf(
+                NavigationItem(MainDestination.Home, Icons.Outlined.Home, R.string.navigation_home),
+                NavigationItem(MainDestination.Reader, Icons.Outlined.MenuBook, R.string.navigation_reader),
+                NavigationItem(MainDestination.Annotations, Icons.Outlined.Edit, R.string.navigation_annotations),
+                NavigationItem(MainDestination.Settings, Icons.Outlined.Settings, R.string.navigation_settings)
+            )
+        }
+        val playAdaptiveSummary = remember(state, echoModeController, fallbackHaptics) {
+            {
+                val summary = state.echoSummary()
+                if (summary != null) {
+                    echoModeController.speakSummary(summary) {
+                        fallbackHaptics()
+                    }
+                } else {
+                    fallbackHaptics()
+                }
+            }
+        }
+        val completeOnboarding = {
+            onboardingPreferences.edit().putBoolean(ONBOARDING_COMPLETE_KEY, true).apply()
+            showOnboarding = false
+        }
 
         DisposableEffect(echoModeController) {
             onDispose { echoModeController.shutdown() }
         }
 
         Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(text = "NovaPDF Reader", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = onOpenDocument) {
-                        Icon(imageVector = Icons.Outlined.FileOpen, contentDescription = "Open PDF")
+            topBar = {
+                val titleText = stringResource(id = R.string.app_name)
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            text = titleText,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.semantics { contentDescription = titleText }
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = onOpenDocument) {
+                            Icon(
+                                imageVector = Icons.Outlined.FileOpen,
+                                contentDescription = stringResource(id = R.string.open_pdf)
+                            )
+                        }
+                        IconButton(onClick = { showAccessibilitySheet = true }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Accessibility,
+                                contentDescription = stringResource(id = R.string.accessibility_open_options)
+                            )
+                        }
+                        if (selectedDestination == MainDestination.Reader) {
+                            val hasDocument = state.documentId != null
+                            IconButton(onClick = onSaveAnnotations, enabled = hasDocument) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Download,
+                                    contentDescription = stringResource(id = R.string.save_annotations)
+                                )
+                            }
+                            if (hasDocument) {
+                                IconButton(
+                                    onClick = { showOutlineSheet = true },
+                                    enabled = state.outline.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.List,
+                                        contentDescription = stringResource(id = R.string.pdf_outline)
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    val success = onExportDocument()
+                                    if (!success) {
+                                        coroutineScope.launch { snackbarHost.showSnackbar(exportErrorMessage) }
+                                    }
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Share,
+                                        contentDescription = stringResource(id = R.string.export_document)
+                                    )
+                                }
+                            }
+                            IconButton(onClick = onToggleBookmark, enabled = hasDocument) {
+                                val bookmarked = state.bookmarks.contains(state.currentPage)
+                                val icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = stringResource(id = R.string.toggle_bookmark)
+                                )
+                            }
+                        }
                     }
-                    IconButton(onClick = onSaveAnnotations) {
-                        Icon(imageVector = Icons.Outlined.Download, contentDescription = "Save annotations")
-                    }
-                    IconButton(onClick = { showAccessibilitySheet = true }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Accessibility,
-                            contentDescription = stringResource(id = R.string.accessibility_open_options)
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(onClick = {
+                    selectedDestination = MainDestination.Reader
+                    requestSearchFocus = true
+                }) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = stringResource(id = R.string.search_hint)
+                    )
+                }
+            },
+            floatingActionButtonPosition = FabPosition.End,
+            bottomBar = {
+                NavigationBar {
+                    navigationItems.forEach { item ->
+                        val labelText = stringResource(id = item.labelRes)
+                        NavigationBarItem(
+                            selected = selectedDestination == item.destination,
+                            onClick = { selectedDestination = item.destination },
+                            icon = {
+                                Icon(
+                                    imageVector = item.icon,
+                                    contentDescription = labelText
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = labelText,
+                                    modifier = Modifier.semantics { contentDescription = labelText }
+                                )
+                            }
                         )
                     }
-                    val hasDocument = state.documentId != null
-                    if (hasDocument) {
-                        IconButton(
-                            onClick = { showOutlineSheet = true },
-                            enabled = state.outline.isNotEmpty()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.List,
-                                contentDescription = stringResource(id = R.string.pdf_outline)
-                            )
-                        }
-                        IconButton(onClick = {
-                            val success = onExportDocument()
-                            if (!success) {
-                                coroutineScope.launch { snackbarHost.showSnackbar(exportErrorMessage) }
-                            }
-                        }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Share,
-                                contentDescription = stringResource(id = R.string.export_document)
-                            )
-                        }
-                    }
-                    IconButton(onClick = onToggleBookmark, enabled = hasDocument) {
-                        val bookmarked = state.bookmarks.contains(state.currentPage)
-                        val icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
-                        Icon(imageVector = icon, contentDescription = "Toggle bookmark")
-                    }
                 }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHost) }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Top
+            },
+            snackbarHost = { SnackbarHost(snackbarHost) }
+        ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
             ) {
-                SearchBar(
-                    query = searchQuery,
-                    onQueryChange = {
-                        searchQuery = it
-                        onSearch(it)
-                    },
-                    resultsCount = state.searchResults.sumOf { it.matches.size }
-                )
+                when (selectedDestination) {
+                    MainDestination.Home -> {
+                        HomeContent(
+                            onOpenDocument = onOpenDocument,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
 
-                AdaptiveFlowStatusRow(state) {
-                    val summary = state.echoSummary()
-                    if (summary != null) {
-                        echoModeController.speakSummary(summary) {
-                            fallbackHaptics()
-                        }
-                    } else {
-                        fallbackHaptics()
+                    MainDestination.Reader -> {
+                        ReaderContent(
+                            state = state,
+                            searchQuery = searchQuery,
+                            onQueryChange = {
+                                searchQuery = it
+                                onSearch(it)
+                            },
+                            totalSearchResults = totalSearchResults,
+                            onOpenDocument = onOpenDocument,
+                            onPlayAdaptiveSummary = playAdaptiveSummary,
+                            onOpenAccessibilityOptions = { showAccessibilitySheet = true },
+                            focusRequester = searchFocusRequester,
+                            requestFocus = requestSearchFocus,
+                            onFocusHandled = { requestSearchFocus = false },
+                            onPageChange = latestOnPageChange,
+                            onStrokeFinished = onStrokeFinished,
+                            renderPage = renderPage,
+                            requestPageSize = requestPageSize,
+                            onViewportWidthChanged = onViewportWidthChanged,
+                            onPrefetchPages = onPrefetchPages,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    MainDestination.Annotations -> {
+                        AnnotationsContent(
+                            annotationCount = state.activeAnnotations.size,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    MainDestination.Settings -> {
+                        SettingsContent(
+                            dynamicColorEnabled = state.dynamicColorEnabled,
+                            highContrastEnabled = state.highContrastEnabled,
+                            talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
+                            fontScale = state.fontScale,
+                            dynamicColorSupported = dynamicColorSupported,
+                            accessibilityManager = accessibilityManager,
+                            hapticFeedbackManager = hapticManager,
+                            onDynamicColorChanged = onToggleDynamicColor,
+                            onHighContrastChanged = onToggleHighContrast,
+                            onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
+                            onFontScaleChanged = onFontScaleChanged,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
 
-                FilledTonalButton(
-                    onClick = { showAccessibilitySheet = true },
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 16.dp)
-                        .fillMaxWidth()
-                ) {
-                    Text(text = stringResource(id = R.string.accessibility_open_options))
+                if (state.isLoading) {
+                    LoadingOverlay(progress = state.loadingProgress)
                 }
 
-                if (state.pageCount == 0) {
-                    EmptyState(onOpenDocument)
-                } else {
-                    PdfPager(
-                        modifier = Modifier.fillMaxSize(),
-                        state = state,
-                        onPageChange = latestOnPageChange,
-                        onStrokeFinished = onStrokeFinished,
-                        renderPage = renderPage,
-                        requestPageSize = requestPageSize,
-                        onViewportWidthChanged = onViewportWidthChanged,
-                        onPrefetchPages = onPrefetchPages
+                if (showOnboarding) {
+                    OnboardingOverlay(
+                        pages = onboardingPages,
+                        pagerState = pagerState,
+                        onSkip = completeOnboarding,
+                        onFinish = completeOnboarding
                     )
                 }
             }
-
-            if (state.isLoading) {
-                LoadingOverlay(progress = state.loadingProgress)
-            }
         }
-    }
 
     if (showOutlineSheet) {
         OutlineSheet(
@@ -348,7 +491,8 @@ fun PdfViewerScreen(
                 onDynamicColorChanged = onToggleDynamicColor,
                 onHighContrastChanged = onToggleHighContrast,
                 onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
-                onFontScaleChanged = onFontScaleChanged
+                onFontScaleChanged = onFontScaleChanged,
+                modifier = Modifier.fillMaxHeight(0.95f)
             )
         }
     }
@@ -400,18 +544,36 @@ private fun LoadingOverlay(progress: Float?) {
 private fun SearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
-    resultsCount: Int
+    resultsCount: Int,
+    focusRequester: FocusRequester,
+    requestFocus: Boolean,
+    onFocusHandled: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
+        LaunchedEffect(requestFocus) {
+            if (requestFocus) {
+                focusRequester.requestFocus()
+                onFocusHandled()
+            }
+        }
         OutlinedTextField(
             value = query,
             onValueChange = onQueryChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(text = stringResource(id = R.string.search_hint)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester),
+            label = {
+                val labelText = stringResource(id = R.string.search_hint)
+                Text(
+                    text = labelText,
+                    modifier = Modifier.semantics { contentDescription = labelText }
+                )
+            },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Filled.Search,
@@ -421,11 +583,80 @@ private fun SearchBar(
             singleLine = true
         )
         if (query.isNotBlank()) {
+            val resultsText = stringResource(id = R.string.search_results_count, resultsCount)
             Text(
-                text = stringResource(id = R.string.search_results_count, resultsCount),
+                text = resultsText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .semantics { contentDescription = resultsText }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderContent(
+    state: PdfViewerUiState,
+    searchQuery: String,
+    onQueryChange: (String) -> Unit,
+    totalSearchResults: Int,
+    onOpenDocument: () -> Unit,
+    onPlayAdaptiveSummary: () -> Unit,
+    onOpenAccessibilityOptions: () -> Unit,
+    focusRequester: FocusRequester,
+    requestFocus: Boolean,
+    onFocusHandled: () -> Unit,
+    onPageChange: (Int) -> Unit,
+    onStrokeFinished: (AnnotationCommand) -> Unit,
+    renderPage: suspend (Int, Int) -> Bitmap?,
+    requestPageSize: suspend (Int) -> Size?,
+    onViewportWidthChanged: (Int) -> Unit,
+    onPrefetchPages: (List<Int>, Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Top
+    ) {
+        SearchBar(
+            query = searchQuery,
+            onQueryChange = onQueryChange,
+            resultsCount = totalSearchResults,
+            focusRequester = focusRequester,
+            requestFocus = requestFocus,
+            onFocusHandled = onFocusHandled
+        )
+
+        AdaptiveFlowStatusRow(state, onPlaySummary = onPlayAdaptiveSummary)
+
+        FilledTonalButton(
+            onClick = onOpenAccessibilityOptions,
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(top = 16.dp)
+                .fillMaxWidth()
+        ) {
+            val buttonText = stringResource(id = R.string.accessibility_open_options)
+            Text(
+                text = buttonText,
+                modifier = Modifier.semantics { contentDescription = buttonText }
+            )
+        }
+
+        if (state.pageCount == 0) {
+            EmptyState(onOpenDocument)
+        } else {
+            PdfPager(
+                modifier = Modifier.fillMaxSize(),
+                state = state,
+                onPageChange = onPageChange,
+                onStrokeFinished = onStrokeFinished,
+                renderPage = renderPage,
+                requestPageSize = requestPageSize,
+                onViewportWidthChanged = onViewportWidthChanged,
+                onPrefetchPages = onPrefetchPages
             )
         }
     }
@@ -482,6 +713,256 @@ private fun AdaptiveFlowStatusRow(
 }
 
 @Composable
+private fun HomeContent(
+    onOpenDocument: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val titleText = stringResource(id = R.string.home_welcome_title)
+        Text(
+            text = titleText,
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .padding(bottom = 16.dp)
+                .semantics { contentDescription = titleText }
+        )
+        val bodyText = stringResource(id = R.string.home_welcome_body)
+        Text(
+            text = bodyText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .padding(bottom = 24.dp)
+                .semantics { contentDescription = bodyText }
+        )
+        Button(onClick = onOpenDocument) {
+            val buttonText = stringResource(id = R.string.empty_state_button)
+            Text(
+                text = buttonText,
+                modifier = Modifier.semantics { contentDescription = buttonText }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnnotationsContent(
+    annotationCount: Int,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val titleText = stringResource(id = R.string.annotations_title)
+        Text(
+            text = titleText,
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .padding(bottom = 12.dp)
+                .semantics { contentDescription = titleText }
+        )
+        val message = if (annotationCount > 0) {
+            stringResource(id = R.string.annotations_summary, annotationCount)
+        } else {
+            stringResource(id = R.string.annotations_empty)
+        }
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { contentDescription = message }
+        )
+    }
+}
+
+@Composable
+private fun SettingsContent(
+    dynamicColorEnabled: Boolean,
+    highContrastEnabled: Boolean,
+    talkBackIntegrationEnabled: Boolean,
+    fontScale: Float,
+    dynamicColorSupported: Boolean,
+    accessibilityManager: AccessibilityManager?,
+    hapticFeedbackManager: HapticFeedbackManager,
+    onDynamicColorChanged: (Boolean) -> Unit,
+    onHighContrastChanged: (Boolean) -> Unit,
+    onTalkBackIntegrationChanged: (Boolean) -> Unit,
+    onFontScaleChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AccessibilitySettingsSheet(
+        dynamicColorEnabled = dynamicColorEnabled,
+        highContrastEnabled = highContrastEnabled,
+        talkBackIntegrationEnabled = talkBackIntegrationEnabled,
+        fontScale = fontScale,
+        dynamicColorSupported = dynamicColorSupported,
+        accessibilityManager = accessibilityManager,
+        hapticFeedbackManager = hapticFeedbackManager,
+        onDynamicColorChanged = onDynamicColorChanged,
+        onHighContrastChanged = onHighContrastChanged,
+        onTalkBackIntegrationChanged = onTalkBackIntegrationChanged,
+        onFontScaleChanged = onFontScaleChanged,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun OnboardingOverlay(
+    pages: List<OnboardingPage>,
+    pagerState: PagerState,
+    onSkip: () -> Unit,
+    onFinish: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
+        modifier = modifier.fillMaxSize()
+    ) {
+        val coroutineScope = rememberCoroutineScope()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onSkip) {
+                    val skipText = stringResource(id = R.string.onboarding_skip)
+                    Text(
+                        text = skipText,
+                        modifier = Modifier.semantics { contentDescription = skipText }
+                    )
+                }
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth()
+            ) { pageIndex ->
+                val page = pages[pageIndex]
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = page.icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(72.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    val titleText = stringResource(id = page.titleRes)
+                    Text(
+                        text = titleText,
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.semantics { contentDescription = titleText }
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    val descriptionText = stringResource(id = page.descriptionRes)
+                    Text(
+                        text = descriptionText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp)
+                            .semantics { contentDescription = descriptionText }
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 24.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(pages.size) { index ->
+                        val isSelected = pagerState.currentPage == index
+                        Box(
+                            modifier = Modifier
+                                .size(if (isSelected) 12.dp else 8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outline
+                                )
+                        )
+                        if (index != pages.lastIndex) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                    }
+                }
+
+                val isLastPage = pagerState.currentPage == pages.lastIndex
+                val buttonText = if (isLastPage) {
+                    stringResource(id = R.string.onboarding_get_started)
+                } else {
+                    stringResource(id = R.string.onboarding_next)
+                }
+                Button(
+                    onClick = {
+                        if (isLastPage) {
+                            onFinish()
+                        } else {
+                            coroutineScope.launch {
+                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                            }
+                        }
+                    }
+                ) {
+                    Text(
+                        text = buttonText,
+                        modifier = Modifier.semantics { contentDescription = buttonText }
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class OnboardingPage(
+    val icon: ImageVector,
+    @StringRes val titleRes: Int,
+    @StringRes val descriptionRes: Int
+)
+
+private data class NavigationItem(
+    val destination: MainDestination,
+    val icon: ImageVector,
+    @StringRes val labelRes: Int
+)
+
+private enum class MainDestination {
+    Home,
+    Reader,
+    Annotations,
+    Settings
+}
+
+@Composable
 private fun AccessibilitySettingsSheet(
     dynamicColorEnabled: Boolean,
     highContrastEnabled: Boolean,
@@ -493,15 +974,15 @@ private fun AccessibilitySettingsSheet(
     onDynamicColorChanged: (Boolean) -> Unit,
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
-    onFontScaleChanged: (Float) -> Unit
+    onFontScaleChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .fillMaxHeight(0.95f)
             .verticalScroll(scrollState)
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
