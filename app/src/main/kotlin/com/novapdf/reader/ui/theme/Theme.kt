@@ -1,6 +1,5 @@
 package com.novapdf.reader.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +47,7 @@ fun NovaPdfTheme(
     content: @Composable () -> Unit
 ) {
     val colorScheme: ColorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        dynamicColor -> {
             val contrastLevel = if (highContrast) HIGH_CONTRAST_LEVEL else DEFAULT_CONTRAST_LEVEL
             materialColorSchemeFromSeed(
                 seedColor = seedColor,
@@ -63,7 +62,8 @@ fun NovaPdfTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = NovaPdfTypography,
+        shapes = NovaPdfShapes,
         content = content
     )
 }

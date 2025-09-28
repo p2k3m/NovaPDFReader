@@ -34,6 +34,7 @@
     <string name="adaptive_flow_summary_description">Speed: %1$.0f pages/min · Sensitivity: %2$.1f</string>
     <string name="adaptive_flow_summary_button">Play summary</string>
     <string name="adaptive_flow_summary_unavailable">Adaptive Flow paused</string>
-    <string name="empty_state_message">Open a PDF to start reading.</string>
+    <string name="empty_state_message">Discover knowledge, one page at a time.</string>
     <string name="empty_state_button">Open document</string>
+    <string name="empty_state_supporting">Import a PDF or revisit your saved library to keep your learning streak alive.</string>
 </resources>
