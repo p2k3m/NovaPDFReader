@@ -173,10 +173,11 @@ class PdfDocumentRepository(
         val session = openSession.value ?: return@withContextGuard null
         pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
-            pdfiumCore.openPage(session.document, pageIndex)
-            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex).roundToInt()
-            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex).roundToInt()
-            pdfiumCore.closePage(session.document, pageIndex)
+            if (!session.document.hasPage(pageIndex)) {
+                pdfiumCore.openPage(session.document, pageIndex)
+            }
+            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
+            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
             val size = Size(width, height)
             pageSizeCache.put(pageIndex, size)
             size
@@ -383,10 +384,11 @@ class PdfDocumentRepository(
         val session = openSession.value ?: return null
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
-            pdfiumCore.openPage(session.document, pageIndex)
-            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex).roundToInt()
-            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex).roundToInt()
-            pdfiumCore.closePage(session.document, pageIndex)
+            if (!session.document.hasPage(pageIndex)) {
+                pdfiumCore.openPage(session.document, pageIndex)
+            }
+            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
+            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
             val size = Size(width, height)
             pageSizeCache.put(pageIndex, size)
             size
@@ -416,7 +418,9 @@ class PdfDocumentRepository(
             val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
-                pdfiumCore.openPage(session.document, pageIndex)
+                if (!session.document.hasPage(pageIndex)) {
+                    pdfiumCore.openPage(session.document, pageIndex)
+                }
                 val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
                 pageBitmapCache.put(key, bitmap)
@@ -425,10 +429,6 @@ class PdfDocumentRepository(
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
                 null
             } finally {
-                try {
-                    pdfiumCore.closePage(session.document, pageIndex)
-                } catch (_: Throwable) {
-                }
                 Trace.endSection()
             }
         }
