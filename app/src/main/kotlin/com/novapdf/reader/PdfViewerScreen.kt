@@ -869,11 +869,12 @@ private fun PdfPageItem(
         )
         val pageShape = MaterialTheme.shapes.extraLarge
         val elevatedSurface = MaterialTheme.colorScheme.surfaceColorAtElevation(6.dp)
-        val gradientColors = remember(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary) {
+        val colorScheme = MaterialTheme.colorScheme
+        val gradientColors = remember(colorScheme.primary, colorScheme.secondary) {
             listOf(
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                colorScheme.primary.copy(alpha = 0.4f),
                 Color.Transparent,
-                MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
+                colorScheme.secondary.copy(alpha = 0.4f)
             )
         }
         var showPageFlip by remember(state.documentId, pageIndex) { mutableStateOf(false) }
