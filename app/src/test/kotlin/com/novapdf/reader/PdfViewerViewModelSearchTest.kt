@@ -3,18 +3,22 @@ package com.novapdf.reader
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.util.Size
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.model.RectSnapshot
+import com.novapdf.reader.model.SearchMatch
+import com.novapdf.reader.model.SearchResult
+import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import com.shockwave.pdfium.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -50,13 +54,14 @@ class PdfViewerViewModelSearchTest {
 
     @Test
     @Config(application = TestPdfApp::class)
-    fun `performSearch returns detected regions from rendered bitmap`() = runTest {
+    fun `search delegates to Lucene coordinator`() = runTest {
         val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -67,51 +72,48 @@ class PdfViewerViewModelSearchTest {
         val session = PdfDocumentSession(
             documentId = "doc",
             uri = Uri.parse("file://doc"),
-            pageCount = 1,
+            pageCount = 3,
             document = mock<PdfDocument>(),
             fileDescriptor = mock<ParcelFileDescriptor>()
         )
         whenever(pdfRepository.session).thenReturn(MutableStateFlow(session))
-        whenever(pdfRepository.getPageSize(0)).thenReturn(Size(200, 280))
 
-        val bitmap = Bitmap.createBitmap(200, 280, Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(android.graphics.Color.WHITE)
-        val canvas = android.graphics.Canvas(bitmap)
-        val paint = android.graphics.Paint().apply { color = android.graphics.Color.BLACK }
-        canvas.drawRect(20f, 40f, 180f, 100f, paint)
-        canvas.drawRect(30f, 140f, 170f, 200f, paint)
-
-        whenever(pdfRepository.renderPage(eq(0), eq(720))).thenReturn(bitmap)
+        val searchResults = listOf(
+            SearchResult(
+                pageIndex = 1,
+                matches = listOf(SearchMatch(0, listOf(RectSnapshot(0f, 0f, 1f, 1f))))
+            )
+        )
+        whenever(searchCoordinator.search(eq(session), eq("galaxy"))).thenReturn(searchResults)
 
         app.installDependencies(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
             bookmarkManager,
-            maintenanceScheduler
+            maintenanceScheduler,
+            searchCoordinator
         )
 
         val viewModel = PdfViewerViewModel(app)
 
-        val matches = viewModel.performSearch(0, "hello world")
+        viewModel.search("galaxy")
+        advanceUntilIdle()
 
-        assertEquals(1, matches.size)
-        val match = matches.first()
-        assertEquals(0, match.indexInPage)
-        assertTrue(match.boundingBoxes.size >= 2)
-        assertTrue(bitmap.isRecycled)
-        verify(pdfRepository).renderPage(eq(0), eq(720))
+        verify(searchCoordinator).search(eq(session), eq("galaxy"))
+        assertEquals(searchResults, viewModel.uiState.value.searchResults)
     }
 
     @Test
     @Config(application = TestPdfApp::class)
-    fun `performSearch returns empty list when rendering fails`() = runTest {
+    fun `blank query clears previous results`() = runTest {
         val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -122,28 +124,86 @@ class PdfViewerViewModelSearchTest {
         val session = PdfDocumentSession(
             documentId = "doc",
             uri = Uri.parse("file://doc"),
-            pageCount = 1,
+            pageCount = 2,
             document = mock<PdfDocument>(),
             fileDescriptor = mock<ParcelFileDescriptor>()
         )
         whenever(pdfRepository.session).thenReturn(MutableStateFlow(session))
-        whenever(pdfRepository.getPageSize(0)).thenReturn(Size(200, 280))
-        whenever(pdfRepository.renderPage(eq(0), eq(720))).thenReturn(null)
+
+        whenever(searchCoordinator.search(eq(session), any())).thenReturn(
+            listOf(
+                SearchResult(
+                    pageIndex = 0,
+                    matches = listOf(SearchMatch(0, listOf(RectSnapshot(0f, 0f, 1f, 1f))))
+                )
+            )
+        )
 
         app.installDependencies(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
             bookmarkManager,
-            maintenanceScheduler
+            maintenanceScheduler,
+            searchCoordinator
         )
 
         val viewModel = PdfViewerViewModel(app)
 
-        val matches = viewModel.performSearch(0, "hello")
+        viewModel.search("history")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.searchResults.isNotEmpty())
 
-        assertTrue(matches.isEmpty())
-        verify(pdfRepository).renderPage(eq(0), eq(720))
+        viewModel.search("")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.searchResults.isEmpty())
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openDocument warms up index`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+
+        val session = PdfDocumentSession(
+            documentId = "doc",
+            uri = Uri.parse("file://doc"),
+            pageCount = 5,
+            document = mock<PdfDocument>(),
+            fileDescriptor = mock<ParcelFileDescriptor>()
+        )
+        whenever(pdfRepository.open(any())).thenReturn(session)
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
+        whenever(pdfRepository.renderPage(eq(0), any())).thenReturn(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        val uri = Uri.parse("file://doc")
+        viewModel.openDocument(uri)
+        advanceUntilIdle()
+
+        verify(searchCoordinator).prepare(eq(session))
     }
 
     class TestPdfApp : NovaPdfApp() {
@@ -156,13 +216,15 @@ class PdfViewerViewModelSearchTest {
             pdfRepository: PdfDocumentRepository,
             adaptiveFlowManager: AdaptiveFlowManager,
             bookmarkManager: BookmarkManager,
-            documentMaintenanceScheduler: DocumentMaintenanceScheduler
+            documentMaintenanceScheduler: DocumentMaintenanceScheduler,
+            searchCoordinator: LuceneSearchCoordinator
         ) {
             setField("annotationRepository", annotationRepository)
             setField("pdfDocumentRepository", pdfRepository)
             setField("adaptiveFlowManager", adaptiveFlowManager)
             setField("bookmarkManager", bookmarkManager)
             setField("documentMaintenanceScheduler", documentMaintenanceScheduler)
+            setField("searchCoordinator", searchCoordinator)
         }
 
         private fun setField(name: String, value: Any) {

@@ -8,6 +8,8 @@ import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 open class NovaPdfApp : Application() {
     lateinit var annotationRepository: AnnotationRepository
@@ -22,11 +24,15 @@ open class NovaPdfApp : Application() {
         private set
     lateinit var documentMaintenanceScheduler: DocumentMaintenanceScheduler
         private set
+    lateinit var searchCoordinator: LuceneSearchCoordinator
+        private set
 
     override fun onCreate() {
         super.onCreate()
+        PDFBoxResourceLoader.init(applicationContext)
         annotationRepository = AnnotationRepository(this)
         pdfDocumentRepository = PdfDocumentRepository(this)
+        searchCoordinator = LuceneSearchCoordinator(this, pdfDocumentRepository)
         adaptiveFlowManager = AdaptiveFlowManager(this)
         database = Room.databaseBuilder(
             applicationContext,
@@ -39,5 +45,12 @@ open class NovaPdfApp : Application() {
         )
         documentMaintenanceScheduler = DocumentMaintenanceScheduler(this)
         documentMaintenanceScheduler.ensurePeriodicSync()
+    }
+
+    override fun onTerminate() {
+        super.onTerminate()
+        if (this::searchCoordinator.isInitialized) {
+            searchCoordinator.dispose()
+        }
     }
 }

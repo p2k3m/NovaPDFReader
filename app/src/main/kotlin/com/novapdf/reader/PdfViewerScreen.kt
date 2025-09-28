@@ -45,6 +45,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -150,6 +152,7 @@ import kotlinx.coroutines.launch
 private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
 private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
+private const val THUMBNAIL_TARGET_WIDTH = 320
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -174,7 +177,7 @@ fun PdfViewerRoute(
         onStrokeFinished = { viewModel.addAnnotation(it) },
         onSaveAnnotations = { viewModel.persistAnnotations() },
         onSearch = { viewModel.search(it) },
-        onToggleBookmark = { viewModel.toggleBookmark() },
+        onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
         onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
         onExportDocument = { viewModel.exportDocument(context) },
         renderPage = { index, width -> viewModel.renderPage(index, width) },
@@ -202,7 +205,7 @@ fun PdfViewerScreen(
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onSaveAnnotations: () -> Unit,
     onSearch: (String) -> Unit,
-    onToggleBookmark: () -> Unit,
+    onToggleBookmark: (Int) -> Unit,
     onOutlineDestinationSelected: (Int) -> Unit,
     onExportDocument: () -> Boolean,
     renderPage: suspend (Int, Int) -> Bitmap?,
@@ -356,7 +359,7 @@ fun PdfViewerScreen(
                                     )
                                 }
                             }
-                            IconButton(onClick = onToggleBookmark, enabled = hasDocument) {
+                            IconButton(onClick = { onToggleBookmark(state.currentPage) }, enabled = hasDocument) {
                                 val bookmarked = state.bookmarks.contains(state.currentPage)
                                 val icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
                                 Icon(
@@ -435,6 +438,7 @@ fun PdfViewerScreen(
                             onFocusHandled = { requestSearchFocus = false },
                             onPageChange = latestOnPageChange,
                             onStrokeFinished = onStrokeFinished,
+                            onToggleBookmark = onToggleBookmark,
                             renderPage = renderPage,
                             requestPageSize = requestPageSize,
                             onViewportWidthChanged = onViewportWidthChanged,
@@ -806,6 +810,7 @@ private fun ReaderContent(
     onFocusHandled: () -> Unit,
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
@@ -849,6 +854,7 @@ private fun ReaderContent(
                 state = state,
                 onPageChange = onPageChange,
                 onStrokeFinished = onStrokeFinished,
+                onToggleBookmark = onToggleBookmark,
                 renderPage = renderPage,
                 requestPageSize = requestPageSize,
                 onViewportWidthChanged = onViewportWidthChanged,
@@ -1630,6 +1636,7 @@ private fun PdfPager(
     state: PdfViewerUiState,
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
@@ -1642,6 +1649,7 @@ private fun PdfPager(
     val latestStrokeFinished by rememberUpdatedState(onStrokeFinished)
     val latestViewportWidth by rememberUpdatedState(onViewportWidthChanged)
     val latestPrefetch by rememberUpdatedState(onPrefetchPages)
+    val latestBookmarkToggle by rememberUpdatedState(onToggleBookmark)
 
     LaunchedEffect(state.pageCount, state.currentPage) {
         if (state.pageCount <= 0) return@LaunchedEffect
@@ -1744,6 +1752,223 @@ private fun PdfPager(
                 .fillMaxWidth()
                 .height(96.dp),
             reverse = true
+        )
+
+        ThumbnailStrip(
+            state = state,
+            lazyListState = lazyListState,
+            renderPage = latestRenderPage,
+            onToggleBookmark = latestBookmarkToggle,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = 24.dp)
+        )
+    }
+}
+
+@Composable
+private fun ThumbnailStrip(
+    state: PdfViewerUiState,
+    lazyListState: LazyListState,
+    renderPage: suspend (Int, Int) -> Bitmap?,
+    onToggleBookmark: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (state.pageCount <= 0) return
+    var selectedPage by rememberSaveable(state.documentId) { mutableStateOf(state.currentPage) }
+    var showBookmarksOnly by rememberSaveable(state.documentId) { mutableStateOf(false) }
+
+    LaunchedEffect(state.documentId, state.currentPage) {
+        selectedPage = state.currentPage
+    }
+
+    val pagesToDisplay = remember(state.pageCount, state.bookmarks, showBookmarksOnly) {
+        val allPages = (0 until state.pageCount).toList()
+        if (showBookmarksOnly) {
+            allPages.filter { page -> page in state.bookmarks }
+        } else {
+            allPages
+        }
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+    val surfaceColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+
+    Surface(
+        modifier = modifier
+            .padding(horizontal = 16.dp)
+            .shadow(12.dp, MaterialTheme.shapes.large, clip = false),
+        color = surfaceColor,
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(modifier = Modifier.padding(vertical = 12.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(id = R.string.thumbnail_strip_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(id = R.string.thumbnail_strip_filter_label),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Switch(
+                        checked = showBookmarksOnly,
+                        onCheckedChange = { showBookmarksOnly = it }
+                    )
+                }
+            }
+
+            if (pagesToDisplay.isEmpty()) {
+                Text(
+                    text = stringResource(id = R.string.thumbnail_strip_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 24.dp)
+                )
+            } else {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(pagesToDisplay) { pageIndex ->
+                        ThumbnailItem(
+                            documentId = state.documentId,
+                            pageIndex = pageIndex,
+                            isSelected = pageIndex == selectedPage,
+                            isBookmarked = state.bookmarks.contains(pageIndex),
+                            renderPage = renderPage,
+                            onSelect = {
+                                selectedPage = pageIndex
+                                coroutineScope.launch {
+                                    lazyListState.animateScrollToItem(pageIndex)
+                                }
+                            },
+                            onToggleBookmark = { onToggleBookmark(pageIndex) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailItem(
+    documentId: String?,
+    pageIndex: Int,
+    isSelected: Boolean,
+    isBookmarked: Boolean,
+    renderPage: suspend (Int, Int) -> Bitmap?,
+    onSelect: () -> Unit,
+    onToggleBookmark: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var thumbnail by remember(documentId, pageIndex) { mutableStateOf<Bitmap?>(null) }
+    val latestRender by rememberUpdatedState(renderPage)
+
+    LaunchedEffect(documentId, pageIndex) {
+        val previous = thumbnail
+        if (documentId == null) {
+            thumbnail = null
+            if (previous != null && !previous.isRecycled) {
+                previous.recycle()
+            }
+            return@LaunchedEffect
+        }
+        val rendered = latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
+        thumbnail = rendered
+        if (previous != null && previous != rendered && !previous.isRecycled) {
+            previous.recycle()
+        }
+    }
+
+    DisposableEffect(documentId, pageIndex) {
+        onDispose {
+            thumbnail?.let { bitmap ->
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+            thumbnail = null
+        }
+    }
+
+    val outlineColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val elevation = if (isSelected) 8.dp else 2.dp
+    val baseModifier = modifier
+        .width(96.dp)
+        .height(128.dp)
+        .clip(MaterialTheme.shapes.medium)
+        .background(MaterialTheme.colorScheme.surfaceColorAtElevation(elevation))
+        .border(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = outlineColor,
+            shape = MaterialTheme.shapes.medium
+        )
+        .clickable(onClick = onSelect)
+
+    Box(modifier = baseModifier) {
+        val bitmap = thumbnail
+        if (bitmap != null && !bitmap.isRecycled) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = stringResource(
+                    id = R.string.thumbnail_page_content_description,
+                    pageIndex + 1
+                ),
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            }
+        }
+
+        IconButton(
+            onClick = onToggleBookmark,
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            val icon = if (isBookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
+            Icon(
+                imageVector = icon,
+                contentDescription = stringResource(id = R.string.toggle_bookmark),
+                tint = if (isBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Text(
+            text = (pageIndex + 1).toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 6.dp)
+                .clip(MaterialTheme.shapes.small)
+                .background(
+                    MaterialTheme.colorScheme.surfaceColorAtElevation(6.dp)
+                        .copy(alpha = 0.85f)
+                )
+                .padding(horizontal = 6.dp, vertical = 2.dp)
         )
     }
 }

@@ -1,9 +1,9 @@
 package com.novapdf.reader
 
 import android.app.Application
-import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
+import android.util.Log
 import android.util.Size
 import android.content.res.Configuration
 import android.os.Build
@@ -19,13 +19,10 @@ import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
-import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
-import com.novapdf.reader.search.detectTextRegions
-import com.novapdf.reader.search.normalizeSearchQuery
+import com.novapdf.reader.search.LuceneSearchCoordinator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,9 +32,6 @@ import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
-private const val SEARCH_RENDER_MIN_WIDTH = 720
-private const val SEARCH_RENDER_MAX_WIDTH = 1600
-
 data class PdfViewerUiState(
     val documentId: String? = null,
     val pageCount: Int = 0,
@@ -75,6 +69,7 @@ open class PdfViewerViewModel(
     private val adaptiveFlowManager: AdaptiveFlowManager = app.adaptiveFlowManager
     private val bookmarkManager: BookmarkManager = app.bookmarkManager
     private val documentMaintenanceScheduler: DocumentMaintenanceScheduler = app.documentMaintenanceScheduler
+    private val searchCoordinator: LuceneSearchCoordinator = app.searchCoordinator
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
@@ -153,6 +148,7 @@ open class PdfViewerViewModel(
                     outline = pdfRepository.outline.value
                 )
             }
+            searchCoordinator.prepare(session)
         }
     }
 
@@ -273,11 +269,13 @@ open class PdfViewerViewModel(
         documentMaintenanceScheduler.scheduleAutosave(documentId)
     }
 
-    fun toggleBookmark() {
+    fun toggleBookmark(pageIndex: Int = _uiState.value.currentPage) {
         val documentId = _uiState.value.documentId ?: return
-        val currentPage = _uiState.value.currentPage
+        val pageCount = _uiState.value.pageCount
+        if (pageCount <= 0) return
+        val targetPage = pageIndex.coerceIn(0, pageCount - 1)
         viewModelScope.launch {
-            bookmarkManager.toggleBookmark(documentId, currentPage)
+            bookmarkManager.toggleBookmark(documentId, targetPage)
             _uiState.value = _uiState.value.copy(
                 bookmarks = bookmarkManager.bookmarks(documentId)
             )
@@ -322,40 +320,10 @@ open class PdfViewerViewModel(
         }
         searchJob = viewModelScope.launch(Dispatchers.IO) {
             val session = pdfRepository.session.value ?: return@launch
-            val results = mutableListOf<SearchResult>()
-            for (pageIndex in 0 until session.pageCount) {
-                ensureActive()
-                val matches = performSearch(pageIndex, query)
-                if (matches.isNotEmpty()) {
-                    results += SearchResult(pageIndex, matches)
-                }
-            }
+            val results = runCatching { searchCoordinator.search(session, query) }
+                .onFailure { throwable -> Log.e("PdfViewerViewModel", "Search failed", throwable) }
+                .getOrDefault(emptyList())
             updateUiState { it.copy(searchResults = results) }
-        }
-    }
-
-    internal suspend fun performSearch(pageIndex: Int, query: String): List<SearchMatch> {
-        val session = pdfRepository.session.value ?: return emptyList()
-        val normalizedQuery = normalizeSearchQuery(query)
-        if (normalizedQuery.isEmpty()) return emptyList()
-        val pageSize = pdfRepository.getPageSize(pageIndex) ?: return emptyList()
-        val targetWidth = pageSize.width.coerceIn(SEARCH_RENDER_MIN_WIDTH, SEARCH_RENDER_MAX_WIDTH)
-        val bitmap = pdfRepository.renderPage(pageIndex, targetWidth) ?: return emptyList()
-        return try {
-            approximateMatchesFromBitmap(bitmap)
-        } finally {
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
-            }
-        }
-    }
-
-    private fun approximateMatchesFromBitmap(bitmap: Bitmap): List<SearchMatch> {
-        val regions = detectTextRegions(bitmap)
-        return if (regions.isEmpty()) {
-            emptyList()
-        } else {
-            listOf(SearchMatch(indexInPage = 0, boundingBoxes = regions))
         }
     }
 
