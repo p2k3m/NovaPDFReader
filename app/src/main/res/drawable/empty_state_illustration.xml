@@ -28,10 +28,10 @@
             android:fillColor="#FFA7C9"
             android:pathData="M106,82h24v8h-24z" />
         <path
-            android:fillColor="#FF6E9ED"
+            android:fillColor="#FF6E9E"
             android:pathData="M82,106h12v8H82z" />
         <path
-            android:fillColor="#FF6E9ED"
+            android:fillColor="#FF6E9E"
             android:pathData="M118,106h12v8h-12z" />
         <path
             android:fillColor="#FFEF4982"
@@ -46,6 +46,6 @@
         android:pathData="M44,54l6,-2 2,-6 2,6 6,2 -6,2 -2,6 -2,-6z" />
     <path
         android:name="spark2"
-        android:fillColor="#FF6E9ED"
+        android:fillColor="#FF6E9E"
         android:pathData="M148,40l4,-2 2,-4 2,4 4,2 -4,2 -2,4 -2,-4z" />
 </vector>
