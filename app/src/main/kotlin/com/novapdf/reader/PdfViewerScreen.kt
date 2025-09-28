@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.util.Size
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -36,8 +37,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.verticalScroll
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -65,7 +66,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.FilledTonalButton
@@ -96,10 +96,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -190,7 +188,10 @@ fun PdfViewerScreen(
     CompositionLocalProvider(LocalDensity provides adjustedDensity) {
         val context = LocalContext.current
         val hapticFeedback = LocalHapticFeedback.current
-        val accessibilityManager = LocalAccessibilityManager.current
+        val accessibilityManager = remember(context) {
+            (context.applicationContext.getSystemService(Context.ACCESSIBILITY_SERVICE)
+                as? AccessibilityManager)
+        }
         val hapticManager = rememberHapticFeedbackManager()
         val echoModeController = remember(context.applicationContext) {
             EchoModeController(context.applicationContext)
@@ -334,8 +335,7 @@ fun PdfViewerScreen(
         ModalBottomSheet(
             onDismissRequest = { showAccessibilitySheet = false },
             sheetState = sheetState,
-            modifier = Modifier.fillMaxHeight(),
-            dragHandle = { SheetDefaults.DragHandle() }
+            modifier = Modifier.fillMaxHeight()
         ) {
             AccessibilitySettingsSheet(
                 dynamicColorEnabled = state.dynamicColorEnabled,
@@ -787,12 +787,13 @@ private fun announceFontScale(
     accessibilityManager.sendAnnouncement(message)
 }
 
-private fun AccessibilityManager.sendAnnouncement(message: String) {
+private fun AccessibilityManager?.sendAnnouncement(message: String) {
+    val manager = this ?: return
     val event = AccessibilityEvent.obtain().apply {
         eventType = AccessibilityEvent.TYPE_ANNOUNCEMENT
         text.add(message)
     }
-    sendEvent(event)
+    manager.sendEvent(event)
 }
 
 @Composable
