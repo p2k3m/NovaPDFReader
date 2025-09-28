@@ -354,6 +354,8 @@ fun PdfViewerScreen(
     }
 }
 
+}
+
 @Composable
 private fun LoadingOverlay(progress: Float?) {
     Box(
