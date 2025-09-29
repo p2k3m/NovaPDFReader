@@ -47,16 +47,16 @@ that the project compiles.
 
 Continuous integration now provisions a synthetic stress PDF with 32 pages that mix large,
 panoramic, and extreme aspect ratios to exercise Pdfium rendering paths. Instrumentation
-tests now open portrait, landscape, tall infographic, and ultra-wide panorama variants of
-the document to ensure the viewer can handle atypical source material. The workflow also
-fails fast if logcat reports an
-Application Not Responding dialog, fatal Java exception, fatal signal, or forced process
-restart for `com.novapdf.reader`. The workflow
-verifies that the `LargePdfInstrumentedTest` suite executed without being skipped so
-regressions cannot silently avoid the heavy document coverage. To reproduce the checks
-locally, run
-`./gradlew connectedAndroidTest` on an emulator or device and inspect `adb logcat` for `ANR
-in com.novapdf.reader` or fatal exception entries.
+tests open portrait, landscape, tall infographic, and ultra-wide panorama variants of the
+document and drive a thousand-page fixture through the UI to ensure the viewer can handle
+atypical source material. The workflow fails fast if logcat reports an Application Not
+Responding dialog, fatal Java exception, fatal signal, or forced process restart for
+`com.novapdf.reader`. It also verifies that both the
+`LargePdfInstrumentedTest.openLargeAndUnusualDocumentWithoutAnrOrCrash` and
+`PdfViewerUiAutomatorTest.loadsThousandPageDocumentAndActivatesAdaptiveFlow` cases ran
+without being skipped so regressions cannot silently avoid the heavy document coverage. To
+reproduce the checks locally, run `./gradlew connectedAndroidTest` on an emulator or device
+and inspect `adb logcat` for `ANR in com.novapdf.reader` or fatal exception entries.
 
 ## Gradle wrapper bootstrap
 
