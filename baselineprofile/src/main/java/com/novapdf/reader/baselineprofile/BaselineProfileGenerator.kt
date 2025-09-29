@@ -19,6 +19,7 @@ class BaselineProfileGenerator {
         packageName = TARGET_PACKAGE
     ) {
         startActivityAndWait()
-        device.waitForIdle()
+        openStressDocumentAndAwait()
+        exerciseReaderContent()
     }
 }
