@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -235,10 +236,8 @@ open class PdfViewerViewModel(
         )
     }
 
-    private suspend fun updateUiState(transform: (PdfViewerUiState) -> PdfViewerUiState) {
-        withContext(Dispatchers.Main) {
-            _uiState.value = transform(_uiState.value)
-        }
+    private fun updateUiState(transform: (PdfViewerUiState) -> PdfViewerUiState) {
+        _uiState.update(transform)
     }
 
     private suspend fun handleDocumentError(throwable: Throwable) {
