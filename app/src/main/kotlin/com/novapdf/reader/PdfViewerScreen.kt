@@ -72,6 +72,7 @@ import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -136,6 +137,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.R
@@ -493,14 +496,10 @@ fun PdfViewerScreen(
                     )
                 }
 
-                when (val status = state.documentStatus) {
-                    is DocumentStatus.Loading -> LoadingOverlay(status)
-                    is DocumentStatus.Error -> DocumentErrorDialog(
-                        message = status.message,
-                        onDismiss = onDismissError
-                    )
-                    DocumentStatus.Idle -> Unit
-                }
+                DocumentStatusHost(
+                    status = state.documentStatus,
+                    onDismissError = onDismissError
+                )
 
                 if (showOnboarding) {
                     OnboardingOverlay(
@@ -683,6 +682,21 @@ private fun DocumentUrlDialog(
 }
 
 @Composable
+private fun DocumentStatusHost(
+    status: DocumentStatus,
+    onDismissError: () -> Unit
+) {
+    when (status) {
+        is DocumentStatus.Loading -> LoadingOverlay(status)
+        is DocumentStatus.Error -> DocumentErrorDialog(
+            message = status.message,
+            onDismiss = onDismissError
+        )
+        DocumentStatus.Idle -> Unit
+    }
+}
+
+@Composable
 private fun DocumentErrorDialog(
     message: String,
     onDismiss: () -> Unit,
@@ -721,7 +735,8 @@ private fun DocumentErrorDialog(
             }) {
                 Text(text = stringResource(id = R.string.action_repair_pdf))
             }
-        }
+        },
+        properties = DialogProperties(dismissOnClickOutside = false)
     )
 }
 
@@ -730,57 +745,73 @@ private fun LoadingOverlay(status: DocumentStatus.Loading) {
     val message = status.messageRes?.let { stringResource(id = it) }
         ?: stringResource(id = R.string.loading_document)
     val progressValue = status.progress?.coerceIn(0f, 1f)
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f))
-            .semantics {
-                liveRegion = LiveRegionMode.Assertive
-                contentDescription = message
-            },
-        contentAlignment = Alignment.Center
+    val scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f)
+    val overlayInteraction = remember { MutableInteractionSource() }
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        Surface(
+        Box(
             modifier = Modifier
-                .padding(horizontal = 32.dp)
-                .widthIn(min = 260.dp)
-                .wrapContentHeight(),
-            tonalElevation = 6.dp,
-            shadowElevation = 12.dp,
-            shape = MaterialTheme.shapes.extraLarge
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(horizontal = 24.dp, vertical = 28.dp)
-                    .fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                CircularProgressIndicator()
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center
+                .fillMaxSize()
+                .background(scrimColor)
+                .clickable(
+                    interactionSource = overlayInteraction,
+                    indication = null,
+                    onClick = {}
                 )
-                AnimatedVisibility(visible = progressValue != null) {
-                    if (progressValue != null) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            LinearProgressIndicator(
-                                progress = progressValue,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Text(
-                                text = stringResource(
-                                    id = R.string.loading_progress,
-                                    (progressValue * 100).roundToInt()
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center
-                            )
+                .semantics {
+                    liveRegion = LiveRegionMode.Assertive
+                    contentDescription = message
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .padding(horizontal = 32.dp)
+                    .widthIn(min = 260.dp)
+                    .wrapContentHeight(),
+                tonalElevation = 6.dp,
+                shadowElevation = 12.dp,
+                shape = MaterialTheme.shapes.extraLarge
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp, vertical = 28.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    AnimatedVisibility(visible = progressValue != null) {
+                        if (progressValue != null) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                LinearProgressIndicator(
+                                    progress = progressValue,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    text = stringResource(
+                                        id = R.string.loading_progress,
+                                        (progressValue * 100).roundToInt()
+                                    ),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }

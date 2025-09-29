@@ -7,6 +7,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
@@ -18,6 +19,10 @@ import com.shockwave.pdfium.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -361,6 +366,118 @@ class PdfViewerViewModelSearchTest {
             app.getString(R.string.error_remote_open_failed),
             (uiState.documentStatus as DocumentStatus.Error).message
         )
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openRemoteDocument failure clears loading status before surfacing error`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        val failingUrl = "https://example.com/bad.pdf"
+        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad")))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        val statuses = mutableListOf<DocumentStatus>()
+        val job = launch {
+            viewModel.uiState
+                .map { it.documentStatus }
+                .take(4)
+                .toList(statuses)
+        }
+
+        viewModel.openRemoteDocument(failingUrl)
+        advanceUntilIdle()
+        job.join()
+
+        assertEquals(DocumentStatus.Idle, statuses[0])
+        assertTrue(statuses[1] is DocumentStatus.Loading)
+        assertEquals(DocumentStatus.Idle, statuses[2])
+        val errorStatus = statuses[3]
+        assertTrue(errorStatus is DocumentStatus.Error)
+        assertEquals(app.getString(R.string.error_remote_open_failed), (errorStatus as DocumentStatus.Error).message)
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openDocument failure clears loading status before surfacing error`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        whenever(pdfRepository.open(any())).thenThrow(PdfOpenException(PdfOpenException.Reason.CORRUPTED))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        val statuses = mutableListOf<DocumentStatus>()
+        val job = launch {
+            viewModel.uiState
+                .map { it.documentStatus }
+                .take(4)
+                .toList(statuses)
+        }
+
+        val failingUri = Uri.parse("file://broken.pdf")
+        viewModel.openDocument(failingUri)
+        advanceUntilIdle()
+        job.join()
+
+        assertEquals(DocumentStatus.Idle, statuses[0])
+        assertTrue(statuses[1] is DocumentStatus.Loading)
+        assertEquals(DocumentStatus.Idle, statuses[2])
+        val errorStatus = statuses[3]
+        assertTrue(errorStatus is DocumentStatus.Error)
+        assertEquals(app.getString(R.string.error_pdf_corrupted), (errorStatus as DocumentStatus.Error).message)
     }
 
     @Test
