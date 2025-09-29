@@ -12,13 +12,15 @@ import coil3.request.Options
 import java.io.File
 import okio.buffer
 import okio.sink
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal class PdfDownloadDecoder(
     private val fetchResult: SourceFetchResult,
     private val payload: Payload,
 ) : Decoder {
 
-    override suspend fun decode(): DecodeResult? {
+    override suspend fun decode(): DecodeResult? = withContext(Dispatchers.IO) {
         val destination = payload.destination
         val imageSource = fetchResult.source
         try {
@@ -37,7 +39,7 @@ internal class PdfDownloadDecoder(
         val placeholder = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.TRANSPARENT)
         }
-        return DecodeResult(
+        DecodeResult(
             image = placeholder.asImage(),
             isSampled = true,
         )
