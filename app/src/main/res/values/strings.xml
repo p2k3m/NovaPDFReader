@@ -35,6 +35,7 @@
     <string name="accessibility_font_scale_hint">Applies across the reader, from toolbars to annotations.</string>
     <string name="accessibility_font_scale_announcement">Font size set to %1$d%%</string>
     <string name="pdf_outline">Outline</string>
+    <string name="outline_sheet_title">Document outline</string>
     <string name="outline_empty">This document does not include an outline.</string>
     <string name="outline_page_label">Page %1$d</string>
     <string name="export_document">Export or share</string>
@@ -64,6 +65,7 @@
     <string name="annotations_title">Annotations at a glance</string>
     <string name="annotations_summary">You have %1$d in-document notes ready to review.</string>
     <string name="annotations_empty">Add highlights or drawings while reading to see them collected here.</string>
+    <string name="annotations_sync_scheduled">Annotations will sync shortly.</string>
     <string name="onboarding_page_library_title">Build your library</string>
     <string name="onboarding_page_library_description">Import PDFs and keep favorites close for offline reading.</string>
     <string name="onboarding_page_annotation_title">Annotate effortlessly</string>
@@ -73,6 +75,7 @@
     <string name="onboarding_skip">Skip</string>
     <string name="onboarding_next">Next</string>
     <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_dialog_title">Getting started tips</string>
     <string name="navigation_home">Home</string>
     <string name="navigation_reader">Reader</string>
     <string name="navigation_annotations">Annotations</string>

@@ -49,6 +49,11 @@ sealed interface DocumentStatus {
     data class Error(val message: String) : DocumentStatus
 }
 
+data class UiMessage(
+    val id: Long = System.currentTimeMillis(),
+    @StringRes val messageRes: Int
+)
+
 data class PdfViewerUiState(
     val documentId: String? = null,
     val pageCount: Int = 0,
@@ -66,7 +71,8 @@ data class PdfViewerUiState(
     val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList(),
-    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle
+    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
+    val messages: List<UiMessage> = emptyList()
 )
 
 private data class DocumentContext(
@@ -454,6 +460,19 @@ open class PdfViewerViewModel(
     fun persistAnnotations() {
         val documentId = _uiState.value.documentId ?: return
         documentMaintenanceScheduler.requestImmediateSync(documentId)
+        enqueueMessage(R.string.annotations_sync_scheduled)
+    }
+
+    private fun enqueueMessage(@StringRes messageRes: Int) {
+        updateUiState { current ->
+            current.copy(messages = current.messages + UiMessage(messageRes = messageRes))
+        }
+    }
+
+    fun onMessageShown(id: Long) {
+        updateUiState { current ->
+            current.copy(messages = current.messages.filterNot { it.id == id })
+        }
     }
 
     fun search(query: String) {
