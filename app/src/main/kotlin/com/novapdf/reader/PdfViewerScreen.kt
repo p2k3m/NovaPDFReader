@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.verticalScroll
@@ -75,6 +76,7 @@ import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -131,6 +133,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -199,6 +202,7 @@ fun PdfViewerRoute(
         onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
         onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
         onFontScaleChanged = { viewModel.setFontScale(it) },
+        onMessageShown = { viewModel.onMessageShown(it) },
         dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     )
 }
@@ -227,6 +231,7 @@ fun PdfViewerScreen(
     onToggleHighContrast: (Boolean) -> Unit,
     onToggleTalkBackIntegration: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    onMessageShown: (Long) -> Unit,
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -254,6 +259,14 @@ fun PdfViewerScreen(
             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         })
         val coroutineScope = rememberCoroutineScope()
+        val pendingMessage = state.messages.firstOrNull()
+        LaunchedEffect(pendingMessage?.id) {
+            if (pendingMessage != null) {
+                val messageText = context.getString(pendingMessage.messageRes)
+                snackbarHost.showSnackbar(messageText)
+                onMessageShown(pendingMessage.id)
+            }
+        }
         var showOutlineSheet by remember { mutableStateOf(false) }
         var showAccessibilitySheet by remember { mutableStateOf(false) }
         val exportErrorMessage = stringResource(id = R.string.export_failed)
@@ -558,20 +571,28 @@ fun PdfViewerScreen(
             sheetState = sheetState,
             modifier = Modifier.fillMaxHeight()
         ) {
-            AccessibilitySettingsSheet(
-                dynamicColorEnabled = state.dynamicColorEnabled,
-                highContrastEnabled = state.highContrastEnabled,
-                talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
-                fontScale = state.fontScale,
-                dynamicColorSupported = dynamicColorSupported,
-                accessibilityManager = accessibilityManager,
-                hapticFeedbackManager = hapticManager,
-                onDynamicColorChanged = onToggleDynamicColor,
-                onHighContrastChanged = onToggleHighContrast,
-                onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
-                onFontScaleChanged = onFontScaleChanged,
-                modifier = Modifier.fillMaxHeight(0.95f)
-            )
+            val sheetTitle = stringResource(id = R.string.accessibility_sheet_title)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { paneTitle = sheetTitle }
+            ) {
+                BottomSheetDefaults.DragHandle()
+                AccessibilitySettingsSheet(
+                    dynamicColorEnabled = state.dynamicColorEnabled,
+                    highContrastEnabled = state.highContrastEnabled,
+                    talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
+                    fontScale = state.fontScale,
+                    dynamicColorSupported = dynamicColorSupported,
+                    accessibilityManager = accessibilityManager,
+                    hapticFeedbackManager = hapticManager,
+                    onDynamicColorChanged = onToggleDynamicColor,
+                    onHighContrastChanged = onToggleHighContrast,
+                    onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
+                    onFontScaleChanged = onFontScaleChanged,
+                    modifier = Modifier.fillMaxHeight(0.95f)
+                )
+            }
         }
     }
 }
@@ -1160,115 +1181,130 @@ private fun OnboardingOverlay(
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
-        modifier = modifier.fillMaxSize()
+    Dialog(
+        onDismissRequest = onSkip,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
-        val coroutineScope = rememberCoroutineScope()
-        Column(
-            modifier = Modifier
+        val dialogTitle = stringResource(id = R.string.onboarding_dialog_title)
+        Surface(
+            color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
+            modifier = modifier
                 .fillMaxSize()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .systemBarsPadding()
+                .semantics {
+                    paneTitle = dialogTitle
+                }
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onSkip) {
-                    val skipText = stringResource(id = R.string.onboarding_skip)
-                    Text(
-                        text = skipText,
-                        modifier = Modifier.semantics { contentDescription = skipText }
-                    )
-                }
-            }
-
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth()
-            ) { pageIndex ->
-                val page = pages[pageIndex]
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = page.icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(72.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    val titleText = stringResource(id = page.titleRes)
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.headlineSmall,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.semantics { contentDescription = titleText }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    val descriptionText = stringResource(id = page.descriptionRes)
-                    Text(
-                        text = descriptionText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp)
-                            .semantics { contentDescription = descriptionText }
-                    )
-                }
-            }
-
-            Row(
+            val coroutineScope = rememberCoroutineScope()
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 24.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    repeat(pages.size) { index ->
-                        val isSelected = pagerState.currentPage == index
-                        Box(
-                            modifier = Modifier
-                                .size(if (isSelected) 12.dp else 8.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.outline
-                                )
+                    TextButton(onClick = onSkip) {
+                        val skipText = stringResource(id = R.string.onboarding_skip)
+                        Text(
+                            text = skipText,
+                            modifier = Modifier.semantics { contentDescription = skipText }
                         )
-                        if (index != pages.lastIndex) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
                     }
                 }
 
-                val isLastPage = pagerState.currentPage == pages.lastIndex
-                val buttonText = if (isLastPage) {
-                    stringResource(id = R.string.onboarding_get_started)
-                } else {
-                    stringResource(id = R.string.onboarding_next)
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxWidth()
+                ) { pageIndex ->
+                    val page = pages[pageIndex]
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = page.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(72.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        val titleText = stringResource(id = page.titleRes)
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.headlineSmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.semantics { contentDescription = titleText }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val descriptionText = stringResource(id = page.descriptionRes)
+                        Text(
+                            text = descriptionText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp)
+                                .semantics { contentDescription = descriptionText }
+                        )
+                    }
                 }
-                Button(
-                    onClick = {
-                        if (isLastPage) {
-                            onFinish()
-                        } else {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 24.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        repeat(pages.size) { index ->
+                            val isSelected = pagerState.currentPage == index
+                            Box(
+                                modifier = Modifier
+                                    .size(if (isSelected) 12.dp else 8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.outline,
+                                    )
+                            )
+                            if (index != pages.lastIndex) {
+                                Spacer(modifier = Modifier.width(8.dp))
                             }
                         }
                     }
-                ) {
-                    Text(
-                        text = buttonText,
-                        modifier = Modifier.semantics { contentDescription = buttonText }
-                    )
+
+                    val isLastPage = pagerState.currentPage == pages.lastIndex
+                    val buttonText = if (isLastPage) {
+                        stringResource(id = R.string.onboarding_get_started)
+                    } else {
+                        stringResource(id = R.string.onboarding_next)
+                    }
+                    Button(
+                        onClick = {
+                            if (isLastPage) {
+                                onFinish()
+                            } else {
+                                coroutineScope.launch {
+                                    pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                }
+                            }
+                        }
+                    ) {
+                        Text(
+                            text = buttonText,
+                            modifier = Modifier.semantics { contentDescription = buttonText }
+                        )
+                    }
                 }
             }
         }
@@ -1699,23 +1735,31 @@ private fun OutlineSheet(
         sheetState = sheetState,
         onDismissRequest = onDismiss
     ) {
-        if (outline.isEmpty()) {
-            Text(
-                text = stringResource(id = R.string.outline_empty),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        } else {
-            val items = remember(outline) { flattenOutline(outline) }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp)
-            ) {
-                items(items, key = { it.key }) { item ->
-                    OutlineRow(item = item, onSelect = onSelect)
+        val outlineTitle = stringResource(id = R.string.outline_sheet_title)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { paneTitle = outlineTitle }
+        ) {
+            BottomSheetDefaults.DragHandle()
+            if (outline.isEmpty()) {
+                Text(
+                    text = stringResource(id = R.string.outline_empty),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                val items = remember(outline) { flattenOutline(outline) }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                ) {
+                    items(items, key = { it.key }) { item ->
+                        OutlineRow(item = item, onSelect = onSelect)
+                    }
                 }
             }
         }
