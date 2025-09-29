@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.print.PrintAttributes
 import android.print.PrintManager
+import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.AnnotationRepository
@@ -39,6 +40,7 @@ data class PdfViewerUiState(
     val currentPage: Int = 0,
     val isLoading: Boolean = false,
     val loadingProgress: Float? = null,
+    @StringRes val loadingMessageRes: Int? = null,
     val errorMessage: String? = null,
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
@@ -77,6 +79,22 @@ open class PdfViewerViewModel(
 
     private var searchJob: Job? = null
     private var viewportWidthPx: Int = 1080
+
+    private suspend fun setLoadingState(
+        isLoading: Boolean,
+        progress: Float?,
+        @StringRes messageRes: Int?,
+        resetError: Boolean = false
+    ) {
+        updateUiState { current ->
+            current.copy(
+                isLoading = isLoading,
+                loadingProgress = progress,
+                loadingMessageRes = messageRes,
+                errorMessage = if (resetError) null else current.errorMessage
+            )
+        }
+    }
 
     init {
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -122,24 +140,37 @@ open class PdfViewerViewModel(
 
     fun openDocument(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            updateUiState { current ->
-                current.copy(isLoading = true, loadingProgress = 0f, errorMessage = null)
-            }
+            setLoadingState(
+                isLoading = true,
+                progress = 0f,
+                messageRes = R.string.loading_stage_resolving,
+                resetError = true
+            )
             val session = runCatching { pdfRepository.open(uri) }
                 .getOrElse { throwable ->
                     handleDocumentError(throwable)
                     return@launch
                 }
             annotationRepository.clearInMemory(session.documentId)
-            updateUiState { it.copy(loadingProgress = 0.35f) }
+            setLoadingState(
+                isLoading = true,
+                progress = 0.35f,
+                messageRes = R.string.loading_stage_parsing
+            )
             adaptiveFlowManager.start()
             adaptiveFlowManager.trackPageChange(0, session.pageCount)
             preloadInitialPage(session)
+            setLoadingState(
+                isLoading = true,
+                progress = 0.85f,
+                messageRes = R.string.loading_stage_finalizing
+            )
             val bookmarks = bookmarkManager.bookmarks(session.documentId)
             updateUiState { current ->
                 current.copy(
                     isLoading = false,
                     loadingProgress = null,
+                    loadingMessageRes = null,
                     documentId = session.documentId,
                     pageCount = session.pageCount,
                     currentPage = 0,
@@ -154,10 +185,18 @@ open class PdfViewerViewModel(
     }
 
     private suspend fun preloadInitialPage(session: PdfDocumentSession) {
-        updateUiState { it.copy(loadingProgress = 0.55f) }
+        setLoadingState(
+            isLoading = true,
+            progress = 0.55f,
+            messageRes = R.string.loading_stage_rendering
+        )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
         runCatching { pdfRepository.renderPage(0, targetWidth) }
-        updateUiState { it.copy(loadingProgress = 0.85f) }
+        setLoadingState(
+            isLoading = true,
+            progress = 0.7f,
+            messageRes = R.string.loading_stage_rendering
+        )
     }
 
     private suspend fun updateUiState(transform: (PdfViewerUiState) -> PdfViewerUiState) {
@@ -179,6 +218,7 @@ open class PdfViewerViewModel(
             current.copy(
                 isLoading = false,
                 loadingProgress = null,
+                loadingMessageRes = null,
                 errorMessage = message
             )
         }
@@ -190,6 +230,7 @@ open class PdfViewerViewModel(
                 current.copy(
                     isLoading = false,
                     loadingProgress = null,
+                    loadingMessageRes = null,
                     errorMessage = app.getString(R.string.error_remote_open_failed)
                 )
             }
