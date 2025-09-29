@@ -337,6 +337,35 @@ jobs:
         run: |
           adb logcat -c || true
           ./gradlew connectedAndroidTest --stacktrace
+      - name: Verify large PDF stress instrumentation ran
+        run: |
+          set -euo pipefail
+          results_dir="app/build/outputs/androidTest-results/connected"
+          if [ ! -d "$results_dir" ]; then
+            echo "::error::Instrumentation results directory $results_dir not found"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+import pathlib
+import sys
+
+results_dir = pathlib.Path("app/build/outputs/androidTest-results/connected")
+stress_method = "openLargeAndUnusualDocumentWithoutAnrOrCrash"
+stress_class = "com.novapdf.reader.LargePdfInstrumentedTest"
+
+matched = False
+for report in results_dir.rglob("TEST-*.xml"):
+    text = report.read_text(encoding="utf-8", errors="replace")
+    if stress_method in text and stress_class in text:
+        print(f"Found stress PDF instrumentation results in {report}")
+        matched = True
+        break
+
+if not matched:
+    print("::error::LargePdfInstrumentedTest did not run during connectedAndroidTest")
+    sys.exit(1)
+PY
       - name: Validate ANR and crash-free logcat
         run: |
           set -euo pipefail
