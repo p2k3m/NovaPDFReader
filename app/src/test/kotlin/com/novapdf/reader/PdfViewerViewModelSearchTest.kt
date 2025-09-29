@@ -64,9 +64,6 @@ class PdfViewerViewModelSearchTest {
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<LuceneSearchCoordinator>()
         val downloadManager = mock<PdfDownloadManager>()
-        val downloadManager = mock<PdfDownloadManager>()
-        val downloadManager = mock<PdfDownloadManager>()
-        val downloadManager = mock<PdfDownloadManager>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -120,6 +117,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -176,6 +174,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
