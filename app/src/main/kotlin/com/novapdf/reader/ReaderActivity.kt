@@ -365,7 +365,9 @@ open class ReaderActivity : ComponentActivity() {
         val retry = legacyRetryButton
         when {
             state.isLoading -> {
-                statusContainer.isVisible = false
+                statusContainer.isVisible = true
+                statusText?.text = state.loadingMessageRes?.let(::getString)
+                    ?: getString(R.string.loading_document)
                 retry?.isVisible = false
             }
 

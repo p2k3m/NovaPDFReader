@@ -473,7 +473,10 @@ fun PdfViewerScreen(
                 }
 
                 if (state.isLoading) {
-                    LoadingOverlay(progress = state.loadingProgress)
+                    LoadingOverlay(
+                        progress = state.loadingProgress,
+                        messageRes = state.loadingMessageRes
+                    )
                 }
 
                 state.errorMessage?.let { errorMessage ->
@@ -701,7 +704,7 @@ private fun DocumentErrorDialog(
 }
 
 @Composable
-private fun LoadingOverlay(progress: Float?) {
+private fun LoadingOverlay(progress: Float?, @StringRes messageRes: Int?) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -714,8 +717,10 @@ private fun LoadingOverlay(progress: Float?) {
                 .fillMaxWidth(0.7f)
         ) {
             CircularProgressIndicator()
+            val message = messageRes?.let { stringResource(id = it) }
+                ?: stringResource(id = R.string.loading_document)
             Text(
-                text = stringResource(id = R.string.loading_document),
+                text = message,
                 modifier = Modifier.padding(top = 16.dp),
                 style = MaterialTheme.typography.titleMedium
             )
