@@ -24,8 +24,10 @@ import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -149,8 +151,9 @@ open class PdfViewerViewModel(
     }
 
     fun openRemoteDocument(url: String) {
-        remoteDownloadJob?.cancel()
-        remoteDownloadJob = viewModelScope.launch {
+        val previousJob = remoteDownloadJob
+        val newJob = viewModelScope.launch {
+            previousJob?.cancelAndJoin()
             setLoadingState(
                 isLoading = true,
                 progress = 0f,
@@ -160,6 +163,15 @@ open class PdfViewerViewModel(
             val result = try {
                 downloadManager.download(url)
             } catch (throwable: Throwable) {
+                if (throwable is CancellationException) {
+                    setLoadingState(
+                        isLoading = false,
+                        progress = null,
+                        messageRes = null,
+                        resetError = false
+                    )
+                    throw throwable
+                }
                 reportRemoteOpenFailure(throwable)
                 return@launch
             }
@@ -168,10 +180,33 @@ open class PdfViewerViewModel(
                     loadDocument(uri, resetError = false)
                 }
             }.onFailure { throwable ->
+                if (throwable is CancellationException) {
+                    setLoadingState(
+                        isLoading = false,
+                        progress = null,
+                        messageRes = null,
+                        resetError = false
+                    )
+                    throw throwable
+                }
                 reportRemoteOpenFailure(throwable)
             }
-        }.also { job ->
-            job.invokeOnCompletion { remoteDownloadJob = null }
+        }
+        remoteDownloadJob = newJob
+        newJob.invokeOnCompletion { throwable ->
+            if (remoteDownloadJob === newJob) {
+                remoteDownloadJob = null
+            }
+            if (throwable is CancellationException && remoteDownloadJob == null) {
+                viewModelScope.launch {
+                    setLoadingState(
+                        isLoading = false,
+                        progress = null,
+                        messageRes = null,
+                        resetError = false
+                    )
+                }
+            }
         }
     }
 

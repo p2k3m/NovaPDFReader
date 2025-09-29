@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -354,6 +355,51 @@ class PdfViewerViewModelSearchTest {
         verify(downloadManager).download(eq(failingUrl))
         val uiState = viewModel.uiState.value
         assertEquals(app.getString(R.string.error_remote_open_failed), uiState.errorMessage)
+        assertEquals(false, uiState.isLoading)
+        assertEquals(null, uiState.loadingProgress)
+        assertEquals(null, uiState.loadingMessageRes)
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openRemoteDocument ignores cancellation without surfacing error`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        val url = "https://example.com/cancel.pdf"
+        whenever(downloadManager.download(eq(url))).thenThrow(CancellationException("cancelled"))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        viewModel.openRemoteDocument(url)
+        advanceUntilIdle()
+
+        val uiState = viewModel.uiState.value
+        assertEquals(null, uiState.errorMessage)
         assertEquals(false, uiState.isLoading)
         assertEquals(null, uiState.loadingProgress)
         assertEquals(null, uiState.loadingMessageRes)
