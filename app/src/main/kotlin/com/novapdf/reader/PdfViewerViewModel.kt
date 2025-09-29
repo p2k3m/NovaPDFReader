@@ -156,7 +156,12 @@ open class PdfViewerViewModel(
                 messageRes = R.string.loading_stage_downloading,
                 resetError = true
             )
-            val result = downloadManager.download(url)
+            val result = try {
+                downloadManager.download(url)
+            } catch (throwable: Throwable) {
+                reportRemoteOpenFailure(throwable)
+                return@launch
+            }
             result.onSuccess { uri ->
                 withContext(Dispatchers.IO) {
                     loadDocument(uri, resetError = false)
