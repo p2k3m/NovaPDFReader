@@ -340,18 +340,47 @@ jobs:
       - name: Verify heavy PDF instrumentation coverage
         run: |
           set -euo pipefail
-          results_dir="app/build/outputs/androidTest-results/connected"
-          if [ ! -d "$results_dir" ]; then
-            echo "::error::Instrumentation results directory $results_dir not found"
-            exit 1
-          fi
 
           python3 - <<'PY'
           import pathlib
           import sys
           import xml.etree.ElementTree as ET
 
-          results_dir = pathlib.Path("app/build/outputs/androidTest-results/connected")
+          outputs_root = pathlib.Path("app/build/outputs")
+          if not outputs_root.exists():
+              print("::error::Gradle outputs directory app/build/outputs not found")
+              sys.exit(1)
+
+          candidate_roots = [
+              outputs_root / "androidTest-results" / "connected",
+              outputs_root / "androidTest-results",
+              outputs_root / "androidTestResults",
+              outputs_root / "connected_android_test_additional_output",
+          ]
+
+          search_roots = [root for root in candidate_roots if root.exists()]
+          if not search_roots:
+              search_roots = [outputs_root]
+
+          def is_instrumentation_report(path: pathlib.Path) -> bool:
+              lowered_parts = [part.lower() for part in path.parts]
+              return any("androidtest" in part for part in lowered_parts) or "connected" in lowered_parts
+
+          report_paths = sorted(
+              {
+                  report
+                  for root in search_roots
+                  for report in root.rglob("TEST-*.xml")
+                  if is_instrumentation_report(report)
+              }
+          )
+
+          if not report_paths:
+              print(
+                  "::error::Connected Android tests did not generate any instrumentation XML reports under app/build/outputs"
+              )
+              sys.exit(1)
+
           required_tests = {
               (
                   "com.novapdf.reader.LargePdfInstrumentedTest",
@@ -365,7 +394,7 @@ jobs:
 
           executed_tests = {}
 
-          for report in results_dir.rglob("TEST-*.xml"):
+          for report in report_paths:
               try:
                   tree = ET.parse(report)
               except ET.ParseError as exc:
