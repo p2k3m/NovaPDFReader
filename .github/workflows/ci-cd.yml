@@ -333,10 +333,10 @@ jobs:
           adb shell settings put global transition_animation_scale 0 || true
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
-      - name: Run instrumentation tests
+      - name: Run instrumentation tests against stress PDFs
         run: |
           adb logcat -c || true
-          ./gradlew connectedAndroidTest --stacktrace
+          ./gradlew connectedAndroidTest --stacktrace --rerun-tasks --no-build-cache
       - name: Verify heavy PDF instrumentation coverage
         run: |
           set -euo pipefail
