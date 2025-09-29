@@ -49,9 +49,11 @@ Continuous integration now provisions a synthetic stress PDF with 32 pages that 
 panoramic, and extreme aspect ratios to exercise Pdfium rendering paths. Instrumentation
 tests open and render multiple locations within the document to ensure the viewer can
 handle atypical source material, while the workflow fails fast if logcat reports an
-Application Not Responding dialog or a fatal crash for `com.novapdf.reader`. To reproduce
-the checks locally, run `./gradlew connectedAndroidTest` on an emulator or device and
-inspect `adb logcat` for `ANR in com.novapdf.reader` or fatal exception entries.
+Application Not Responding dialog or a fatal crash for `com.novapdf.reader`. The workflow
+also verifies that the `LargePdfInstrumentedTest` suite executed so regressions cannot
+skip the heavy document coverage silently. To reproduce the checks locally, run
+`./gradlew connectedAndroidTest` on an emulator or device and inspect `adb logcat` for `ANR
+in com.novapdf.reader` or fatal exception entries.
 
 ## Gradle wrapper bootstrap
 
