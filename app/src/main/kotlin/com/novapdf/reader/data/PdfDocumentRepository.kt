@@ -10,6 +10,7 @@ import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.CancellationSignal
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Trace
 import android.util.Size
@@ -47,6 +48,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
+import com.novapdf.reader.model.PdfRenderProgress
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
@@ -108,6 +110,8 @@ class PdfDocumentRepository(
     val session: StateFlow<PdfDocumentSession?> = openSession.asStateFlow()
     private val outlineNodes = MutableStateFlow<List<PdfOutlineNode>>(emptyList())
     val outline: StateFlow<List<PdfOutlineNode>> = outlineNodes.asStateFlow()
+    private val renderProgressState = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
+    val renderProgress: StateFlow<PdfRenderProgress> = renderProgressState.asStateFlow()
     private val renderMutex = Mutex()
     private val componentCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -139,6 +143,7 @@ class PdfDocumentRepository(
         }
         pageSizeCache.clear()
         outlineNodes.value = emptyList()
+        renderProgressState.value = PdfRenderProgress.Idle
         openSession.value?.let { session ->
             try {
                 pdfiumCore.closeDocument(session.document)
@@ -321,7 +326,10 @@ class PdfDocumentRepository(
         }
     }
 
-    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(ioDispatcher) { block() }
+    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(ioDispatcher) {
+        ensureWorkerThread()
+        block()
+    }
 
     private fun validateDocumentUri(uri: Uri): Boolean {
         if (!isAllowedScheme(uri)) {
@@ -396,6 +404,7 @@ class PdfDocumentRepository(
     }
 
     private suspend fun getPageSizeInternal(pageIndex: Int): Size? {
+        ensureWorkerThread()
         val session = openSession.value ?: return null
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
@@ -411,6 +420,7 @@ class PdfDocumentRepository(
     }
 
     private suspend fun ensurePageBitmap(pageIndex: Int, targetWidth: Int): Bitmap? {
+        ensureWorkerThread()
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
         val key = PageBitmapKey(pageIndex, targetWidth)
@@ -431,6 +441,7 @@ class PdfDocumentRepository(
             }
             val aspect = pageSize.height.toDouble() / pageSize.width.toDouble()
             val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
+            renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0f)
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
                 if (!session.document.hasPage(pageIndex)) {
@@ -438,12 +449,14 @@ class PdfDocumentRepository(
                 }
                 val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
+                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 1f)
                 pageBitmapCache.put(key, bitmap)
                 bitmap
             } catch (throwable: Throwable) {
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
                 null
             } finally {
+                renderProgressState.value = PdfRenderProgress.Idle
                 Trace.endSection()
             }
         }
@@ -470,6 +483,13 @@ class PdfDocumentRepository(
         val right = (this.right * width).roundToInt().coerceIn(left + 1, width)
         val bottom = (this.bottom * height).roundToInt().coerceIn(top + 1, height)
         return Rect(left, top, right, bottom)
+    }
+
+    private fun ensureWorkerThread() {
+        val mainLooper = Looper.getMainLooper()
+        if (mainLooper != null && Thread.currentThread() == mainLooper.thread) {
+            throw IllegalStateException("PDF operations must not run on the main thread")
+        }
     }
 
     private fun calculateCacheBudget(): Long {
