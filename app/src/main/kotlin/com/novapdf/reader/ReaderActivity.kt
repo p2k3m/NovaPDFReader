@@ -346,7 +346,8 @@ open class ReaderActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             viewModel.uiState.collect { state ->
-                legacyProgress?.isVisible = state.isLoading
+                val status = state.documentStatus
+                legacyProgress?.isVisible = status is DocumentStatus.Loading
                 adapter.onDocumentChanged(state.documentId, state.pageCount)
                 updateLegacyToolbar(state)
                 updateLegacyStatus(state, statusContainer)
@@ -368,35 +369,39 @@ open class ReaderActivity : ComponentActivity() {
         val hasDocument = state.documentId != null
         val statusText = legacyStatusText
         val retry = legacyRetryButton
-        when {
-            state.isLoading -> {
+        when (val status = state.documentStatus) {
+            is DocumentStatus.Loading -> {
                 statusContainer.isVisible = true
-                statusText?.text = state.loadingMessageRes?.let(::getString)
+                statusText?.text = status.messageRes?.let(::getString)
                     ?: getString(R.string.loading_document)
                 retry?.isVisible = false
             }
 
-            state.errorMessage != null -> {
+            is DocumentStatus.Error -> {
                 statusContainer.isVisible = true
-                statusText?.text = getString(R.string.legacy_error_loading)
+                statusText?.text = status.message
                 retry?.isVisible = true
             }
 
-            hasDocument && state.pageCount == 0 -> {
-                statusContainer.isVisible = true
-                statusText?.text = getString(R.string.legacy_select_document)
-                retry?.isVisible = false
-            }
+            DocumentStatus.Idle -> {
+                when {
+                    hasDocument && state.pageCount == 0 -> {
+                        statusContainer.isVisible = true
+                        statusText?.text = getString(R.string.legacy_select_document)
+                        retry?.isVisible = false
+                    }
 
-            hasDocument -> {
-                statusContainer.isVisible = false
-                retry?.isVisible = false
-            }
+                    hasDocument -> {
+                        statusContainer.isVisible = false
+                        retry?.isVisible = false
+                    }
 
-            else -> {
-                statusContainer.isVisible = true
-                statusText?.text = getString(R.string.legacy_select_document)
-                retry?.isVisible = true
+                    else -> {
+                        statusContainer.isVisible = true
+                        statusText?.text = getString(R.string.legacy_select_document)
+                        retry?.isVisible = true
+                    }
+                }
             }
         }
     }

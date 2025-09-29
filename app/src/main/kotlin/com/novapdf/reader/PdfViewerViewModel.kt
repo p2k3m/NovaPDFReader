@@ -39,14 +39,21 @@ import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
+sealed interface DocumentStatus {
+    object Idle : DocumentStatus
+    data class Loading(
+        val progress: Float?,
+        @StringRes val messageRes: Int?
+    ) : DocumentStatus
+
+    data class Error(val message: String) : DocumentStatus
+}
+
 data class PdfViewerUiState(
     val documentId: String? = null,
     val pageCount: Int = 0,
     val currentPage: Int = 0,
-    val isLoading: Boolean = false,
-    val loadingProgress: Float? = null,
-    @StringRes val loadingMessageRes: Int? = null,
-    val errorMessage: String? = null,
+    val documentStatus: DocumentStatus = DocumentStatus.Idle,
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
     val swipeSensitivity: Float = 1f,
@@ -95,13 +102,14 @@ open class PdfViewerViewModel(
         @StringRes messageRes: Int?,
         resetError: Boolean = false
     ) {
+        val normalizedProgress = progress?.coerceIn(0f, 1f)
         updateUiState { current ->
-            current.copy(
-                isLoading = isLoading,
-                loadingProgress = progress,
-                loadingMessageRes = messageRes,
-                errorMessage = if (resetError) null else current.errorMessage
-            )
+            val status = when {
+                isLoading -> DocumentStatus.Loading(normalizedProgress, messageRes)
+                !resetError && current.documentStatus is DocumentStatus.Error -> current.documentStatus
+                else -> DocumentStatus.Idle
+            }
+            current.copy(documentStatus = status)
         }
     }
 
@@ -246,13 +254,10 @@ open class PdfViewerViewModel(
         val bookmarks = bookmarkManager.bookmarks(session.documentId)
         updateUiState { current ->
             current.copy(
-                isLoading = false,
-                loadingProgress = null,
-                loadingMessageRes = null,
+                documentStatus = DocumentStatus.Idle,
                 documentId = session.documentId,
                 pageCount = session.pageCount,
                 currentPage = 0,
-                errorMessage = null,
                 activeAnnotations = emptyList(),
                 bookmarks = bookmarks,
                 outline = pdfRepository.outline.value
@@ -303,17 +308,20 @@ open class PdfViewerViewModel(
     private fun showError(message: String) {
         updateUiState { current ->
             current.copy(
-                isLoading = false,
-                loadingProgress = null,
-                loadingMessageRes = null,
-                errorMessage = message
+                documentStatus = DocumentStatus.Error(message)
             )
         }
     }
 
     fun dismissError() {
         viewModelScope.launch {
-            updateUiState { it.copy(errorMessage = null) }
+            updateUiState { current ->
+                if (current.documentStatus is DocumentStatus.Error) {
+                    current.copy(documentStatus = DocumentStatus.Idle)
+                } else {
+                    current
+                }
+            }
         }
     }
 

@@ -139,6 +139,7 @@ import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.novapdf.reader.R
+import com.novapdf.reader.DocumentStatus
 import com.novapdf.reader.accessibility.HapticFeedbackManager
 import com.novapdf.reader.accessibility.rememberHapticFeedbackManager
 import com.novapdf.reader.model.AnnotationCommand
@@ -480,7 +481,9 @@ fun PdfViewerScreen(
                 }
 
                 val renderProgressState = state.renderProgress
-                if (!state.isLoading && renderProgressState is PdfRenderProgress.Rendering) {
+                if (state.documentStatus !is DocumentStatus.Loading &&
+                    renderProgressState is PdfRenderProgress.Rendering
+                ) {
                     RenderProgressIndicator(
                         pageIndex = renderProgressState.pageIndex,
                         progress = renderProgressState.progress,
@@ -490,18 +493,13 @@ fun PdfViewerScreen(
                     )
                 }
 
-                if (state.isLoading) {
-                    LoadingOverlay(
-                        progress = state.loadingProgress,
-                        messageRes = state.loadingMessageRes
-                    )
-                }
-
-                state.errorMessage?.let { errorMessage ->
-                    DocumentErrorDialog(
-                        message = errorMessage,
+                when (val status = state.documentStatus) {
+                    is DocumentStatus.Loading -> LoadingOverlay(status)
+                    is DocumentStatus.Error -> DocumentErrorDialog(
+                        message = status.message,
                         onDismiss = onDismissError
                     )
+                    DocumentStatus.Idle -> Unit
                 }
 
                 if (showOnboarding) {
@@ -728,10 +726,10 @@ private fun DocumentErrorDialog(
 }
 
 @Composable
-private fun LoadingOverlay(progress: Float?, @StringRes messageRes: Int?) {
-    val message = messageRes?.let { stringResource(id = it) }
+private fun LoadingOverlay(status: DocumentStatus.Loading) {
+    val message = status.messageRes?.let { stringResource(id = it) }
         ?: stringResource(id = R.string.loading_document)
-    val progressValue = progress?.coerceIn(0f, 1f)
+    val progressValue = status.progress?.coerceIn(0f, 1f)
     Box(
         modifier = Modifier
             .fillMaxSize()
