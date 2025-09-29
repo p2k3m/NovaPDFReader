@@ -145,9 +145,11 @@ import com.airbnb.lottie.compose.rememberLottieComposition
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
@@ -1895,7 +1897,9 @@ private fun ThumbnailItem(
             }
             return@LaunchedEffect
         }
-        val rendered = latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
+        val rendered = withContext(Dispatchers.IO) {
+            latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
+        }
         thumbnail = rendered
         if (previous != null && previous != rendered && !previous.isRecycled) {
             previous.recycle()
@@ -2051,8 +2055,12 @@ private fun PdfPageItem(
             }
             if (widthPx <= 0) return@LaunchedEffect
             isLoading = true
-            pageSize = latestRequest(pageIndex)
-            val rendered = latestRender(pageIndex, widthPx)
+            val (size, rendered) = withContext(Dispatchers.IO) {
+                val requested = latestRequest(pageIndex)
+                val bitmap = latestRender(pageIndex, widthPx)
+                requested to bitmap
+            }
+            pageSize = size
             val previous = pageBitmap
             pageBitmap = rendered
             if (previous != null && previous != rendered && !previous.isRecycled) {

@@ -92,13 +92,15 @@ open class PdfViewerViewModel(
         @StringRes messageRes: Int?,
         resetError: Boolean = false
     ) {
-        updateUiState { current ->
-            current.copy(
-                isLoading = isLoading,
-                loadingProgress = progress,
-                loadingMessageRes = messageRes,
-                errorMessage = if (resetError) null else current.errorMessage
-            )
+        withContext(Dispatchers.Main.immediate) {
+            updateUiState { current ->
+                current.copy(
+                    isLoading = isLoading,
+                    loadingProgress = progress,
+                    loadingMessageRes = messageRes,
+                    errorMessage = if (resetError) null else current.errorMessage
+                )
+            }
         }
     }
 
