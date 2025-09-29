@@ -1,5 +1,6 @@
 
 import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.api.Project
@@ -186,6 +187,7 @@ jacoco {
 
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
+val androidComponents = extensions.getByType<ApplicationAndroidComponentsExtension>()
 
 val targetProject = project
 
@@ -341,6 +343,13 @@ if (requireConnectedDevice != true) {
                     hasDevice
                 }
             }
+
+            androidComponents.beforeVariants { variantBuilder ->
+                val buildTypeName = variantBuilder.buildType ?: ""
+                if (buildTypeName.contains("benchmark", ignoreCase = true) && !hasConnectedDevice) {
+                    variantBuilder.enableUnitTest = false
+                }
+            }
         }
     }
 }
@@ -361,12 +370,24 @@ fun String.taskNameFromPath(): String = substringAfterLast(":")
 fun String.targetsReleaseLikeVariant(): Boolean =
     contains("Release", ignoreCase = true) || contains("Benchmark", ignoreCase = true)
 
+fun String.isAggregatePackagingTask(): Boolean = equals("assemble", ignoreCase = true) ||
+    equals("bundle", ignoreCase = true) ||
+    equals("publish", ignoreCase = true) ||
+    equals("package", ignoreCase = true) ||
+    equals("sign", ignoreCase = true) ||
+    equals("upload", ignoreCase = true) ||
+    equals("install", ignoreCase = true)
+
 fun String.isPackagingOrPublishingTask(): Boolean =
     signingTaskPrefixes.any { prefix -> startsWith(prefix, ignoreCase = true) }
 
 val needsReleaseSigning = gradle.startParameter.taskNames.any { taskPath ->
     val taskName = taskPath.taskNameFromPath()
-    taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
+    if (!taskName.isPackagingOrPublishingTask()) {
+        false
+    } else {
+        taskName.targetsReleaseLikeVariant() || taskName.isAggregatePackagingTask()
+    }
 }
 
 var releaseSigningConfigured = false
@@ -405,20 +426,6 @@ fun configureReleaseSigning() {
 
 if (needsReleaseSigning) {
     configureReleaseSigning()
-} else {
-    gradle.taskGraph.whenReady(
-        object : Action<TaskExecutionGraph> {
-            override fun execute(taskGraph: TaskExecutionGraph) {
-                if (taskGraph.allTasks.any { task ->
-                        val taskName = task.name
-                        taskName.targetsReleaseLikeVariant() && taskName.isPackagingOrPublishingTask()
-                    }
-                ) {
-                    configureReleaseSigning()
-                }
-            }
-        }
-    )
 }
 
 dependencies {
@@ -492,6 +499,55 @@ kotlin {
 }
 
 afterEvaluate {
+    tasks.namedOrNull<Task>("parseBenchmarkReleaseLocalResources")?.configure {
+        doFirst {
+            val incrementalDir = project.layout.buildDirectory
+                .dir("intermediates/incremental/benchmarkRelease/packageBenchmarkReleaseResources")
+                .get().asFile
+            if (!incrementalDir.exists()) {
+                incrementalDir.mkdirs()
+            }
+            File(incrementalDir, "merged.dir").mkdirs()
+            File(incrementalDir, "stripped.dir").mkdirs()
+
+            val missingInputs = inputs.files.filterNot { it.exists() }
+            if (missingInputs.isNotEmpty()) {
+                project.logger.warn(
+                    "parseBenchmarkReleaseLocalResources missing directories:\n" +
+                        missingInputs.joinToString(separator = "\n") { it.absolutePath }
+                )
+            }
+        }
+    }
+
+    tasks.namedOrNull<Task>("parseBenchmarkLocalResources")?.configure {
+        doFirst {
+            val incrementalDir = project.layout.buildDirectory
+                .dir("intermediates/incremental/benchmark/packageBenchmarkResources")
+                .get().asFile
+            if (!incrementalDir.exists()) {
+                incrementalDir.mkdirs()
+            }
+            File(incrementalDir, "merged.dir").mkdirs()
+            File(incrementalDir, "stripped.dir").mkdirs()
+
+            val packagedDir = project.layout.buildDirectory
+                .dir("intermediates/packaged_res/benchmark/packageBenchmarkResources")
+                .get().asFile
+            if (!packagedDir.exists()) {
+                packagedDir.mkdirs()
+            }
+
+            val missingInputs = inputs.files.filterNot { it.exists() }
+            if (missingInputs.isNotEmpty()) {
+                project.logger.warn(
+                    "parseBenchmarkLocalResources missing directories:\n" +
+                        missingInputs.joinToString(separator = "\n") { it.absolutePath }
+                )
+            }
+        }
+    }
+
     val releaseUnitTest = tasks.namedOrNull<Test>("testReleaseUnitTest")
     val jacocoReport = tasks.namedOrNull<JacocoReport>("jacocoTestReleaseUnitTestReport")
     val jacocoVerification = tasks.namedOrNull<JacocoCoverageVerification>("jacocoTestReleaseUnitTestCoverageVerification")
