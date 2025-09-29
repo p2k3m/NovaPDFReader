@@ -349,22 +349,39 @@ jobs:
           python3 - <<'PY'
 import pathlib
 import sys
+import xml.etree.ElementTree as ET
 
 results_dir = pathlib.Path("app/build/outputs/androidTest-results/connected")
 stress_method = "openLargeAndUnusualDocumentWithoutAnrOrCrash"
 stress_class = "com.novapdf.reader.LargePdfInstrumentedTest"
 
-matched = False
+matched_report = None
 for report in results_dir.rglob("TEST-*.xml"):
-    text = report.read_text(encoding="utf-8", errors="replace")
-    if stress_method in text and stress_class in text:
-        print(f"Found stress PDF instrumentation results in {report}")
-        matched = True
+    try:
+        tree = ET.parse(report)
+    except ET.ParseError as exc:
+        print(f"Skipping unreadable instrumentation report {report}: {exc}")
+        continue
+
+    root = tree.getroot()
+    for testcase in root.iter("testcase"):
+        if testcase.get("classname") == stress_class and testcase.get("name") == stress_method:
+            if any(child.tag in {"failure", "error"} for child in testcase):
+                print("::error::LargePdfInstrumentedTest reported a failure in", report)
+                sys.exit(1)
+            if any(child.tag == "skipped" for child in testcase) or testcase.get("status") == "skipped":
+                print("::error::LargePdfInstrumentedTest was skipped in", report)
+                sys.exit(1)
+            matched_report = report
+            break
+    if matched_report:
         break
 
-if not matched:
+if matched_report is None:
     print("::error::LargePdfInstrumentedTest did not run during connectedAndroidTest")
     sys.exit(1)
+
+print(f"Confirmed LargePdfInstrumentedTest execution in {matched_report}")
 PY
       - name: Validate ANR and crash-free logcat
         run: |
