@@ -1,9 +1,15 @@
 package com.novapdf.reader.baselineprofile
 
+import android.app.Instrumentation
+import android.net.Uri
 import androidx.benchmark.macro.MacrobenchmarkScope
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
+import com.novapdf.reader.ReaderActivity
 
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
 
@@ -11,6 +17,27 @@ internal fun MacrobenchmarkScope.launchReaderAndAwait() {
     pressHome()
     startActivityAndWait()
     device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 5_000)
+    device.waitForIdle()
+}
+
+internal fun MacrobenchmarkScope.openStressDocumentAndAwait() {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val context = instrumentation.targetContext
+    val documentUri = StressDocumentFixtures.ensureStressDocument(context)
+
+    val activity = waitForReaderActivity(instrumentation)
+    instrumentation.runOnMainSync {
+        val method = ReaderActivity::class.java.getDeclaredMethod(
+            "openDocumentForTest",
+            Uri::class.java
+        )
+        method.isAccessible = true
+        method.invoke(activity, documentUri)
+    }
+
+    device.wait(Until.hasObject(By.textContains("Loading your document…")), 5_000)
+    device.wait(Until.gone(By.textContains("Loading your document…")), 20_000)
+    device.wait(Until.hasObject(By.textContains("Adaptive Flow")), 5_000)
     device.waitForIdle()
 }
 
@@ -28,4 +55,25 @@ internal fun MacrobenchmarkScope.exerciseReaderContent() {
         device.swipe(centerX, (centerY * 0.5).toInt(), centerX, centerY, 30)
     }
     device.waitForIdle()
+}
+
+private fun waitForReaderActivity(instrumentation: Instrumentation): ReaderActivity {
+    repeat(20) {
+        val resumed = ActivityLifecycleMonitorRegistry.getInstance()
+            .getActivitiesInStage(Stage.RESUMED)
+            .firstOrNull { it is ReaderActivity } as? ReaderActivity
+        if (resumed != null) {
+            return resumed
+        }
+        instrumentation.waitForIdleSync()
+        Thread.sleep(150)
+    }
+    val currentStageActivities = Stage.values().associateWith { stage ->
+        ActivityLifecycleMonitorRegistry.getInstance()
+            .getActivitiesInStage(stage)
+            .joinToString { it.javaClass.simpleName }
+    }
+    throw IllegalStateException(
+        "ReaderActivity not resumed. Lifecycle snapshot: $currentStageActivities"
+    )
 }

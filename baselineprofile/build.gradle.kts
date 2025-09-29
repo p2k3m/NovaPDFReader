@@ -108,6 +108,7 @@ val skipConnectedTestsOnCi = isCiEnvironment.get() && allowCiConnectedTests != t
 
 dependencies {
     implementation(project(":app"))
+    implementation("androidx.test:core:1.5.0")
     implementation("androidx.test.ext:junit:1.1.5")
     implementation("androidx.test.espresso:espresso-core:3.5.1")
     implementation("androidx.test.uiautomator:uiautomator:2.3.0")
@@ -265,6 +266,12 @@ tasks.register("startupBenchmark") {
     dependsOn("connectedBenchmarkAndroidTest")
 }
 
+tasks.register("renderBenchmark") {
+    group = "performance"
+    description = "Captures first-page rendering trace metrics using Macrobenchmark instrumentation."
+    dependsOn("connectedBenchmarkAndroidTest")
+}
+
 gradle.taskGraph.whenReady {
     val arguments = testExtension.defaultConfig.testInstrumentationRunnerArguments
     when {
@@ -274,6 +281,8 @@ gradle.taskGraph.whenReady {
             arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.MemoryMetric"
         hasTask(":baselineprofile:startupBenchmark") ->
             arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.StartupMetric"
+        hasTask(":baselineprofile:renderBenchmark") ->
+            arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.RenderMetric"
         else -> arguments.remove("annotation")
     }
 }

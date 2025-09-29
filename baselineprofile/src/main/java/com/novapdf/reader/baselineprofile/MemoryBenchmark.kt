@@ -27,6 +27,7 @@ class MemoryBenchmark {
         startupMode = StartupMode.COLD
     ) {
         launchReaderAndAwait()
+        openStressDocumentAndAwait()
         exerciseReaderContent()
     }
 }
