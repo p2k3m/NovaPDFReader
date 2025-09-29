@@ -16,6 +16,7 @@ import android.os.Trace
 import android.util.Size
 import android.util.SparseArray
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
 import kotlinx.coroutines.CoroutineDispatcher
@@ -131,32 +132,9 @@ class PdfDocumentRepository(
         appContext.registerComponentCallbacks(componentCallbacks)
     }
 
-    fun closeCurrentSession() {
-        if (cacheLock.tryLock()) {
-            try {
-                clearBitmapCacheLocked()
-            } finally {
-                cacheLock.unlock()
-            }
-        } else {
-            scheduleCacheClear()
-        }
-        pageSizeCache.clear()
-        outlineNodes.value = emptyList()
-        renderProgressState.value = PdfRenderProgress.Idle
-        openSession.value?.let { session ->
-            try {
-                pdfiumCore.closeDocument(session.document)
-                session.fileDescriptor.close()
-            } catch (_: IOException) {
-            }
-        }
-        openSession.value = null
-    }
-
     suspend fun open(uri: Uri): PdfDocumentSession {
-        closeCurrentSession()
         return withContextGuard {
+            closeSessionInternal()
             if (!validateDocumentUri(uri)) {
                 throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
             }
@@ -393,11 +371,13 @@ class PdfDocumentRepository(
     }
 
     fun dispose() {
-        closeCurrentSession()
         appContext.unregisterComponentCallbacks(componentCallbacks)
         runBlocking {
-            cacheLock.withLock {
-                clearBitmapCacheLocked()
+            withContext(ioDispatcher) {
+                closeSessionInternal()
+                cacheLock.withLock {
+                    clearBitmapCacheLocked()
+                }
             }
         }
         renderScope.cancel()
@@ -441,24 +421,24 @@ class PdfDocumentRepository(
             }
             val aspect = pageSize.height.toDouble() / pageSize.width.toDouble()
             val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
-            renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0f)
+            updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0f))
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
-                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0.2f)
+                updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.2f))
                 if (!session.document.hasPage(pageIndex)) {
                     pdfiumCore.openPage(session.document, pageIndex)
                 }
                 val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0.6f)
+                updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
-                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 1f)
+                updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
                 pageBitmapCache.put(key, bitmap)
                 bitmap
             } catch (throwable: Throwable) {
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
                 null
             } finally {
-                renderProgressState.value = PdfRenderProgress.Idle
+                updateRenderProgress(PdfRenderProgress.Idle)
                 Trace.endSection()
             }
         }
@@ -492,6 +472,32 @@ class PdfDocumentRepository(
         if (mainLooper != null && Thread.currentThread() == mainLooper.thread) {
             throw IllegalStateException("PDF operations must not run on the main thread")
         }
+    }
+
+    private suspend fun closeSessionInternal() {
+        ensureWorkerThread()
+        cacheLock.withLock { clearBitmapCacheLocked() }
+        pageSizeCache.clear()
+        outlineNodes.value = emptyList()
+        updateRenderProgress(PdfRenderProgress.Idle)
+        openSession.value?.let { session ->
+            try {
+                pdfiumCore.closeDocument(session.document)
+                session.fileDescriptor.close()
+            } catch (_: IOException) {
+            }
+        }
+        openSession.value = null
+    }
+
+    private fun updateRenderProgress(progress: PdfRenderProgress) {
+        ensureWorkerThread()
+        renderProgressState.value = progress
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    internal fun emitRenderProgressForTesting(progress: PdfRenderProgress) {
+        updateRenderProgress(progress)
     }
 
     private fun calculateCacheBudget(): Long {
