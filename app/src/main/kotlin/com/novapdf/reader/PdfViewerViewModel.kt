@@ -92,15 +92,13 @@ open class PdfViewerViewModel(
         @StringRes messageRes: Int?,
         resetError: Boolean = false
     ) {
-        withContext(Dispatchers.Main.immediate) {
-            updateUiState { current ->
-                current.copy(
-                    isLoading = isLoading,
-                    loadingProgress = progress,
-                    loadingMessageRes = messageRes,
-                    errorMessage = if (resetError) null else current.errorMessage
-                )
-            }
+        updateUiState { current ->
+            current.copy(
+                isLoading = isLoading,
+                loadingProgress = progress,
+                loadingMessageRes = messageRes,
+                errorMessage = if (resetError) null else current.errorMessage
+            )
         }
     }
 
@@ -154,7 +152,7 @@ open class PdfViewerViewModel(
 
     fun openRemoteDocument(url: String) {
         val previousJob = remoteDownloadJob
-        val newJob = viewModelScope.launch {
+        val newJob = viewModelScope.launch(Dispatchers.IO) {
             previousJob?.cancelAndJoin()
             setLoadingState(
                 isLoading = true,
@@ -178,9 +176,7 @@ open class PdfViewerViewModel(
                 return@launch
             }
             result.onSuccess { uri ->
-                withContext(Dispatchers.IO) {
-                    loadDocument(uri, resetError = false)
-                }
+                loadDocument(uri, resetError = false)
             }.onFailure { throwable ->
                 if (throwable is CancellationException) {
                     setLoadingState(

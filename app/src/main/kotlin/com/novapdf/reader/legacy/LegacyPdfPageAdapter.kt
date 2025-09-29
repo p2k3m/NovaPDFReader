@@ -89,7 +89,7 @@ class LegacyPdfPageAdapter(
         }
         holder.showLoading()
         pageJobs[pageIndex]?.cancel()
-        val job = scope.launch {
+        val job = scope.launch(Dispatchers.IO) {
             val bitmap = renderPageBitmap(pageIndex)
             withContext(Dispatchers.Main) {
                 if (holder.boundPage == pageIndex) {
