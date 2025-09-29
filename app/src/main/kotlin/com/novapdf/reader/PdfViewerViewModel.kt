@@ -220,7 +220,9 @@ open class PdfViewerViewModel(
             messageRes = R.string.loading_stage_resolving,
             resetError = resetError
         )
-        val session = runCatching { pdfRepository.open(uri) }
+        val session = runCatching {
+            withContext(Dispatchers.IO) { pdfRepository.open(uri) }
+        }
             .getOrElse { throwable ->
                 handleDocumentError(throwable)
                 return
@@ -266,7 +268,9 @@ open class PdfViewerViewModel(
             messageRes = R.string.loading_stage_rendering
         )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
-        runCatching { pdfRepository.renderPage(0, targetWidth) }
+        withContext(Dispatchers.IO) {
+            runCatching { pdfRepository.renderPage(0, targetWidth) }
+        }
         setLoadingState(
             isLoading = true,
             progress = 0.7f,
@@ -331,15 +335,21 @@ open class PdfViewerViewModel(
     }
 
     suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
-        return pdfRepository.renderPage(index, targetWidth)
+        return withContext(Dispatchers.IO) {
+            pdfRepository.renderPage(index, targetWidth)
+        }
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
-        return pdfRepository.renderTile(index, rect, scale)
+        return withContext(Dispatchers.IO) {
+            pdfRepository.renderTile(index, rect, scale)
+        }
     }
 
     suspend fun pageSize(index: Int): Size? {
-        return pdfRepository.getPageSize(index)
+        return withContext(Dispatchers.IO) {
+            pdfRepository.getPageSize(index)
+        }
     }
 
     fun jumpToPage(index: Int) {
