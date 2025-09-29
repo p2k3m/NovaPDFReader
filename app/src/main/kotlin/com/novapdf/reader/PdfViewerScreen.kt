@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -139,6 +140,7 @@ import com.novapdf.reader.accessibility.HapticFeedbackManager
 import com.novapdf.reader.accessibility.rememberHapticFeedbackManager
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
+import com.novapdf.reader.model.PdfRenderProgress
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.rememberLottieComposition
@@ -474,6 +476,17 @@ fun PdfViewerScreen(
                     }
                 }
 
+                val renderProgressState = state.renderProgress
+                if (!state.isLoading && renderProgressState is PdfRenderProgress.Rendering) {
+                    RenderProgressIndicator(
+                        pageIndex = renderProgressState.pageIndex,
+                        progress = renderProgressState.progress,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 24.dp, start = 24.dp, end = 24.dp)
+                    )
+                }
+
                 if (state.isLoading) {
                     LoadingOverlay(
                         progress = state.loadingProgress,
@@ -743,6 +756,56 @@ private fun LoadingOverlay(progress: Float?, @StringRes messageRes: Int?) {
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun RenderProgressIndicator(
+    pageIndex: Int,
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    val clamped = progress.coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(
+        targetValue = clamped,
+        animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing),
+        label = "RenderProgress"
+    )
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 6.dp,
+        shadowElevation = 8.dp,
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(min = 220.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = stringResource(id = R.string.render_progress_title, pageIndex + 1),
+                style = MaterialTheme.typography.titleSmall,
+                textAlign = TextAlign.Center
+            )
+            LinearProgressIndicator(
+                progress = animatedProgress,
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .fillMaxWidth()
+            )
+            Text(
+                text = stringResource(
+                    id = R.string.loading_progress,
+                    (animatedProgress * 100f).roundToInt()
+                ),
+                modifier = Modifier.padding(top = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

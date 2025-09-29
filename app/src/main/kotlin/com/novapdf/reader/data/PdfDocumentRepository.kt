@@ -444,10 +444,12 @@ class PdfDocumentRepository(
             renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0f)
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
+                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0.2f)
                 if (!session.document.hasPage(pageIndex)) {
                     pdfiumCore.openPage(session.document, pageIndex)
                 }
                 val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 0.6f)
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
                 renderProgressState.value = PdfRenderProgress.Rendering(pageIndex, 1f)
                 pageBitmapCache.put(key, bitmap)
