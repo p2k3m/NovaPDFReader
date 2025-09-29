@@ -267,7 +267,7 @@ class PdfViewerViewModelSearchTest {
         verify(pdfRepository).open(eq(downloadUri))
         verify(searchCoordinator).prepare(eq(session))
         assertEquals("remote_doc", viewModel.uiState.value.documentId)
-        assertEquals(false, viewModel.uiState.value.isLoading)
+        assertEquals(DocumentStatus.Idle, viewModel.uiState.value.documentStatus)
     }
 
     @Test
@@ -310,11 +310,9 @@ class PdfViewerViewModelSearchTest {
         advanceUntilIdle()
 
         verify(downloadManager).download(eq(failingUrl))
-        assertEquals(
-            app.getString(R.string.error_remote_open_failed),
-            viewModel.uiState.value.errorMessage
-        )
-        assertEquals(false, viewModel.uiState.value.isLoading)
+        val status = viewModel.uiState.value.documentStatus
+        assertTrue(status is DocumentStatus.Error)
+        assertEquals(app.getString(R.string.error_remote_open_failed), (status as DocumentStatus.Error).message)
     }
 
     @Test
@@ -358,10 +356,11 @@ class PdfViewerViewModelSearchTest {
 
         verify(downloadManager).download(eq(failingUrl))
         val uiState = viewModel.uiState.value
-        assertEquals(app.getString(R.string.error_remote_open_failed), uiState.errorMessage)
-        assertEquals(false, uiState.isLoading)
-        assertEquals(null, uiState.loadingProgress)
-        assertEquals(null, uiState.loadingMessageRes)
+        assertTrue(uiState.documentStatus is DocumentStatus.Error)
+        assertEquals(
+            app.getString(R.string.error_remote_open_failed),
+            (uiState.documentStatus as DocumentStatus.Error).message
+        )
     }
 
     @Test
@@ -404,10 +403,7 @@ class PdfViewerViewModelSearchTest {
         advanceUntilIdle()
 
         val uiState = viewModel.uiState.value
-        assertEquals(null, uiState.errorMessage)
-        assertEquals(false, uiState.isLoading)
-        assertEquals(null, uiState.loadingProgress)
-        assertEquals(null, uiState.loadingMessageRes)
+        assertEquals(DocumentStatus.Idle, uiState.documentStatus)
     }
 
 }
