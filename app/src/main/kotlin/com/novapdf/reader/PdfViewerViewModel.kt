@@ -23,6 +23,7 @@ import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.data.remote.PdfDownloadManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,11 +74,13 @@ open class PdfViewerViewModel(
     private val bookmarkManager: BookmarkManager = app.bookmarkManager
     private val documentMaintenanceScheduler: DocumentMaintenanceScheduler = app.documentMaintenanceScheduler
     private val searchCoordinator: LuceneSearchCoordinator = app.searchCoordinator
+    private val downloadManager: PdfDownloadManager = app.pdfDownloadManager
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
 
     private var searchJob: Job? = null
+    private var remoteDownloadJob: Job? = null
     private var viewportWidthPx: Int = 1080
 
     private suspend fun setLoadingState(
@@ -140,48 +143,76 @@ open class PdfViewerViewModel(
 
     fun openDocument(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
+            loadDocument(uri, resetError = true)
+        }
+    }
+
+    fun openRemoteDocument(url: String) {
+        remoteDownloadJob?.cancel()
+        remoteDownloadJob = viewModelScope.launch {
             setLoadingState(
                 isLoading = true,
                 progress = 0f,
-                messageRes = R.string.loading_stage_resolving,
+                messageRes = R.string.loading_stage_downloading,
                 resetError = true
             )
-            val session = runCatching { pdfRepository.open(uri) }
-                .getOrElse { throwable ->
-                    handleDocumentError(throwable)
-                    return@launch
+            val result = downloadManager.download(url)
+            result.onSuccess { uri ->
+                withContext(Dispatchers.IO) {
+                    loadDocument(uri, resetError = false)
                 }
-            annotationRepository.clearInMemory(session.documentId)
-            setLoadingState(
-                isLoading = true,
-                progress = 0.35f,
-                messageRes = R.string.loading_stage_parsing
-            )
-            adaptiveFlowManager.start()
-            adaptiveFlowManager.trackPageChange(0, session.pageCount)
-            preloadInitialPage(session)
-            setLoadingState(
-                isLoading = true,
-                progress = 0.85f,
-                messageRes = R.string.loading_stage_finalizing
-            )
-            val bookmarks = bookmarkManager.bookmarks(session.documentId)
-            updateUiState { current ->
-                current.copy(
-                    isLoading = false,
-                    loadingProgress = null,
-                    loadingMessageRes = null,
-                    documentId = session.documentId,
-                    pageCount = session.pageCount,
-                    currentPage = 0,
-                    errorMessage = null,
-                    activeAnnotations = emptyList(),
-                    bookmarks = bookmarks,
-                    outline = pdfRepository.outline.value
-                )
+            }.onFailure { throwable ->
+                reportRemoteOpenFailure(throwable)
             }
-            searchCoordinator.prepare(session)
+        }.also { job ->
+            job.invokeOnCompletion { remoteDownloadJob = null }
         }
+    }
+
+    private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
+        setLoadingState(
+            isLoading = true,
+            progress = 0f,
+            messageRes = R.string.loading_stage_resolving,
+            resetError = resetError
+        )
+        val session = runCatching { pdfRepository.open(uri) }
+            .getOrElse { throwable ->
+                handleDocumentError(throwable)
+                return
+            }
+        annotationRepository.clearInMemory(session.documentId)
+        setLoadingState(
+            isLoading = true,
+            progress = 0.35f,
+            messageRes = R.string.loading_stage_parsing
+        )
+        withContext(Dispatchers.Main) {
+            adaptiveFlowManager.start()
+        }
+        adaptiveFlowManager.trackPageChange(0, session.pageCount)
+        preloadInitialPage(session)
+        setLoadingState(
+            isLoading = true,
+            progress = 0.85f,
+            messageRes = R.string.loading_stage_finalizing
+        )
+        val bookmarks = bookmarkManager.bookmarks(session.documentId)
+        updateUiState { current ->
+            current.copy(
+                isLoading = false,
+                loadingProgress = null,
+                loadingMessageRes = null,
+                documentId = session.documentId,
+                pageCount = session.pageCount,
+                currentPage = 0,
+                errorMessage = null,
+                activeAnnotations = emptyList(),
+                bookmarks = bookmarks,
+                outline = pdfRepository.outline.value
+            )
+        }
+        searchCoordinator.prepare(session)
     }
 
     private suspend fun preloadInitialPage(session: PdfDocumentSession) {
@@ -373,6 +404,7 @@ open class PdfViewerViewModel(
         super.onCleared()
         adaptiveFlowManager.stop()
         pdfRepository.dispose()
+        remoteDownloadJob?.cancel()
     }
 
     private fun isNightModeEnabled(): Boolean {
