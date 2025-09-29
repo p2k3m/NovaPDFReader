@@ -387,14 +387,56 @@ PY
         run: |
           set -euo pipefail
           adb logcat -d > logcat-after-tests.txt
-          if grep -E "ANR in com\.novapdf\.reader" logcat-after-tests.txt; then
-            echo "::error::Detected Application Not Responding dialog for com.novapdf.reader during instrumentation tests"
-            exit 1
-          fi
-          if grep -E "FATAL EXCEPTION: .*Process: com\.novapdf\.reader" logcat-after-tests.txt; then
-            echo "::error::Detected fatal crash in com.novapdf.reader during instrumentation tests"
-            exit 1
-          fi
+          python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+log_path = pathlib.Path("logcat-after-tests.txt")
+if not log_path.exists():
+    print("::error::Unable to locate captured logcat at", log_path)
+    sys.exit(1)
+
+contents = log_path.read_text(encoding="utf-8", errors="ignore")
+crash_signatures = [
+    (
+        re.compile(r"ANR in com\\.novapdf\\.reader"),
+        "Detected Application Not Responding dialog for com.novapdf.reader during instrumentation tests",
+    ),
+    (
+        re.compile(r"Application is not responding: Process com\\.novapdf\\.reader"),
+        "Detected system level 'Application is not responding' warning for com.novapdf.reader",
+    ),
+    (
+        re.compile(r"FATAL EXCEPTION: .*Process: com\\.novapdf\\.reader"),
+        "Detected fatal crash in com.novapdf.reader during instrumentation tests",
+    ),
+    (
+        re.compile(r"E AndroidRuntime: FATAL EXCEPTION"),
+        "AndroidRuntime reported a fatal exception while instrumentation tests were running",
+    ),
+    (
+        re.compile(r"Fatal signal \d+ .*? \(SIG[A-Z]+\).*?com\\.novapdf\\.reader"),
+        "Detected native crash (fatal signal) for com.novapdf.reader during instrumentation tests",
+    ),
+    (
+        re.compile(r"Process com\\.novapdf\\.reader has died"),
+        "System server logged that com.novapdf.reader process died during instrumentation tests",
+    ),
+    (
+        re.compile(r"Force finishing activity com\\.novapdf\\.reader"),
+        "Activity manager force-finished NovaPDF Reader during instrumentation tests",
+    ),
+]
+
+issues = [message for pattern, message in crash_signatures if pattern.search(contents)]
+if issues:
+    for message in issues:
+        print(f"::error::{message}")
+    sys.exit(1)
+
+print("Logcat is free from ANR/crash signatures")
+PY
       - name: Install debug build for screenshots
         run: |
           set -euo pipefail
