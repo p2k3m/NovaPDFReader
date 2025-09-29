@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
 import com.novapdf.reader.model.toOffset
@@ -30,7 +32,9 @@ fun AnnotationOverlay(
     annotations: List<AnnotationCommand.Stroke>,
     onStrokeComplete: (List<Offset>) -> Unit,
     strokeColor: Color = Color(0xFFFF4081),
-    strokeWidth: Float = 4f
+    strokeWidth: Float = 4f,
+    enabled: Boolean = true,
+    contentDescription: String? = null
 ) {
     val strokes = remember { mutableStateListOf<List<Offset>>() }
     val currentStroke = remember { mutableStateOf<List<Offset>>(emptyList()) }
@@ -45,26 +49,39 @@ fun AnnotationOverlay(
         }
     }
 
+    val drawingModifier = if (enabled) {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                currentStroke.value = listOf(down.position)
+                drag(down.id) { change ->
+                    currentStroke.value = currentStroke.value + change.position
+                }
+                val completedStroke = currentStroke.value
+                currentStroke.value = emptyList()
+                if (completedStroke.size > 1) {
+                    coroutineScope.launch {
+                        updatedOnComplete.value.invoke(completedStroke)
+                    }
+                    strokes += completedStroke
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
+    val semanticsModifier = if (!contentDescription.isNullOrBlank()) {
+        Modifier.semantics { this.contentDescription = contentDescription }
+    } else {
+        Modifier
+    }
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    currentStroke.value = listOf(down.position)
-                    drag(down.id) { change ->
-                        currentStroke.value = currentStroke.value + change.position
-                    }
-                    val completedStroke = currentStroke.value
-                    currentStroke.value = emptyList()
-                    if (completedStroke.size > 1) {
-                        coroutineScope.launch {
-                            updatedOnComplete.value.invoke(completedStroke)
-                        }
-                        strokes += completedStroke
-                    }
-                }
-            }
+            .then(drawingModifier)
+            .then(semanticsModifier)
     ) {
         strokes.forEach { stroke ->
             drawStrokePath(stroke, strokeColor, strokeWidth)

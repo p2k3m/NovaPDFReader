@@ -29,8 +29,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
@@ -71,8 +75,7 @@ data class PdfViewerUiState(
     val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList(),
-    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
-    val messages: List<UiMessage> = emptyList()
+    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle
 )
 
 private data class DocumentContext(
@@ -97,6 +100,13 @@ open class PdfViewerViewModel(
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
+
+    private val _messageEvents = MutableSharedFlow<UiMessage>(
+        replay = 0,
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val messageEvents: SharedFlow<UiMessage> = _messageEvents.asSharedFlow()
 
     private var searchJob: Job? = null
     private var remoteDownloadJob: Job? = null
@@ -464,15 +474,7 @@ open class PdfViewerViewModel(
     }
 
     private fun enqueueMessage(@StringRes messageRes: Int) {
-        updateUiState { current ->
-            current.copy(messages = current.messages + UiMessage(messageRes = messageRes))
-        }
-    }
-
-    fun onMessageShown(id: Long) {
-        updateUiState { current ->
-            current.copy(messages = current.messages.filterNot { it.id == id })
-        }
+        _messageEvents.tryEmit(UiMessage(messageRes = messageRes))
     }
 
     fun search(query: String) {
