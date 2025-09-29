@@ -285,14 +285,27 @@ class LuceneSearchCoordinator(
             Log.w(TAG, "Failed to extract text with PDFBox", io)
         }
         contents.forEachIndexed { index, content ->
-            if (content.text.isBlank()) {
-                val fallback = runCatching {
-                    performOcr(index, content.coordinateWidth, content.coordinateHeight)
-                }.onFailure {
-                    Log.w(TAG, "OCR fallback failed for page $index", it)
-                }.getOrNull()
-                if (fallback != null) {
-                    contents[index] = fallback
+            val needsOcrForText = content.text.isBlank()
+            val needsOcrForBounds = content.runs.isEmpty()
+            if (!needsOcrForText && !needsOcrForBounds) {
+                return@forEachIndexed
+            }
+            val fallback = runCatching {
+                performOcr(index, content.coordinateWidth, content.coordinateHeight)
+            }.onFailure {
+                Log.w(TAG, "OCR fallback failed for page $index", it)
+            }.getOrNull()
+            if (fallback != null) {
+                contents[index] = when {
+                    needsOcrForText -> fallback
+                    else -> content.copy(
+                        runs = fallback.runs.takeIf { it.isNotEmpty() } ?: content.runs,
+                        fallbackRegions = if (fallback.fallbackRegions.isNotEmpty()) {
+                            fallback.fallbackRegions
+                        } else {
+                            content.fallbackRegions
+                        }
+                    )
                 }
             }
         }

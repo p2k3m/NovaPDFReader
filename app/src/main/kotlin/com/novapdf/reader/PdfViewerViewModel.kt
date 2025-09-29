@@ -232,6 +232,7 @@ open class PdfViewerViewModel(
     }
 
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
+        searchJob?.cancel()
         setLoadingState(
             isLoading = true,
             progress = 0f,
@@ -270,7 +271,8 @@ open class PdfViewerViewModel(
                 currentPage = 0,
                 activeAnnotations = emptyList(),
                 bookmarks = bookmarks,
-                outline = pdfRepository.outline.value
+                outline = pdfRepository.outline.value,
+                searchResults = emptyList()
             )
         }
         searchCoordinator.prepare(session)
