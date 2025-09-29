@@ -17,6 +17,7 @@ import android.util.Size
 import android.util.SparseArray
 import android.util.Log
 import androidx.annotation.VisibleForTesting
+import androidx.annotation.WorkerThread
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
 import kotlinx.coroutines.CoroutineDispatcher
@@ -132,6 +133,7 @@ class PdfDocumentRepository(
         appContext.registerComponentCallbacks(componentCallbacks)
     }
 
+    @WorkerThread
     suspend fun open(uri: Uri): PdfDocumentSession {
         return withContextGuard {
             closeSessionInternal()
@@ -167,6 +169,7 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     suspend fun getPageSize(pageIndex: Int): Size? = withContextGuard {
         val session = openSession.value ?: return@withContextGuard null
         pageSizeLock.withLock {
@@ -182,16 +185,19 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? = withContextGuard {
         if (targetWidth <= 0) return@withContextGuard null
         val bitmap = ensurePageBitmap(pageIndex, targetWidth) ?: return@withContextGuard null
         copyBitmap(bitmap)
     }
 
+    @WorkerThread
     suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? {
         return renderTile(PageTileRequest(pageIndex, tileRect, scale))
     }
 
+    @WorkerThread
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
         if (openSession.value == null) return@withContextGuard null
         val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
@@ -304,6 +310,7 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(ioDispatcher) {
         ensureWorkerThread()
         block()
@@ -383,6 +390,7 @@ class PdfDocumentRepository(
         renderScope.cancel()
     }
 
+    @WorkerThread
     private suspend fun getPageSizeInternal(pageIndex: Int): Size? {
         ensureWorkerThread()
         val session = openSession.value ?: return null
@@ -399,6 +407,7 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     private suspend fun ensurePageBitmap(pageIndex: Int, targetWidth: Int): Bitmap? {
         ensureWorkerThread()
         if (targetWidth <= 0) return null
@@ -474,6 +483,7 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     private suspend fun closeSessionInternal() {
         ensureWorkerThread()
         cacheLock.withLock { clearBitmapCacheLocked() }
@@ -490,6 +500,7 @@ class PdfDocumentRepository(
         openSession.value = null
     }
 
+    @WorkerThread
     private fun updateRenderProgress(progress: PdfRenderProgress) {
         ensureWorkerThread()
         renderProgressState.value = progress

@@ -3,7 +3,6 @@ package com.novapdf.reader
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
@@ -411,39 +410,4 @@ class PdfViewerViewModelSearchTest {
         assertEquals(null, uiState.loadingMessageRes)
     }
 
-    class TestPdfApp : NovaPdfApp() {
-        override fun onCreate() {
-            // Skip default initialisation to allow tests to inject fakes.
-        }
-
-        fun installDependencies(
-            annotationRepository: AnnotationRepository,
-            pdfRepository: PdfDocumentRepository,
-            adaptiveFlowManager: AdaptiveFlowManager,
-            bookmarkManager: BookmarkManager,
-            documentMaintenanceScheduler: DocumentMaintenanceScheduler,
-            searchCoordinator: LuceneSearchCoordinator,
-            pdfDownloadManager: PdfDownloadManager
-        ) {
-            setField("annotationRepository", annotationRepository)
-            setField("pdfDocumentRepository", pdfRepository)
-            setField("adaptiveFlowManager", adaptiveFlowManager)
-            setField("bookmarkManager", bookmarkManager)
-            setField("documentMaintenanceScheduler", documentMaintenanceScheduler)
-            setField("searchCoordinator", searchCoordinator)
-            setField("pdfDownloadManager", pdfDownloadManager)
-        }
-
-        private fun setField(name: String, value: Any) {
-            val field = NovaPdfApp::class.java.getDeclaredField(name)
-            field.isAccessible = true
-            field.set(this, value)
-        }
-
-        companion object {
-            fun getInstance(): TestPdfApp {
-                return ApplicationProvider.getApplicationContext()
-            }
-        }
-    }
 }
