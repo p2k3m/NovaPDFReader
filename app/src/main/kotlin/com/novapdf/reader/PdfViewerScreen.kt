@@ -159,6 +159,8 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -183,6 +185,7 @@ fun PdfViewerRoute(
     PdfViewerScreen(
         state = uiState,
         snackbarHost = snackbarHost,
+        messageFlow = viewModel.messageEvents,
         onOpenLocalDocument = onOpenLocalDocument,
         onOpenCloudDocument = onOpenCloudDocument,
         onOpenRemoteDocument = onOpenRemoteDocument,
@@ -202,7 +205,6 @@ fun PdfViewerRoute(
         onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
         onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
         onFontScaleChanged = { viewModel.setFontScale(it) },
-        onMessageShown = { viewModel.onMessageShown(it) },
         dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     )
 }
@@ -212,6 +214,7 @@ fun PdfViewerRoute(
 fun PdfViewerScreen(
     state: PdfViewerUiState,
     snackbarHost: SnackbarHostState,
+    messageFlow: Flow<UiMessage>,
     onOpenLocalDocument: () -> Unit,
     onOpenCloudDocument: () -> Unit,
     onOpenRemoteDocument: (String) -> Unit,
@@ -231,7 +234,6 @@ fun PdfViewerScreen(
     onToggleHighContrast: (Boolean) -> Unit,
     onToggleTalkBackIntegration: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
-    onMessageShown: (Long) -> Unit,
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -259,12 +261,10 @@ fun PdfViewerScreen(
             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         })
         val coroutineScope = rememberCoroutineScope()
-        val pendingMessage = state.messages.firstOrNull()
-        LaunchedEffect(pendingMessage?.id) {
-            if (pendingMessage != null) {
-                val messageText = context.getString(pendingMessage.messageRes)
+        LaunchedEffect(messageFlow, snackbarHost) {
+            messageFlow.collectLatest { message ->
+                val messageText = context.getString(message.messageRes)
                 snackbarHost.showSnackbar(messageText)
-                onMessageShown(pendingMessage.id)
             }
         }
         var showOutlineSheet by remember { mutableStateOf(false) }
@@ -1705,11 +1705,17 @@ private fun EmptyState(onOpenDocument: () -> Unit) {
 @Composable
 private fun SearchHighlightOverlay(
     modifier: Modifier,
-    matches: List<com.novapdf.reader.model.SearchMatch>
+    matches: List<com.novapdf.reader.model.SearchMatch>,
+    contentDescription: String? = null
 ) {
     if (matches.isEmpty()) return
     val highlight = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
-    Canvas(modifier = modifier) {
+    val semanticsModifier = if (!contentDescription.isNullOrBlank()) {
+        modifier.semantics { this.contentDescription = contentDescription }
+    } else {
+        modifier
+    }
+    Canvas(modifier = semanticsModifier) {
         matches.flatMap { it.boundingBoxes }.forEach { rect ->
             drawRect(
                 color = highlight,
@@ -2320,11 +2326,28 @@ private fun PdfPageItem(
                 }
             }
 
+            val pageMatches = state.searchResults
+                .firstOrNull { it.pageIndex == pageIndex }
+                ?.matches
+                .orEmpty()
+            val highlightDescription = if (pageMatches.isNotEmpty()) {
+                stringResource(
+                    id = R.string.search_highlight_description,
+                    pageMatches.size
+                )
+            } else {
+                null
+            }
             SearchHighlightOverlay(
                 modifier = Modifier.fillMaxSize(),
-                matches = state.searchResults.firstOrNull { it.pageIndex == pageIndex }?.matches.orEmpty()
+                matches = pageMatches,
+                contentDescription = highlightDescription
             )
 
+            val annotationDescription = stringResource(
+                id = R.string.annotation_canvas_description,
+                pageIndex + 1
+            )
             AnnotationOverlay(
                 modifier = Modifier.fillMaxSize(),
                 pageIndex = pageIndex,
@@ -2338,7 +2361,9 @@ private fun PdfPageItem(
                         strokeWidth = 4f
                     )
                     latestStroke(command)
-                }
+                },
+                enabled = !state.talkBackIntegrationEnabled,
+                contentDescription = annotationDescription
             )
 
             AnimatedVisibility(

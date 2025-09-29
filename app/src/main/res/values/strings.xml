@@ -86,6 +86,8 @@
     <string name="thumbnail_strip_filter_label">Bookmarks only</string>
     <string name="thumbnail_strip_empty">Add bookmarks to see them here for faster navigation.</string>
     <string name="thumbnail_page_content_description">Thumbnail for page %1$d</string>
+    <string name="annotation_canvas_description">Annotation canvas for page %1$d. Double-tap and hold to begin drawing.</string>
+    <string name="search_highlight_description">Search highlights on this page: %1$d match(es) outlined.</string>
     <string name="open_source_dialog_title">Where is your PDF?</string>
     <string name="open_source_dialog_body">Choose how you\'d like to open your document.</string>
     <string name="open_source_device">Browse device storage</string>
