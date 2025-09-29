@@ -26,13 +26,33 @@ class LargePdfInstrumentedTest {
             val pdfSession = requireNotNull(session)
             assertEquals(32, pdfSession.pageCount)
 
-            val sampleIndices = linkedSetOf(0, pdfSession.pageCount / 2, pdfSession.pageCount - 1)
+            val sampleIndices = linkedSetOf(
+                0,
+                1,
+                2,
+                3,
+                pdfSession.pageCount / 2,
+                pdfSession.pageCount - 1,
+            )
             for (index in sampleIndices) {
                 val pageSize = withTimeout(30_000) { repository.getPageSize(index) }
                 assertNotNull("Page $index should report a size", pageSize)
                 val size = requireNotNull(pageSize)
                 assertTrue("Page width should be > 0", size.width > 0)
                 assertTrue("Page height should be > 0", size.height > 0)
+
+                when (index % 4) {
+                    0 -> assertTrue("Variant 0 should be portrait", size.height > size.width)
+                    1 -> assertTrue("Variant 1 should be landscape", size.width > size.height)
+                    2 -> assertTrue(
+                        "Variant 2 should resemble a tall infographic",
+                        size.height.toDouble() / size.width.toDouble() >= 2.5,
+                    )
+                    3 -> assertTrue(
+                        "Variant 3 should resemble a wide panorama",
+                        size.width.toDouble() / size.height.toDouble() >= 2.5,
+                    )
+                }
 
                 val renderWidth = size.width.coerceAtLeast(size.height).coerceAtMost(4000)
                 val bitmap = withTimeout(60_000) { repository.renderPage(index, renderWidth) }
