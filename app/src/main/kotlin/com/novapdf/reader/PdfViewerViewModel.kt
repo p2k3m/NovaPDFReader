@@ -113,6 +113,16 @@ open class PdfViewerViewModel(
         }
     }
 
+    private fun resetTransientStatus() {
+        updateUiState { current ->
+            when (current.documentStatus) {
+                is DocumentStatus.Loading,
+                is DocumentStatus.Error -> current.copy(documentStatus = DocumentStatus.Idle)
+                DocumentStatus.Idle -> current
+            }
+        }
+    }
+
     init {
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _uiState.value = _uiState.value.copy(
@@ -288,6 +298,7 @@ open class PdfViewerViewModel(
     }
 
     private suspend fun handleDocumentError(throwable: Throwable) {
+        resetTransientStatus()
         val message = when (throwable) {
             is PdfOpenException -> when (throwable.reason) {
                 PdfOpenException.Reason.CORRUPTED -> app.getString(R.string.error_pdf_corrupted)
@@ -301,6 +312,7 @@ open class PdfViewerViewModel(
 
     fun reportRemoteOpenFailure(@Suppress("UNUSED_PARAMETER") throwable: Throwable) {
         viewModelScope.launch {
+            resetTransientStatus()
             showError(app.getString(R.string.error_remote_open_failed))
         }
     }

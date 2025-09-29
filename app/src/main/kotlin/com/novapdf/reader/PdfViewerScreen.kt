@@ -481,7 +481,7 @@ fun PdfViewerScreen(
                 }
 
                 val renderProgressState = state.renderProgress
-                if (state.documentStatus !is DocumentStatus.Loading &&
+                if (state.documentStatus is DocumentStatus.Idle &&
                     renderProgressState is PdfRenderProgress.Rendering
                 ) {
                     RenderProgressIndicator(
