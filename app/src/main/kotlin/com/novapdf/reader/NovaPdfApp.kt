@@ -8,6 +8,8 @@ import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.logging.FileCrashReporter
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -29,12 +31,15 @@ open class NovaPdfApp : Application() {
         private set
     lateinit var pdfDownloadManager: PdfDownloadManager
         private set
+    lateinit var crashReporter: CrashReporter
+        private set
 
     override fun onCreate() {
         super.onCreate()
+        crashReporter = FileCrashReporter(this).also { it.install() }
         PDFBoxResourceLoader.init(applicationContext)
         annotationRepository = AnnotationRepository(this)
-        pdfDocumentRepository = PdfDocumentRepository(this)
+        pdfDocumentRepository = PdfDocumentRepository(this, crashReporter = crashReporter)
         searchCoordinator = LuceneSearchCoordinator(this, pdfDocumentRepository)
         adaptiveFlowManager = AdaptiveFlowManager(this)
         pdfDownloadManager = PdfDownloadManager(this)

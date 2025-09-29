@@ -6,6 +6,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
@@ -22,6 +23,11 @@ class TestPdfApp : NovaPdfApp() {
         documentMaintenanceScheduler: DocumentMaintenanceScheduler,
         searchCoordinator: LuceneSearchCoordinator,
         pdfDownloadManager: PdfDownloadManager,
+        crashReporter: CrashReporter = object : CrashReporter {
+            override fun install() = Unit
+            override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) = Unit
+            override fun logBreadcrumb(message: String) = Unit
+        },
     ) {
         setField("annotationRepository", annotationRepository)
         setField("pdfDocumentRepository", pdfRepository)
@@ -30,6 +36,7 @@ class TestPdfApp : NovaPdfApp() {
         setField("documentMaintenanceScheduler", documentMaintenanceScheduler)
         setField("searchCoordinator", searchCoordinator)
         setField("pdfDownloadManager", pdfDownloadManager)
+        setField("crashReporter", crashReporter)
     }
 
     private fun setField(name: String, value: Any) {

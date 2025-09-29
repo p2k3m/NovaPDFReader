@@ -25,6 +25,7 @@ import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.logging.CrashReporter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -97,6 +98,7 @@ open class PdfViewerViewModel(
     private val documentMaintenanceScheduler: DocumentMaintenanceScheduler = app.documentMaintenanceScheduler
     private val searchCoordinator: LuceneSearchCoordinator = app.searchCoordinator
     private val downloadManager: PdfDownloadManager = app.pdfDownloadManager
+    private val crashReporter: CrashReporter = app.crashReporter
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
@@ -211,7 +213,7 @@ open class PdfViewerViewModel(
                     )
                     throw throwable
                 }
-                reportRemoteOpenFailure(throwable)
+                reportRemoteOpenFailure(throwable, url)
                 return@launch
             }
             result.onSuccess { uri ->
@@ -226,7 +228,7 @@ open class PdfViewerViewModel(
                     )
                     throw throwable
                 }
-                reportRemoteOpenFailure(throwable)
+                reportRemoteOpenFailure(throwable, url)
             }
         }
         remoteDownloadJob = newJob
@@ -316,7 +318,15 @@ open class PdfViewerViewModel(
     }
 
     private suspend fun handleDocumentError(throwable: Throwable) {
+        if (throwable is CancellationException) throw throwable
         resetTransientStatus()
+        val metadata = buildMap {
+            put("stage", "documentOpen")
+            val reason = (throwable as? PdfOpenException)?.reason?.name ?: "generic"
+            put("reason", reason)
+            _uiState.value.documentId?.let { put("documentId", it) }
+        }
+        crashReporter.recordNonFatal(throwable, metadata)
         val message = when (throwable) {
             is PdfOpenException -> when (throwable.reason) {
                 PdfOpenException.Reason.CORRUPTED -> app.getString(R.string.error_pdf_corrupted)
@@ -328,9 +338,16 @@ open class PdfViewerViewModel(
         showError(message)
     }
 
-    fun reportRemoteOpenFailure(@Suppress("UNUSED_PARAMETER") throwable: Throwable) {
+    fun reportRemoteOpenFailure(throwable: Throwable, sourceUrl: String? = null) {
         viewModelScope.launch {
             resetTransientStatus()
+            if (throwable !is CancellationException) {
+                val metadata = buildMap {
+                    put("stage", "remoteDownload")
+                    sourceUrl?.let { put("url", it) }
+                }
+                crashReporter.recordNonFatal(throwable, metadata)
+            }
             showError(app.getString(R.string.error_remote_open_failed))
         }
     }
