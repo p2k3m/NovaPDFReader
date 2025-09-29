@@ -313,6 +313,52 @@ class PdfViewerViewModelSearchTest {
         assertEquals(false, viewModel.uiState.value.isLoading)
     }
 
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openRemoteDocument recovers from thrown download exception`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        val failingUrl = "https://example.com/bad.pdf"
+        whenever(downloadManager.download(eq(failingUrl))).thenThrow(IllegalStateException("broken"))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        viewModel.openRemoteDocument(failingUrl)
+        advanceUntilIdle()
+
+        verify(downloadManager).download(eq(failingUrl))
+        val uiState = viewModel.uiState.value
+        assertEquals(app.getString(R.string.error_remote_open_failed), uiState.errorMessage)
+        assertEquals(false, uiState.isLoading)
+        assertEquals(null, uiState.loadingProgress)
+        assertEquals(null, uiState.loadingMessageRes)
+    }
+
     class TestPdfApp : NovaPdfApp() {
         override fun onCreate() {
             // Skip default initialisation to allow tests to inject fakes.
