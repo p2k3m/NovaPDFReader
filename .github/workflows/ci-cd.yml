@@ -337,7 +337,7 @@ jobs:
         run: |
           adb logcat -c || true
           ./gradlew connectedAndroidTest --stacktrace
-      - name: Verify large PDF stress instrumentation ran
+      - name: Verify heavy PDF instrumentation coverage
         run: |
           set -euo pipefail
           results_dir="app/build/outputs/androidTest-results/connected"
@@ -352,10 +352,19 @@ jobs:
           import xml.etree.ElementTree as ET
 
           results_dir = pathlib.Path("app/build/outputs/androidTest-results/connected")
-          stress_method = "openLargeAndUnusualDocumentWithoutAnrOrCrash"
-          stress_class = "com.novapdf.reader.LargePdfInstrumentedTest"
+          required_tests = {
+              (
+                  "com.novapdf.reader.LargePdfInstrumentedTest",
+                  "openLargeAndUnusualDocumentWithoutAnrOrCrash",
+              ),
+              (
+                  "com.novapdf.reader.PdfViewerUiAutomatorTest",
+                  "loadsThousandPageDocumentAndActivatesAdaptiveFlow",
+              ),
+          }
 
-          matched_report = None
+          executed_tests = {}
+
           for report in results_dir.rglob("TEST-*.xml"):
               try:
                   tree = ET.parse(report)
@@ -365,23 +374,34 @@ jobs:
 
               root = tree.getroot()
               for testcase in root.iter("testcase"):
-                  if testcase.get("classname") == stress_class and testcase.get("name") == stress_method:
-                      if any(child.tag in {"failure", "error"} for child in testcase):
-                          print("::error::LargePdfInstrumentedTest reported a failure in", report)
-                          sys.exit(1)
-                      if any(child.tag == "skipped" for child in testcase) or testcase.get("status") == "skipped":
-                          print("::error::LargePdfInstrumentedTest was skipped in", report)
-                          sys.exit(1)
-                      matched_report = report
-                      break
-              if matched_report:
-                  break
+                  key = (testcase.get("classname"), testcase.get("name"))
+                  if key not in required_tests:
+                      continue
 
-          if matched_report is None:
-              print("::error::LargePdfInstrumentedTest did not run during connectedAndroidTest")
+                  if any(child.tag in {"failure", "error"} for child in testcase):
+                      print(
+                          f"::error::Required instrumentation test {key[0]}.{key[1]} failed in {report}"
+                      )
+                      sys.exit(1)
+
+                  if any(child.tag == "skipped" for child in testcase) or testcase.get("status") == "skipped":
+                      print(
+                          f"::error::Required instrumentation test {key[0]}.{key[1]} was skipped in {report}"
+                      )
+                      sys.exit(1)
+
+                  executed_tests.setdefault(key, report)
+
+          missing = required_tests.difference(executed_tests.keys())
+          if missing:
+              missing_descriptions = ", ".join(f"{cls}.{name}" for cls, name in sorted(missing))
+              print(
+                  f"::error::Connected Android tests did not execute required instrumentation coverage for: {missing_descriptions}"
+              )
               sys.exit(1)
 
-          print(f"Confirmed LargePdfInstrumentedTest execution in {matched_report}")
+          for key, report in sorted(executed_tests.items()):
+              print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
       - name: Validate ANR and crash-free logcat
         run: |
