@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -126,7 +127,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -692,8 +695,14 @@ private fun DocumentErrorDialog(
         title = { Text(text = stringResource(id = R.string.error_pdf_dialog_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(text = message)
-                Text(text = stringResource(id = R.string.error_pdf_dialog_body))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = stringResource(id = R.string.error_pdf_dialog_body),
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
         },
         confirmButton = {
@@ -720,41 +729,63 @@ private fun DocumentErrorDialog(
 
 @Composable
 private fun LoadingOverlay(progress: Float?, @StringRes messageRes: Int?) {
+    val message = messageRes?.let { stringResource(id = it) }
+        ?: stringResource(id = R.string.loading_document)
+    val progressValue = progress?.coerceIn(0f, 1f)
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f))
+            .semantics {
+                liveRegion = LiveRegionMode.Assertive
+                contentDescription = message
+            },
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Surface(
             modifier = Modifier
-                .fillMaxWidth(0.7f)
+                .padding(horizontal = 32.dp)
+                .widthIn(min = 260.dp)
+                .wrapContentHeight(),
+            tonalElevation = 6.dp,
+            shadowElevation = 12.dp,
+            shape = MaterialTheme.shapes.extraLarge
         ) {
-            CircularProgressIndicator()
-            val message = messageRes?.let { stringResource(id = it) }
-                ?: stringResource(id = R.string.loading_document)
-            Text(
-                text = message,
-                modifier = Modifier.padding(top = 16.dp),
-                style = MaterialTheme.typography.titleMedium
-            )
-            progress?.let {
-                val clamped = it.coerceIn(0f, 1f)
-                LinearProgressIndicator(
-                    progress = clamped,
-                    modifier = Modifier
-                        .padding(top = 24.dp)
-                        .fillMaxWidth()
-                )
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 24.dp, vertical = 28.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator()
                 Text(
-                    text = stringResource(
-                        id = R.string.loading_progress,
-                        (clamped * 100).roundToInt()
-                    ),
-                    modifier = Modifier.padding(top = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium
+                    text = message,
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center
                 )
+                AnimatedVisibility(visible = progressValue != null) {
+                    if (progressValue != null) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = progressValue,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                text = stringResource(
+                                    id = R.string.loading_progress,
+                                    (progressValue * 100).roundToInt()
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
             }
         }
     }

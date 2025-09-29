@@ -291,6 +291,16 @@ open class PdfViewerViewModel(
             }
             else -> app.getString(R.string.error_document_open_generic)
         }
+        showError(message)
+    }
+
+    fun reportRemoteOpenFailure(@Suppress("UNUSED_PARAMETER") throwable: Throwable) {
+        viewModelScope.launch {
+            showError(app.getString(R.string.error_remote_open_failed))
+        }
+    }
+
+    private fun showError(message: String) {
         updateUiState { current ->
             current.copy(
                 isLoading = false,
@@ -298,19 +308,6 @@ open class PdfViewerViewModel(
                 loadingMessageRes = null,
                 errorMessage = message
             )
-        }
-    }
-
-    fun reportRemoteOpenFailure(@Suppress("UNUSED_PARAMETER") throwable: Throwable) {
-        viewModelScope.launch {
-            updateUiState { current ->
-                current.copy(
-                    isLoading = false,
-                    loadingProgress = null,
-                    loadingMessageRes = null,
-                    errorMessage = app.getString(R.string.error_remote_open_failed)
-                )
-            }
         }
     }
 
