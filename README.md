@@ -49,9 +49,11 @@ Continuous integration now provisions a synthetic stress PDF with 32 pages that 
 panoramic, and extreme aspect ratios to exercise Pdfium rendering paths. Instrumentation
 tests open portrait, landscape, tall infographic, and ultra-wide panorama variants of the
 document and drive a thousand-page fixture through the UI to ensure the viewer can handle
-atypical source material. The workflow fails fast if logcat reports an Application Not
-Responding dialog, fatal Java exception, fatal signal, or forced process restart for
-`com.novapdf.reader`. It also verifies that both the
+atypical source material. The workflow invokes `connectedAndroidTest` with
+`--rerun-tasks --no-build-cache` so the heavy document scenarios always execute on every
+matrix device instead of being satisfied from prior outputs. It fails fast if logcat
+reports an Application Not Responding dialog, fatal Java exception, fatal signal, or forced
+process restart for `com.novapdf.reader`. It also verifies that both the
 `LargePdfInstrumentedTest.openLargeAndUnusualDocumentWithoutAnrOrCrash` and
 `PdfViewerUiAutomatorTest.loadsThousandPageDocumentAndActivatesAdaptiveFlow` cases ran
 without being skipped so regressions cannot silently avoid the heavy document coverage. To
