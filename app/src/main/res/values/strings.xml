@@ -43,6 +43,7 @@
     <string name="loading_document">Loading your document…</string>
     <string name="loading_progress">%1$d%% processed</string>
     <string name="render_progress_title">Rendering page %1$d…</string>
+    <string name="render_progress_announcement">Rendering page %1$d is %2$d%% complete.</string>
     <string name="loading_stage_resolving">Preparing document…</string>
     <string name="loading_stage_parsing">Analyzing PDF structure…</string>
     <string name="loading_stage_rendering">Rendering the first page…</string>
