@@ -228,7 +228,7 @@ open class ReaderActivity : ComponentActivity() {
                     viewModel.openDocument(uri)
                 }.onFailure { error ->
                     showUserSnackbar(getString(R.string.remote_pdf_download_failed))
-                    viewModel.reportRemoteOpenFailure(error)
+                    viewModel.reportRemoteOpenFailure(error, url)
                 }
             }
         }

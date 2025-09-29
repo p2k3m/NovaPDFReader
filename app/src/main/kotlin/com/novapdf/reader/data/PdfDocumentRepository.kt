@@ -50,6 +50,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
+import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfRenderProgress
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
@@ -88,7 +89,8 @@ private data class PageBitmapKey(
 
 class PdfDocumentRepository(
     private val context: Context,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val crashReporter: CrashReporter? = null
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
@@ -143,6 +145,13 @@ class PdfDocumentRepository(
             val pfd = try {
                 contentResolver.openFileDescriptor(uri, "r")
             } catch (security: SecurityException) {
+                reportNonFatal(
+                    security,
+                    mapOf(
+                        "stage" to "openFileDescriptor",
+                        "uri" to uri.toString()
+                    )
+                )
                 throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
             } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
             val document = try {
@@ -153,6 +162,13 @@ class PdfDocumentRepository(
                 } catch (_: IOException) {
                 }
                 Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                reportNonFatal(
+                    throwable,
+                    mapOf(
+                        "stage" to "pdfiumNewDocument",
+                        "uri" to uri.toString()
+                    )
+                )
                 throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
             }
             val pageCount = pdfiumCore.getPageCount(document)
@@ -303,6 +319,13 @@ class PdfDocumentRepository(
                         }
                         callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
                     } catch (io: IOException) {
+                        reportNonFatal(
+                            io,
+                            mapOf(
+                                "stage" to "printWrite",
+                                "uri" to session.uri.toString()
+                            )
+                        )
                         callback.onWriteFailed(io.localizedMessage ?: "Unable to export document")
                     }
                 }
@@ -444,6 +467,14 @@ class PdfDocumentRepository(
                 bitmap
             } catch (throwable: Throwable) {
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
+                reportNonFatal(
+                    throwable,
+                    mapOf(
+                        "stage" to "renderPage",
+                        "pageIndex" to pageIndex.toString(),
+                        "targetWidth" to targetWidth.toString()
+                    )
+                )
                 null
             } finally {
                 updateRenderProgress(PdfRenderProgress.Idle)
@@ -458,6 +489,13 @@ class PdfDocumentRepository(
             source.copy(config, false)
         } catch (throwable: Throwable) {
             Log.w(TAG, "Unable to copy bitmap", throwable)
+            reportNonFatal(
+                throwable,
+                mapOf(
+                    "stage" to "copyBitmap",
+                    "config" to (config?.name ?: "unknown")
+                )
+            )
             null
         }
     }
@@ -538,6 +576,10 @@ class PdfDocumentRepository(
         renderScope.launch {
             cacheLock.withLock { clearBitmapCacheLocked() }
         }
+    }
+
+    private fun reportNonFatal(throwable: Throwable, metadata: Map<String, String> = emptyMap()) {
+        crashReporter?.recordNonFatal(throwable, metadata)
     }
 
     private fun parseDocumentOutline(session: PdfDocumentSession): List<PdfOutlineNode> {
