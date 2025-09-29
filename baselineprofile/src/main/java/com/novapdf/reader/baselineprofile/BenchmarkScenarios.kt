@@ -10,6 +10,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
 import com.novapdf.reader.ReaderActivity
+import kotlin.system.measureTimeMillis
 
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
 
@@ -21,24 +22,34 @@ internal fun MacrobenchmarkScope.launchReaderAndAwait() {
 }
 
 internal fun MacrobenchmarkScope.openStressDocumentAndAwait() {
+    openStressDocumentAndAwaitInternal()
+}
+
+internal fun MacrobenchmarkScope.measureStressDocumentLoadTimeMs(): Long {
+    return openStressDocumentAndAwaitInternal()
+}
+
+private fun MacrobenchmarkScope.openStressDocumentAndAwaitInternal(): Long {
     val instrumentation = InstrumentationRegistry.getInstrumentation()
     val context = instrumentation.targetContext
     val documentUri = StressDocumentFixtures.ensureStressDocument(context)
 
     val activity = waitForReaderActivity(instrumentation)
-    instrumentation.runOnMainSync {
-        val method = ReaderActivity::class.java.getDeclaredMethod(
-            "openDocumentForTest",
-            Uri::class.java
-        )
-        method.isAccessible = true
-        method.invoke(activity, documentUri)
-    }
+    return measureTimeMillis {
+        instrumentation.runOnMainSync {
+            val method = ReaderActivity::class.java.getDeclaredMethod(
+                "openDocumentForTest",
+                Uri::class.java
+            )
+            method.isAccessible = true
+            method.invoke(activity, documentUri)
+        }
 
-    device.wait(Until.hasObject(By.textContains("Loading your document…")), 5_000)
-    device.wait(Until.gone(By.textContains("Loading your document…")), 20_000)
-    device.wait(Until.hasObject(By.textContains("Adaptive Flow")), 5_000)
-    device.waitForIdle()
+        device.wait(Until.hasObject(By.textContains("Loading your document…")), 5_000)
+        device.wait(Until.gone(By.textContains("Loading your document…")), 20_000)
+        device.wait(Until.hasObject(By.textContains("Adaptive Flow")), 5_000)
+        device.waitForIdle()
+    }
 }
 
 internal fun MacrobenchmarkScope.exerciseReaderContent() {
