@@ -334,7 +334,21 @@ jobs:
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
       - name: Run instrumentation tests
-        run: ./gradlew connectedAndroidTest --stacktrace
+        run: |
+          adb logcat -c || true
+          ./gradlew connectedAndroidTest --stacktrace
+      - name: Validate ANR and crash-free logcat
+        run: |
+          set -euo pipefail
+          adb logcat -d > logcat-after-tests.txt
+          if grep -E "ANR in com\.novapdf\.reader" logcat-after-tests.txt; then
+            echo "::error::Detected Application Not Responding dialog for com.novapdf.reader during instrumentation tests"
+            exit 1
+          fi
+          if grep -E "FATAL EXCEPTION: .*Process: com\.novapdf\.reader" logcat-after-tests.txt; then
+            echo "::error::Detected fatal crash in com.novapdf.reader during instrumentation tests"
+            exit 1
+          fi
       - name: Install debug build for screenshots
         run: |
           set -euo pipefail

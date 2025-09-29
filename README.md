@@ -43,6 +43,16 @@ the `platform-tools`, `build-tools`, and emulator components for API level 35.
 When no device is present, the build gracefully skips connected tests while still verifying
 that the project compiles.
 
+## CI validation for heavy PDF workloads
+
+Continuous integration now provisions a synthetic stress PDF with 32 pages that mix large,
+panoramic, and extreme aspect ratios to exercise Pdfium rendering paths. Instrumentation
+tests open and render multiple locations within the document to ensure the viewer can
+handle atypical source material, while the workflow fails fast if logcat reports an
+Application Not Responding dialog or a fatal crash for `com.novapdf.reader`. To reproduce
+the checks locally, run `./gradlew connectedAndroidTest` on an emulator or device and
+inspect `adb logcat` for `ANR in com.novapdf.reader` or fatal exception entries.
+
 ## Gradle wrapper bootstrap
 
 Binary assets such as the `gradle-wrapper.jar` are intentionally not stored in this repository. Instead, the wrapper JAR is stored as a Base64 text file at `gradle/wrapper/gradle-wrapper.jar.base64`. The included `gradlew` and `gradlew.bat` scripts automatically decode this archive to `gradle/wrapper/gradle-wrapper.jar` (Gradle 8.5) the first time you run them.
