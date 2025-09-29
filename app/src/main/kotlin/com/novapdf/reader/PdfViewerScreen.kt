@@ -143,7 +143,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.novapdf.reader.R
 import com.novapdf.reader.DocumentStatus
 import com.novapdf.reader.accessibility.HapticFeedbackManager
@@ -253,6 +256,11 @@ fun PdfViewerScreen(
             (context.applicationContext.getSystemService(Context.ACCESSIBILITY_SERVICE)
                 as? AccessibilityManager)
         }
+        MessageFlowHandler(
+            messageFlow = messageFlow,
+            snackbarHost = snackbarHost,
+            accessibilityManager = accessibilityManager
+        )
         val hapticManager = rememberHapticFeedbackManager()
         val echoModeController = remember(context.applicationContext) {
             EchoModeController(context.applicationContext)
@@ -261,12 +269,6 @@ fun PdfViewerScreen(
             hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         })
         val coroutineScope = rememberCoroutineScope()
-        LaunchedEffect(messageFlow, snackbarHost) {
-            messageFlow.collectLatest { message ->
-                val messageText = context.getString(message.messageRes)
-                snackbarHost.showSnackbar(messageText)
-            }
-        }
         var showOutlineSheet by remember { mutableStateOf(false) }
         var showAccessibilitySheet by remember { mutableStateOf(false) }
         val exportErrorMessage = stringResource(id = R.string.export_failed)
@@ -600,6 +602,29 @@ fun PdfViewerScreen(
 }
 
 @Composable
+private fun MessageFlowHandler(
+    messageFlow: Flow<UiMessage>,
+    snackbarHost: SnackbarHostState,
+    accessibilityManager: AccessibilityManager?
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val currentContext by rememberUpdatedState(newValue = context)
+    val currentSnackbarHost by rememberUpdatedState(newValue = snackbarHost)
+    val currentAccessibilityManager by rememberUpdatedState(newValue = accessibilityManager)
+
+    LaunchedEffect(messageFlow, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            messageFlow.collectLatest { message ->
+                val text = currentContext.getString(message.messageRes)
+                currentSnackbarHost.showSnackbar(text)
+                currentAccessibilityManager?.sendAnnouncement(text)
+            }
+        }
+    }
+}
+
+@Composable
 private fun DocumentSourceDialog(
     onDismiss: () -> Unit,
     onSelectDevice: () -> Unit,
@@ -853,8 +878,17 @@ private fun RenderProgressIndicator(
         animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing),
         label = "RenderProgress"
     )
+    val progressPercent = (animatedProgress * 100f).roundToInt()
+    val announcement = stringResource(
+        id = R.string.render_progress_announcement,
+        pageIndex + 1,
+        progressPercent
+    )
     Surface(
-        modifier = modifier,
+        modifier = modifier.semantics {
+            liveRegion = LiveRegionMode.Polite
+            contentDescription = announcement
+        },
         shape = MaterialTheme.shapes.large,
         tonalElevation = 6.dp,
         shadowElevation = 8.dp,
@@ -880,7 +914,7 @@ private fun RenderProgressIndicator(
             Text(
                 text = stringResource(
                     id = R.string.loading_progress,
-                    (animatedProgress * 100f).roundToInt()
+                    progressPercent
                 ),
                 modifier = Modifier.padding(top = 8.dp),
                 style = MaterialTheme.typography.bodySmall,
