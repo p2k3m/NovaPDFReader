@@ -217,14 +217,19 @@ open class ReaderActivity : ComponentActivity() {
     }
 
     private fun openRemoteDocument(url: String) {
-        lifecycleScope.launch {
+        if (useComposeUi) {
             showUserSnackbar(getString(R.string.remote_pdf_download_started))
-            val result = downloadManager.download(url)
-            result.onSuccess { uri ->
-                viewModel.openDocument(uri)
-            }.onFailure { error ->
-                showUserSnackbar(getString(R.string.remote_pdf_download_failed))
-                viewModel.reportRemoteOpenFailure(error)
+            viewModel.openRemoteDocument(url)
+        } else {
+            lifecycleScope.launch {
+                showUserSnackbar(getString(R.string.remote_pdf_download_started))
+                val result = downloadManager.download(url)
+                result.onSuccess { uri ->
+                    viewModel.openDocument(uri)
+                }.onFailure { error ->
+                    showUserSnackbar(getString(R.string.remote_pdf_download_failed))
+                    viewModel.reportRemoteOpenFailure(error)
+                }
             }
         }
     }

@@ -9,6 +9,7 @@ import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 open class NovaPdfApp : Application() {
@@ -26,6 +27,8 @@ open class NovaPdfApp : Application() {
         private set
     lateinit var searchCoordinator: LuceneSearchCoordinator
         private set
+    lateinit var pdfDownloadManager: PdfDownloadManager
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -34,6 +37,7 @@ open class NovaPdfApp : Application() {
         pdfDocumentRepository = PdfDocumentRepository(this)
         searchCoordinator = LuceneSearchCoordinator(this, pdfDocumentRepository)
         adaptiveFlowManager = AdaptiveFlowManager(this)
+        pdfDownloadManager = PdfDownloadManager(this)
         database = Room.databaseBuilder(
             applicationContext,
             NovaPdfDatabase::class.java,
