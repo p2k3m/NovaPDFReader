@@ -21,6 +21,7 @@ import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.R
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
+import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
@@ -57,14 +58,16 @@ data class PdfViewerUiState(
     val talkBackIntegrationEnabled: Boolean = false,
     val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
-    val outline: List<PdfOutlineNode> = emptyList()
+    val outline: List<PdfOutlineNode> = emptyList(),
+    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle
 )
 
 private data class DocumentContext(
     val speed: Float,
     val sensitivity: Float,
     val session: PdfDocumentSession?,
-    val outline: List<PdfOutlineNode>
+    val outline: List<PdfOutlineNode>,
+    val renderProgress: PdfRenderProgress
 )
 
 open class PdfViewerViewModel(
@@ -113,9 +116,10 @@ open class PdfViewerViewModel(
                 adaptiveFlowManager.readingSpeedPagesPerMinute,
                 adaptiveFlowManager.swipeSensitivity,
                 pdfRepository.session,
-                pdfRepository.outline
-            ) { speed, sensitivity, session, outline ->
-                DocumentContext(speed, sensitivity, session, outline)
+                pdfRepository.outline,
+                pdfRepository.renderProgress
+            ) { speed, sensitivity, session, outline, renderProgress ->
+                DocumentContext(speed, sensitivity, session, outline, renderProgress)
             }.collect { context ->
                 val session = context.session
                 val annotations = session?.let { annotationRepository.annotationsForDocument(it.documentId) }
@@ -128,7 +132,8 @@ open class PdfViewerViewModel(
                     pageCount = session?.pageCount ?: 0,
                     activeAnnotations = annotations,
                     bookmarks = bookmarks,
-                    outline = context.outline
+                    outline = context.outline,
+                    renderProgress = context.renderProgress
                 )
             }
         }

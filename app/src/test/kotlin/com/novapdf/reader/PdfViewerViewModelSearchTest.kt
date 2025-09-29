@@ -8,6 +8,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
@@ -183,6 +184,7 @@ class PdfViewerViewModelSearchTest {
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
 
         val session = PdfDocumentSession(
             documentId = "doc",
@@ -232,6 +234,7 @@ class PdfViewerViewModelSearchTest {
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
 
         val session = PdfDocumentSession(
             documentId = "remote_doc",
@@ -286,6 +289,7 @@ class PdfViewerViewModelSearchTest {
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
@@ -332,6 +336,7 @@ class PdfViewerViewModelSearchTest {
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
@@ -378,6 +383,7 @@ class PdfViewerViewModelSearchTest {
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val url = "https://example.com/cancel.pdf"
