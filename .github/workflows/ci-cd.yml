@@ -122,59 +122,69 @@ jobs:
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
     steps:
       - name: Validate required secrets
+        env:
+          AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
+          STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
+          THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          ANDROID_KEYSTORE_BASE64_SECRET: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_STORE_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
           set -e
           missing=false
 
-          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+          if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ]; then
             echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
             echo "Remediation: Create an access key in AWS IAM (Users → Your deployment user → Security credentials → Create access key) with permissions for the target bucket, then add the value as the AWS_ACCESS_KEY_ID repository secret."
             missing=true
           fi
 
-          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+          if [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
             echo "::error::Missing AWS_SECRET_ACCESS_KEY secret required for S3 uploads."
             echo "Remediation: Copy the secret key generated alongside the IAM access key above and store it as the AWS_SECRET_ACCESS_KEY repository secret. Regenerate the key if it is no longer visible."
             missing=true
           fi
 
-          if [ -z "${{ secrets.S3_BUCKET_NAME }}" ]; then
+          if [ -z "${S3_BUCKET_NAME_SECRET:-}" ]; then
             echo "::error::Missing S3_BUCKET_NAME secret required for S3 uploads."
             echo "Remediation: Provision an S3 bucket (e.g., nova-pdf-artifacts) in the AWS console, ensure the IAM user has s3:PutObject/s3:ListBucket permissions, then add the bucket name as the S3_BUCKET_NAME repository secret."
             missing=true
           fi
 
-          if [ -z "${{ vars.STRESS_PDF_S3_KEY }}" ]; then
-            echo "::error::Missing STRESS_PDF_S3_KEY repository variable required to download the stress PDF fixture."
-            echo "Remediation: Record the S3 object key for the stress PDF (for example, fixtures/stress-large.pdf) and add it as the STRESS_PDF_S3_KEY repository variable."
+          if [ -z "${STRESS_PDF_KEY:-}" ]; then
+            echo "::error::Missing STRESS_PDF_S3_KEY repository variable or secret required to download the stress PDF fixture."
+            echo "Remediation: Record the S3 object key for the stress PDF (for example, fixtures/stress-large.pdf) and add it as the STRESS_PDF_S3_KEY repository variable or secret."
             missing=true
           fi
 
-          if [ -z "${{ vars.THOUSAND_PAGE_PDF_S3_KEY }}" ]; then
-            echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable required to download the thousand-page PDF fixture."
-            echo "Remediation: Record the S3 object key for the thousand-page PDF (for example, fixtures/stress-thousand-pages.pdf) and add it as the THOUSAND_PAGE_PDF_S3_KEY repository variable."
+          if [ -z "${THOUSAND_PDF_KEY:-}" ]; then
+            echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable or secret required to download the thousand-page PDF fixture."
+            echo "Remediation: Record the S3 object key for the thousand-page PDF (for example, fixtures/stress-thousand-pages.pdf) and add it as the THOUSAND_PAGE_PDF_S3_KEY repository variable or secret."
             missing=true
           fi
 
-          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+          if [ -z "${ANDROID_KEYSTORE_BASE64_SECRET:-}" ]; then
             echo "::error::Missing ANDROID_KEYSTORE_BASE64 secret required to sign the release bundle."
             echo "Remediation: Generate a release keystore (keytool -genkeypair -v -keystore nova-release.jks -alias nova -keyalg RSA -keysize 4096 -validity 10000), base64 encode it (base64 nova-release.jks), and save the output as the ANDROID_KEYSTORE_BASE64 repository secret."
             missing=true
           fi
 
-          if [ -z "${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}" ]; then
+          if [ -z "${ANDROID_SIGNING_STORE_PASSWORD_SECRET:-}" ]; then
             echo "::error::Missing ANDROID_SIGNING_STORE_PASSWORD secret required to unlock the keystore."
             echo "Remediation: Store the keystore password selected during key creation as the ANDROID_SIGNING_STORE_PASSWORD repository secret."
             missing=true
           fi
 
-          if [ -z "${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}" ]; then
+          if [ -z "${ANDROID_SIGNING_KEY_ALIAS_SECRET:-}" ]; then
             echo "::error::Missing ANDROID_SIGNING_KEY_ALIAS secret required for signing."
             echo "Remediation: Record the alias supplied when running keytool (e.g., nova) and add it as the ANDROID_SIGNING_KEY_ALIAS repository secret so Gradle knows which key to use."
             missing=true
           fi
 
-          if [ -z "${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}" ]; then
+          if [ -z "${ANDROID_SIGNING_KEY_PASSWORD_SECRET:-}" ]; then
             echo "::error::Missing ANDROID_SIGNING_KEY_PASSWORD secret required to access the signing key."
             echo "Remediation: Store the key password (often the same as the store password unless you set a separate value) as the ANDROID_SIGNING_KEY_PASSWORD repository secret."
             missing=true
@@ -377,8 +387,8 @@ jobs:
         id: fetch_pdfs
         env:
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
-          STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY }}
-          THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY }}
+          STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
+          THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
           FIXTURE_DIR: ${{ github.workspace }}/instrumentation-fixtures
         run: |
           set -euo pipefail
