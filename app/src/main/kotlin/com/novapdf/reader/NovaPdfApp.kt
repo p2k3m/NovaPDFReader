@@ -7,58 +7,82 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
-import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.FileCrashReporter
 import com.novapdf.reader.search.LuceneSearchCoordinator
-import com.novapdf.reader.data.remote.PdfDownloadManager
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.novapdf.reader.search.PdfBoxInitializer
+import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 open class NovaPdfApp : Application() {
-    lateinit var annotationRepository: AnnotationRepository
-        private set
-    lateinit var pdfDocumentRepository: PdfDocumentRepository
-        private set
-    lateinit var adaptiveFlowManager: AdaptiveFlowManager
-        private set
-    lateinit var bookmarkManager: BookmarkManager
-        private set
-    lateinit var database: NovaPdfDatabase
-        private set
-    lateinit var documentMaintenanceScheduler: DocumentMaintenanceScheduler
-        private set
-    lateinit var searchCoordinator: LuceneSearchCoordinator
-        private set
-    lateinit var pdfDownloadManager: PdfDownloadManager
-        private set
-    lateinit var crashReporter: CrashReporter
-        private set
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    override fun onCreate() {
-        super.onCreate()
-        crashReporter = FileCrashReporter(this).also { it.install() }
-        PDFBoxResourceLoader.init(applicationContext)
-        annotationRepository = AnnotationRepository(this)
-        pdfDocumentRepository = PdfDocumentRepository(this, crashReporter = crashReporter)
-        searchCoordinator = LuceneSearchCoordinator(this, pdfDocumentRepository)
-        adaptiveFlowManager = AdaptiveFlowManager(this)
-        pdfDownloadManager = PdfDownloadManager(this)
-        database = Room.databaseBuilder(
+    val crashReporter: CrashReporter by lazy {
+        FileCrashReporter(this).also { it.install() }
+    }
+
+    val annotationRepository: AnnotationRepository by lazy { AnnotationRepository(this) }
+
+    val pdfDocumentRepository: PdfDocumentRepository by lazy {
+        PdfDocumentRepository(this, crashReporter = crashReporter)
+    }
+
+    private val searchCoordinatorDelegate = lazy { LuceneSearchCoordinator(this, pdfDocumentRepository) }
+    val searchCoordinator: LuceneSearchCoordinator by searchCoordinatorDelegate
+
+    val adaptiveFlowManager: AdaptiveFlowManager by lazy { AdaptiveFlowManager(this) }
+
+    val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
+
+    private val databaseDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        Room.databaseBuilder(
             applicationContext,
             NovaPdfDatabase::class.java,
             NovaPdfDatabase.NAME
         ).fallbackToDestructiveMigration().build()
-        bookmarkManager = BookmarkManager(
+    }
+    val database: NovaPdfDatabase
+        get() = databaseDelegate.value
+
+    private val bookmarkManagerDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        BookmarkManager(
             database.bookmarkDao(),
             getSharedPreferences(BookmarkManager.LEGACY_PREFERENCES_NAME, Context.MODE_PRIVATE)
         )
-        documentMaintenanceScheduler = DocumentMaintenanceScheduler(this)
-        documentMaintenanceScheduler.ensurePeriodicSync()
+    }
+    val bookmarkManager: BookmarkManager
+        get() = bookmarkManagerDelegate.value
+
+    private val maintenanceSchedulerDelegate = lazy {
+        DocumentMaintenanceScheduler(this).also { it.ensurePeriodicSync() }
+    }
+    val documentMaintenanceScheduler: DocumentMaintenanceScheduler by maintenanceSchedulerDelegate
+
+    override fun onCreate() {
+        super.onCreate()
+        // Install crash handling immediately so background initialisation can report failures.
+        crashReporter
+
+        // Schedule heavy singletons to initialise off the main thread.
+        applicationScope.launch(Dispatchers.IO) {
+            databaseDelegate.value
+            bookmarkManagerDelegate.value
+            PdfBoxInitializer.ensureInitialized(applicationContext)
+        }
+
+        // Ensure periodic maintenance is configured.
+        documentMaintenanceScheduler
     }
 
     override fun onTerminate() {
         super.onTerminate()
-        if (this::searchCoordinator.isInitialized) {
+        applicationScope.cancel()
+        if (searchCoordinatorDelegate.isInitialized()) {
             searchCoordinator.dispose()
         }
     }
