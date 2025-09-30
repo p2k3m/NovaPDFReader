@@ -411,6 +411,10 @@ jobs:
           adb shell settings put global transition_animation_scale 0 || true
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
+      - name: Install app under test
+        run: |
+          set -euo pipefail
+          ./gradlew :app:installDebug --no-build-cache
       - name: Fetch stress PDF fixtures from S3
         id: fetch_pdfs
         env:
