@@ -58,6 +58,11 @@ class LegacyPdfPageAdapter(
     fun clear() {
         pageJobs.forEach { _, job -> job.cancel() }
         pageJobs.clear()
+        bitmaps.forEach { _, bitmap ->
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
+        }
         bitmaps.clear()
         pageIndices.clear()
         currentDocumentId = null
