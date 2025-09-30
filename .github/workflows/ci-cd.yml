@@ -439,7 +439,7 @@ jobs:
             local dest="$FIXTURE_DIR/$(basename "$key")"
             local tmp="${dest}.tmp"
 
-            echo "Downloading ${label} fixture from s3://${BUCKET}/${key}"
+            echo "Downloading ${label} fixture from s3://${BUCKET}/${key}" >&2
             if ! aws s3 cp --only-show-errors "s3://${BUCKET}/${key}" "$tmp"; then
               echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}"
               rm -f "$tmp"
