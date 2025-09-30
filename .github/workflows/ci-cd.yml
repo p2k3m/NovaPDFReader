@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - api: 34
-            avd: pixel7pro_api34
+          - api: 32
+            avd: pixel7pro_api32
             tag: google_apis
             abi: x86_64
             ram_mb: 6144
@@ -36,8 +36,8 @@ jobs:
               hw.displayRegion.0.height=3120
               hw.displayRegion.0.xOffset=0
               hw.displayRegion.0.yOffset=0
-          - api: 34
-            avd: galaxys24ultra_api34
+          - api: 32
+            avd: galaxys24ultra_api32
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
@@ -54,8 +54,8 @@ jobs:
               hw.displayRegion.0.height=3120
               hw.displayRegion.0.xOffset=0
               hw.displayRegion.0.yOffset=0
-          - api: 34
-            avd: galaxys23ultra_api34
+          - api: 32
+            avd: galaxys23ultra_api32
             tag: google_apis
             abi: x86_64
             ram_mb: 7168
@@ -72,8 +72,8 @@ jobs:
               hw.displayRegion.0.height=3088
               hw.displayRegion.0.xOffset=0
               hw.displayRegion.0.yOffset=0
-          - api: 34
-            avd: pixelfold_api34
+          - api: 32
+            avd: pixelfold_api32
             tag: google_apis
             abi: x86_64
             ram_mb: 6144
@@ -90,8 +90,8 @@ jobs:
               hw.displayRegion.0.height=2208
               hw.displayRegion.0.xOffset=0
               hw.displayRegion.0.yOffset=0
-          - api: 33
-            avd: pixeltablet_api33
+          - api: 32
+            avd: pixeltablet_api32
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
