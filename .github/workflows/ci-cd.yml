@@ -144,6 +144,18 @@ jobs:
             missing=true
           fi
 
+          if [ -z "${{ vars.STRESS_PDF_S3_KEY }}" ]; then
+            echo "::error::Missing STRESS_PDF_S3_KEY repository variable required to download the stress PDF fixture."
+            echo "Remediation: Record the S3 object key for the stress PDF (for example, fixtures/stress-large.pdf) and add it as the STRESS_PDF_S3_KEY repository variable."
+            missing=true
+          fi
+
+          if [ -z "${{ vars.THOUSAND_PAGE_PDF_S3_KEY }}" ]; then
+            echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable required to download the thousand-page PDF fixture."
+            echo "Remediation: Record the S3 object key for the thousand-page PDF (for example, fixtures/stress-thousand-pages.pdf) and add it as the THOUSAND_PAGE_PDF_S3_KEY repository variable."
+            missing=true
+          fi
+
           if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
             echo "::error::Missing ANDROID_KEYSTORE_BASE64 secret required to sign the release bundle."
             echo "Remediation: Generate a release keystore (keytool -genkeypair -v -keystore nova-release.jks -alias nova -keyalg RSA -keysize 4096 -validity 10000), base64 encode it (base64 nova-release.jks), and save the output as the ANDROID_KEYSTORE_BASE64 repository secret."
@@ -206,6 +218,21 @@ jobs:
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+      - name: Install AWS CLI
+        run: |
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          if [ -d "$HOME/Library/Python/3.11/bin" ]; then
+            echo "$HOME/Library/Python/3.11/bin" >> "$GITHUB_PATH"
+          fi
+          if [ -d "$HOME/Library/Python/3.12/bin" ]; then
+            echo "$HOME/Library/Python/3.12/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Configure AWS credentials
+        run: |
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set default.region us-east-1
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --info
       - name: Start emulator
@@ -346,6 +373,97 @@ jobs:
           adb shell settings put global transition_animation_scale 0 || true
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
+      - name: Fetch stress PDF fixtures from S3
+        id: fetch_pdfs
+        env:
+          BUCKET: ${{ secrets.S3_BUCKET_NAME }}
+          STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY }}
+          THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY }}
+          FIXTURE_DIR: ${{ github.workspace }}/instrumentation-fixtures
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BUCKET:-}" ]; then
+            echo "::error::S3 bucket name not provided; ensure S3_BUCKET_NAME secret is set"
+            exit 1
+          fi
+
+          if [ -z "${STRESS_PDF_KEY:-}" ] || [ -z "${THOUSAND_PDF_KEY:-}" ]; then
+            echo "::error::Missing S3 object keys for instrumentation PDF fixtures"
+            exit 1
+          fi
+
+          mkdir -p "$FIXTURE_DIR"
+
+          download_fixture() {
+            local key="$1"
+            local label="$2"
+            local dest="$FIXTURE_DIR/$(basename "$key")"
+            local tmp="${dest}.tmp"
+
+            echo "Downloading ${label} fixture from s3://${BUCKET}/${key}"
+            if ! aws s3 cp "s3://${BUCKET}/${key}" "$tmp"; then
+              echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}"
+              rm -f "$tmp"
+              exit 1
+            fi
+
+            if [ ! -s "$tmp" ]; then
+              echo "::error::Downloaded ${label} PDF fixture is empty or missing: $tmp"
+              rm -f "$tmp"
+              exit 1
+            fi
+
+            mv "$tmp" "$dest"
+            echo "$dest"
+          }
+
+          stress_path=$(download_fixture "$STRESS_PDF_KEY" "stress")
+          thousand_path=$(download_fixture "$THOUSAND_PDF_KEY" "thousand-page")
+
+          {
+            echo "stress_path=${stress_path}"
+            echo "thousand_path=${thousand_path}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Stage stress PDFs on emulator
+        env:
+          STRESS_DEST: stress-large.pdf
+          THOUSAND_DEST: stress-thousand-pages.pdf
+          PACKAGE_NAME: com.novapdf.reader
+        run: |
+          set -euo pipefail
+
+          stress_path="${{ steps.fetch_pdfs.outputs.stress_path }}"
+          thousand_path="${{ steps.fetch_pdfs.outputs.thousand_path }}"
+
+          if [ -z "$stress_path" ] || [ -z "$thousand_path" ]; then
+            echo "::error::Missing downloaded PDF fixture paths"
+            exit 1
+          fi
+
+          if [ ! -s "$stress_path" ] || [ ! -s "$thousand_path" ]; then
+            echo "::error::Downloaded PDF fixtures are missing or empty"
+            exit 1
+          fi
+
+          adb wait-for-device
+
+          stage_fixture() {
+            local src="$1"
+            local dest_name="$2"
+
+            adb push "$src" "/sdcard/Download/${dest_name}" >/dev/null
+
+            adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p cache; cp '/sdcard/Download/${dest_name}' 'cache/${dest_name}'"
+
+            if ! adb shell run-as "$PACKAGE_NAME" sh -c "[ -s 'cache/${dest_name}' ]"; then
+              echo "::error::Failed to stage ${dest_name} in application cache"
+              exit 1
+            fi
+          }
+
+          stage_fixture "$stress_path" "$STRESS_DEST"
+          stage_fixture "$thousand_path" "$THOUSAND_DEST"
       - name: Run instrumentation tests against stress PDFs
         run: |
           adb logcat -c || true
@@ -668,21 +786,6 @@ jobs:
           name: nova-build-${{ matrix.api }}-${{ matrix.device_label }}
           path: ${{ env.ARTIFACTS_DIR }}
           if-no-files-found: warn
-      - name: Install AWS CLI
-        run: |
-          python3 -m pip install --user awscli
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          if [ -d "$HOME/Library/Python/3.11/bin" ]; then
-            echo "$HOME/Library/Python/3.11/bin" >> "$GITHUB_PATH"
-          fi
-          if [ -d "$HOME/Library/Python/3.12/bin" ]; then
-            echo "$HOME/Library/Python/3.12/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Configure AWS credentials
-        run: |
-          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws configure set default.region us-east-1
       - name: Upload build outputs to S3
         if: success()
         env:
