@@ -23,7 +23,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
-            disk_mb: 20480
+            disk_mb: 12288
             device_id: pixel_7_pro
             device_label: pixel-7-pro
             skin: 1440x3120
@@ -42,7 +42,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
-            disk_mb: 24576
+            disk_mb: 12288
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
             skin: 1440x3120
@@ -61,7 +61,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 10240
-            disk_mb: 22528
+            disk_mb: 12288
             device_id: pixel_7
             device_label: galaxy-s23-ultra
             skin: 1440x3088
@@ -80,7 +80,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
-            disk_mb: 22528
+            disk_mb: 12288
             device_id: pixel_fold
             device_label: pixel-fold
             skin: 2208x1840
@@ -99,7 +99,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
-            disk_mb: 30720
+            disk_mb: 12288
             device_id: pixel_tablet
             device_label: pixel-tablet
             skin: 2560x1600
