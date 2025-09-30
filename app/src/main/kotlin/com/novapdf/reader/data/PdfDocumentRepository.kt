@@ -240,7 +240,8 @@ class PdfDocumentRepository(
         renderScope.launch {
             indices.forEach { index ->
                 if (index in 0 until session.pageCount) {
-                    ensurePageBitmap(index, targetWidth)
+                    // Avoid blocking foreground renders if decoding is already busy.
+                    ensurePageBitmap(index, targetWidth, allowSkippingIfBusy = true)
                 }
             }
         }
@@ -254,7 +255,8 @@ class PdfDocumentRepository(
                 if (pageIndex in 0 until session.pageCount) {
                     val pageSize = getPageSizeInternal(pageIndex) ?: return@forEach
                     val targetWidth = max(1, (pageSize.width * scale).roundToInt())
-                    ensurePageBitmap(pageIndex, targetWidth)
+                    // Skip speculative tile work when render mutex is contended.
+                    ensurePageBitmap(pageIndex, targetWidth, allowSkippingIfBusy = true)
                 }
             }
         }
@@ -430,7 +432,12 @@ class PdfDocumentRepository(
     }
 
     @WorkerThread
-    private suspend fun ensurePageBitmap(pageIndex: Int, targetWidth: Int): Bitmap? {
+    private suspend fun ensurePageBitmap(
+        pageIndex: Int,
+        targetWidth: Int,
+        allowSkippingIfBusy: Boolean = false,
+    ): Bitmap? {
+        // When prefetching we avoid waiting on the render mutex so interactive draws remain responsive.
         ensureWorkerThread()
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
@@ -440,15 +447,27 @@ class PdfDocumentRepository(
                 return existing
             }
         }
-        return renderMutex.withLock {
+
+        val lockOwner = Any()
+        val lockAcquired = if (allowSkippingIfBusy) {
+            renderMutex.tryLock(lockOwner)
+        } else {
+            renderMutex.lock(lockOwner)
+            true
+        }
+        if (!lockAcquired) {
+            return null
+        }
+
+        return try {
             pageBitmapCache.getIfPresent(key)?.let { cached ->
                 if (!cached.isRecycled) {
-                    return@withLock cached
+                    return cached
                 }
             }
-            val pageSize = getPageSizeInternal(pageIndex) ?: return@withLock null
+            val pageSize = getPageSizeInternal(pageIndex) ?: return null
             if (pageSize.width <= 0 || pageSize.height <= 0) {
-                return@withLock null
+                return null
             }
             val aspect = pageSize.height.toDouble() / pageSize.width.toDouble()
             val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
@@ -480,6 +499,8 @@ class PdfDocumentRepository(
                 updateRenderProgress(PdfRenderProgress.Idle)
                 Trace.endSection()
             }
+        } finally {
+            renderMutex.unlock(lockOwner)
         }
     }
 
