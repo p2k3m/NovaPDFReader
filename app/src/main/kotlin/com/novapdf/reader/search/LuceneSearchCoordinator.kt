@@ -211,6 +211,7 @@ class LuceneSearchCoordinator(
     private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> = withContext(Dispatchers.IO) {
         val pageCount = session.pageCount
         if (pageCount <= 0) return@withContext emptyList()
+        PdfBoxInitializer.ensureInitialized(context)
         val contents = MutableList(pageCount) {
             PageSearchContent(
                 text = "",
