@@ -22,13 +22,13 @@ See `docs/sample-pdf-license.md` for the redistribution notice covering the bund
 ## Running connected Android tests locally
 
 Instrumentation and macrobenchmark tests require an Android SDK installation that includes
-the `platform-tools`, `build-tools`, and emulator components for API level 35.
+the `platform-tools`, `build-tools`, and emulator components for API level 32.
 
 1. Install the Android command-line tools and use `sdkmanager` to download the required
    packages:
 
    ```bash
-   sdkmanager "platform-tools" "build-tools;35.0.0" "platforms;android-35" "emulator"
+  sdkmanager "platform-tools" "build-tools;34.0.0" "platforms;android-32" "emulator"
    ```
 
 2. Point Gradle to your SDK installation by setting `ANDROID_SDK_ROOT`/`ANDROID_HOME` or by
