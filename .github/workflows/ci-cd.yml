@@ -414,7 +414,70 @@ jobs:
       - name: Install app under test
         run: |
           set -euo pipefail
-          ./gradlew :app:installDebug --no-build-cache
+
+          apk_path="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$apk_path" ]; then
+            echo "Debug APK not found; assembling it now"
+            ./gradlew :app:assembleDebug --stacktrace --no-build-cache
+          fi
+
+          echo "Waiting for emulator to report as online"
+          adb wait-for-device
+
+          boot_deadline=$((5 * 60))
+          boot_elapsed=0
+          until adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
+            sleep 5
+            boot_elapsed=$((boot_elapsed + 5))
+            if [ $boot_elapsed -ge $boot_deadline ]; then
+              echo "Emulator failed to report boot completion within $((boot_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
+          echo "Waiting for package manager service to become available"
+          pm_deadline=$((5 * 60))
+          pm_elapsed=0
+          until adb shell cmd package list packages >/dev/null 2>&1; do
+            sleep 5
+            pm_elapsed=$((pm_elapsed + 5))
+            if [ $pm_elapsed -ge $pm_deadline ]; then
+              echo "Package manager service did not become available within $((pm_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
+          echo "Installing $apk_path onto the emulator"
+          install_attempt=1
+          install_attempts_max=3
+          while true; do
+            if adb install --no-streaming -r "$apk_path"; then
+              break
+            fi
+
+            if [ $install_attempt -ge $install_attempts_max ]; then
+              echo "Failed to install $apk_path after $install_attempts_max attempts" >&2
+              exit 1
+            fi
+
+            install_attempt=$((install_attempt + 1))
+            echo "adb install failed (attempt $((install_attempt - 1))) — waiting for package manager before retrying"
+
+            retry_deadline=$((2 * 60))
+            retry_elapsed=0
+            until adb shell cmd package list packages >/dev/null 2>&1; do
+              sleep 5
+              retry_elapsed=$((retry_elapsed + 5))
+              if [ $retry_elapsed -ge $retry_deadline ]; then
+                echo "Package manager did not recover within $((retry_deadline / 60)) minutes after failed install" >&2
+                exit 1
+              fi
+            done
+
+            sleep 5
+            echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
+          done
       - name: Fetch stress PDF fixtures from S3
         id: fetch_pdfs
         env:
