@@ -12,6 +12,7 @@ import com.novapdf.reader.ui.theme.NovaPdfTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlinx.coroutines.flow.emptyFlow
 
 @RunWith(AndroidJUnit4::class)
 class PdfViewerScreenTest {
@@ -26,6 +27,7 @@ class PdfViewerScreenTest {
                 PdfViewerScreen(
                     state = PdfViewerUiState(),
                     snackbarHost = androidx.compose.material3.SnackbarHostState(),
+                    messageFlow = emptyFlow(),
                     onOpenLocalDocument = {},
                     onOpenCloudDocument = {},
                     onOpenRemoteDocument = { _ -> },
