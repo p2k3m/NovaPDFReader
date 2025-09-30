@@ -22,7 +22,8 @@ jobs:
             avd: pixel7pro_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 6144
+            ram_mb: 8192
+            disk_mb: 20480
             device_id: pixel_7_pro
             device_label: pixel-7-pro
             skin: 1440x3120
@@ -40,7 +41,8 @@ jobs:
             avd: galaxys24ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 12288
+            disk_mb: 24576
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
             skin: 1440x3120
@@ -58,7 +60,8 @@ jobs:
             avd: galaxys23ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 7168
+            ram_mb: 10240
+            disk_mb: 22528
             device_id: pixel_7
             device_label: galaxy-s23-ultra
             skin: 1440x3088
@@ -76,7 +79,8 @@ jobs:
             avd: pixelfold_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 6144
+            ram_mb: 8192
+            disk_mb: 22528
             device_id: pixel_fold
             device_label: pixel-fold
             skin: 2208x1840
@@ -94,7 +98,8 @@ jobs:
             avd: pixeltablet_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 12288
+            disk_mb: 30720
             device_id: pixel_tablet
             device_label: pixel-tablet
             skin: 2560x1600
@@ -276,6 +281,13 @@ jobs:
             printf '%s\n' "${{ matrix.hardware_overrides }}" >> "$config_path"
           fi
 
+          disk_partition_args=()
+          if [ -n "${{ matrix.disk_mb }}" ]; then
+            echo "Configuring ${{ matrix.device_label }} data partition size to ${{ matrix.disk_mb }} MB"
+            printf 'disk.dataPartition.size=%sM\n' "${{ matrix.disk_mb }}" >> "$config_path"
+            disk_partition_args=("-partition-size" "${{ matrix.disk_mb }}")
+          fi
+
           accel_args=()
           if [ "${RUNNER_OS:-}" = "macOS" ]; then
             echo "macOS runners do not expose HVF; starting emulator with -no-accel"
@@ -285,7 +297,7 @@ jobs:
             accel_args=("-no-accel" "-accel" "off")
           fi
 
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" &
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
           device_timeout=0
