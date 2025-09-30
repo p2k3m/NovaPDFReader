@@ -486,13 +486,38 @@ jobs:
 
           adb wait-for-device
 
+          prepare_download_dir() {
+            local candidate="$1"
+
+            if adb shell "[ -d ${candidate} ]" >/dev/null 2>&1; then
+              DOWNLOAD_DIR="$candidate"
+              return 0
+            fi
+
+            if adb shell "mkdir -p ${candidate}" >/dev/null 2>&1; then
+              DOWNLOAD_DIR="$candidate"
+              return 0
+            fi
+
+            return 1
+          }
+
+          DOWNLOAD_DIR=""
+
+          if ! prepare_download_dir "/sdcard/Download"; then
+            if ! prepare_download_dir "/storage/emulated/0/Download"; then
+              echo "::error::Unable to prepare a shared Download directory on the emulator"
+              exit 1
+            fi
+          fi
+
           stage_fixture() {
             local src="$1"
             local dest_name="$2"
 
-            adb push "$src" "/sdcard/Download/${dest_name}" >/dev/null
+            adb push "$src" "${DOWNLOAD_DIR}/${dest_name}" >/dev/null
 
-            adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p cache; cp '/sdcard/Download/${dest_name}' 'cache/${dest_name}'"
+            adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p cache; cp '${DOWNLOAD_DIR}/${dest_name}' 'cache/${dest_name}'"
 
             if ! adb shell run-as "$PACKAGE_NAME" sh -c "[ -s 'cache/${dest_name}' ]"; then
               echo "::error::Failed to stage ${dest_name} in application cache"
