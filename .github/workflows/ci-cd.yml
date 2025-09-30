@@ -320,9 +320,37 @@ jobs:
 
           disk_partition_args=()
           if [ -n "${{ matrix.disk_mb }}" ]; then
-            echo "Configuring ${{ matrix.device_label }} data partition size to ${{ matrix.disk_mb }} MB"
-            printf 'disk.dataPartition.size=%sM\n' "${{ matrix.disk_mb }}" >> "$config_path"
-            disk_partition_args=("-partition-size" "${{ matrix.disk_mb }}")
+            requested_disk_mb=${{ matrix.disk_mb }}
+            final_disk_mb=$requested_disk_mb
+            available_mb=$(df -Pm "$avd_root" | awk 'NR==2 {print $4}')
+            reserve_mb=2048
+
+            if [[ "$available_mb" =~ ^[0-9]+$ ]]; then
+              if [ "$available_mb" -le "$reserve_mb" ]; then
+                echo "Only ${available_mb} MB free on $avd_root; cannot allocate userdata partition." >&2
+                exit 1
+              fi
+
+              safe_max=$((available_mb - reserve_mb))
+              if [ "$safe_max" -le 0 ]; then
+                echo "Insufficient disk space after reserving ${reserve_mb} MB (available: ${available_mb} MB)." >&2
+                exit 1
+              fi
+
+              if [ "$safe_max" -lt "$final_disk_mb" ]; then
+                final_disk_mb=$safe_max
+                echo "Requested data partition size ${requested_disk_mb} MB exceeds available capacity (${available_mb} MB available, reserving ${reserve_mb} MB). Using ${final_disk_mb} MB instead."
+              fi
+            fi
+
+            if [ "$final_disk_mb" -le 0 ]; then
+              echo "Unable to determine a valid userdata partition size (computed ${final_disk_mb} MB)." >&2
+              exit 1
+            fi
+
+            echo "Configuring ${{ matrix.device_label }} data partition size to ${final_disk_mb} MB"
+            printf 'disk.dataPartition.size=%sM\n' "$final_disk_mb" >> "$config_path"
+            disk_partition_args=("-partition-size" "$final_disk_mb")
           fi
 
           accel_args=()
