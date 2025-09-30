@@ -440,7 +440,7 @@ jobs:
             local tmp="${dest}.tmp"
 
             echo "Downloading ${label} fixture from s3://${BUCKET}/${key}"
-            if ! aws s3 cp "s3://${BUCKET}/${key}" "$tmp"; then
+            if ! aws s3 cp --only-show-errors "s3://${BUCKET}/${key}" "$tmp"; then
               echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}"
               rm -f "$tmp"
               exit 1
