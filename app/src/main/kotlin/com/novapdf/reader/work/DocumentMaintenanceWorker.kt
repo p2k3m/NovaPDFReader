@@ -20,6 +20,9 @@ class DocumentMaintenanceWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? NovaPdfApp ?: return Result.failure()
+        if (app.adaptiveFlowManager.isUiUnderLoad()) {
+            return Result.retry()
+        }
         val annotationRepository = app.annotationRepository
         val bookmarkManager = app.bookmarkManager
 

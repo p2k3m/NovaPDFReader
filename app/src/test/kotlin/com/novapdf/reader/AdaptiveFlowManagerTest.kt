@@ -71,6 +71,7 @@ class AdaptiveFlowManagerTest {
         val jankyPreload = manager.preloadTargets.value
 
         assertTrue(jankyPreload.isEmpty())
+        assertTrue(manager.uiUnderLoad.value)
     }
 
     @Test
@@ -93,12 +94,14 @@ class AdaptiveFlowManagerTest {
         manager.trackPageChange(2, 10)
         advanceUntilIdle()
         assertTrue(manager.preloadTargets.value.isEmpty())
+        assertTrue(manager.uiUnderLoad.value)
 
         now += BuildConfig.ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS + 200
         manager.trackPageChange(3, 10)
         advanceUntilIdle()
 
         assertTrue(manager.preloadTargets.value.isNotEmpty())
+        assertTrue(!manager.uiUnderLoad.value)
     }
 
     @Test
