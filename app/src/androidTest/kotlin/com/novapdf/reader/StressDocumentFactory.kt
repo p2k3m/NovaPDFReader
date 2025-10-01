@@ -30,14 +30,23 @@ internal object StressDocumentFactory {
             return@withContext existing.toUri()
         }
 
-        val destinationDirectory = candidateDirectories.firstOrNull()
-            ?: throw IOException("No writable internal storage directories available for stress PDF")
+        val failures = mutableListOf<IOException>()
 
-        val destination = File(destinationDirectory, LARGE_CACHE_FILE_NAME)
-        destination.parentFile?.mkdirs()
+        for (directory in candidateDirectories) {
+            val destination = File(directory, LARGE_CACHE_FILE_NAME)
 
-        generateStressDocument(destination)
-        destination.toUri()
+            try {
+                destination.parentFile?.mkdirs()
+                generateStressDocument(destination)
+                return@withContext destination.toUri()
+            } catch (exception: IOException) {
+                failures += exception
+            }
+        }
+
+        val failure = IOException("No writable internal storage directories available for stress PDF")
+        failures.forEach(failure::addSuppressed)
+        throw failure
     }
 
     private fun internalStorageCandidates(context: Context): List<File> = buildList {
