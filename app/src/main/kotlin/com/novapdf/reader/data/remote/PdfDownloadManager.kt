@@ -14,6 +14,7 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 
 class PdfDownloadManager(
@@ -41,7 +42,7 @@ class PdfDownloadManager(
             },
             onDownloadFailed = { error ->
                 if (!deferred.isCompleted) {
-                    deferred.completeExceptionally(error)
+                    deferred.completeExceptionally(error.asNetworkFailure())
                 }
             }
         )
@@ -53,7 +54,7 @@ class PdfDownloadManager(
             .listener(
                 onError = { _: ImageRequest, result: ErrorResult ->
                     if (!deferred.isCompleted) {
-                        deferred.completeExceptionally(result.throwable)
+                        deferred.completeExceptionally(result.throwable.asNetworkFailure())
                     }
                 }
             )
@@ -67,7 +68,11 @@ class PdfDownloadManager(
             Result.success(uri)
         } catch (error: Throwable) {
             destination.delete()
-            Result.failure(error)
+            if (error is CancellationException) {
+                throw error
+            }
+            val failure = if (error is RemotePdfException) error else error.asNetworkFailure()
+            Result.failure(failure)
         }
 
         if (executeResult is ErrorResult) {
@@ -84,7 +89,10 @@ class PdfDownloadManager(
     private fun validateDownloadedPdf(file: File) {
         val length = file.length()
         if (length <= 0L) {
-            throw IOException("Downloaded PDF is empty")
+            throw RemotePdfException(
+                RemotePdfException.Reason.CORRUPTED,
+                IOException("Downloaded PDF is empty"),
+            )
         }
 
         var descriptor: ParcelFileDescriptor? = null
@@ -94,10 +102,17 @@ class PdfDownloadManager(
             document = pdfiumCore.newDocument(descriptor)
             val pageCount = pdfiumCore.getPageCount(document)
             if (pageCount <= 0) {
-                throw IOException("Downloaded PDF has no pages")
+                throw RemotePdfException(
+                    RemotePdfException.Reason.CORRUPTED,
+                    IOException("Downloaded PDF has no pages"),
+                )
             }
         } catch (error: Throwable) {
-            throw IOException("Downloaded PDF failed integrity check", error)
+            if (error is RemotePdfException) throw error
+            throw RemotePdfException(
+                RemotePdfException.Reason.CORRUPTED,
+                IOException("Downloaded PDF failed integrity check", error)
+            )
         } finally {
             document?.let { doc ->
                 runCatching { pdfiumCore.closeDocument(doc) }
@@ -105,6 +120,14 @@ class PdfDownloadManager(
             descriptor?.let { pfd ->
                 runCatching { pfd.close() }
             }
+        }
+    }
+
+    private fun Throwable.asNetworkFailure(): RemotePdfException {
+        return if (this is RemotePdfException) {
+            this
+        } else {
+            RemotePdfException(RemotePdfException.Reason.NETWORK, this)
         }
     }
 }

@@ -29,6 +29,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.novapdf.reader.R
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
 import com.google.android.material.appbar.MaterialToolbar
@@ -227,7 +228,14 @@ open class ReaderActivity : ComponentActivity() {
                 result.onSuccess { uri ->
                     viewModel.openDocument(uri)
                 }.onFailure { error ->
-                    showUserSnackbar(getString(R.string.remote_pdf_download_failed))
+                    val messageRes = if (error is RemotePdfException &&
+                        error.reason == RemotePdfException.Reason.CORRUPTED
+                    ) {
+                        R.string.error_pdf_corrupted
+                    } else {
+                        R.string.remote_pdf_download_failed
+                    }
+                    showUserSnackbar(getString(messageRes))
                     viewModel.reportRemoteOpenFailure(error, url)
                 }
             }
