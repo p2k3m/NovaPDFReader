@@ -20,13 +20,32 @@ internal object StressDocumentFactory {
     private const val PAGE_COUNT = 32
 
     suspend fun installStressDocument(context: Context) = withContext(Dispatchers.IO) {
-        val cacheFile = File(context.cacheDir, LARGE_CACHE_FILE_NAME)
-        cacheFile.parentFile?.mkdirs()
-        if (!cacheFile.exists() || cacheFile.length() == 0L) {
-            generateStressDocument(cacheFile)
+        val candidateDirectories = internalStorageCandidates(context)
+
+        val existing = candidateDirectories
+            .map { File(it, LARGE_CACHE_FILE_NAME) }
+            .firstOrNull { it.exists() && it.length() > 0L }
+
+        if (existing != null) {
+            return@withContext existing.toUri()
         }
-        cacheFile.toUri()
+
+        val destinationDirectory = candidateDirectories.firstOrNull()
+            ?: throw IOException("No writable internal storage directories available for stress PDF")
+
+        val destination = File(destinationDirectory, LARGE_CACHE_FILE_NAME)
+        destination.parentFile?.mkdirs()
+
+        generateStressDocument(destination)
+        destination.toUri()
     }
+
+    private fun internalStorageCandidates(context: Context): List<File> = buildList {
+        context.cacheDir?.let(::add)
+        context.filesDir?.let(::add)
+        context.codeCacheDir?.let(::add)
+        context.noBackupFilesDir?.let(::add)
+    }.distinct()
 
     private fun generateStressDocument(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for stress PDF")
