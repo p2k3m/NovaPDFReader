@@ -62,7 +62,7 @@ fun NovaPdfTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = NovaPdfTypography,
+        typography = rememberNovaPdfTypography(),
         shapes = NovaPdfShapes,
         content = content
     )
