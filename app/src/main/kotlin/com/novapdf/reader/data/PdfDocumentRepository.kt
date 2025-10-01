@@ -13,9 +13,10 @@ import android.os.CancellationSignal
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Trace
+import android.util.Log
+import android.util.LruCache
 import android.util.Size
 import android.util.SparseArray
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.annotation.WorkerThread
 import com.github.benmanes.caffeine.cache.Caffeine
@@ -98,16 +99,7 @@ class PdfDocumentRepository(
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
-    private val pageBitmapCache = Caffeine.newBuilder()
-        .maximumWeight(maxCacheBytes)
-        .weigher<PageBitmapKey, Bitmap> { _, bitmap -> safeByteCount(bitmap) }
-        .executor { it.run() }
-        .removalListener<PageBitmapKey, Bitmap> { _, bitmap, cause ->
-            if (cause == RemovalCause.REPLACED || cause == RemovalCause.EXPLICIT || cause.wasEvicted()) {
-                bitmap?.let { recycleBitmap(it) }
-            }
-        }
-        .build<PageBitmapKey, Bitmap>()
+    private val bitmapCache = createBitmapCache()
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
@@ -442,7 +434,7 @@ class PdfDocumentRepository(
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
         val key = PageBitmapKey(pageIndex, targetWidth)
-        pageBitmapCache.getIfPresent(key)?.let { existing ->
+        bitmapCache.get(key)?.let { existing ->
             if (!existing.isRecycled) {
                 return existing
             }
@@ -460,7 +452,7 @@ class PdfDocumentRepository(
         }
 
         return try {
-            pageBitmapCache.getIfPresent(key)?.let { cached ->
+            bitmapCache.get(key)?.let { cached ->
                 if (!cached.isRecycled) {
                     return cached
                 }
@@ -482,7 +474,7 @@ class PdfDocumentRepository(
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
-                pageBitmapCache.put(key, bitmap)
+                bitmapCache.put(key, bitmap)
                 bitmap
             } catch (throwable: Throwable) {
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
@@ -587,10 +579,26 @@ class PdfDocumentRepository(
         }
     }
 
+    private fun createBitmapCache(): BitmapCache {
+        return try {
+            CaffeineBitmapCache(maxCacheBytes)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Falling back to LruCache for bitmap caching", error)
+            reportNonFatal(
+                error,
+                mapOf(
+                    "stage" to "bitmapCacheInit",
+                    "fallback" to "lru"
+                )
+            )
+            LruBitmapCache(maxCacheBytes)
+        }
+    }
+
     private fun clearBitmapCacheLocked() {
-        pageBitmapCache.asMap().values.forEach(::recycleBitmap)
-        pageBitmapCache.invalidateAll()
-        pageBitmapCache.cleanUp()
+        bitmapCache.values().forEach(::recycleBitmap)
+        bitmapCache.clearAll()
+        bitmapCache.cleanUp()
     }
 
     private fun scheduleCacheClear() {
@@ -707,5 +715,126 @@ class PdfDocumentRepository(
 
     companion object {
         private const val DEFAULT_PRINT_BUFFER_SIZE = 16 * 1024
+    }
+
+    private abstract inner class BitmapCache {
+        private val aliasLock = Any()
+        private val aliasKeys = mutableMapOf<String, PageBitmapKey>()
+        private var nextAliasId = 0
+
+        fun get(key: PageBitmapKey): Bitmap? = getInternal(key)?.takeIf { !it.isRecycled }
+
+        fun put(key: PageBitmapKey, bitmap: Bitmap) {
+            putInternal(key, bitmap)
+        }
+
+        fun values(): Collection<Bitmap> = valuesInternal().filterNot(Bitmap::isRecycled)
+
+        fun clearAll() {
+            synchronized(aliasLock) {
+                aliasKeys.clear()
+                nextAliasId = 0
+            }
+            clearInternal()
+        }
+
+        fun cleanUp() {
+            cleanUpInternal()
+        }
+
+        @Suppress("unused")
+        fun putBitmap(name: String, bitmap: Bitmap) {
+            val aliasKey = synchronized(aliasLock) {
+                aliasKeys.getOrPut(name) {
+                    nextAliasId -= 1
+                    val width = bitmap.width.takeIf { it > 0 } ?: 1
+                    PageBitmapKey(nextAliasId, width)
+                }
+            }
+            putInternal(aliasKey, bitmap)
+        }
+
+        @Suppress("unused")
+        fun getBitmap(name: String): Bitmap? {
+            val aliasKey = synchronized(aliasLock) { aliasKeys[name] } ?: return null
+            return getInternal(aliasKey)?.takeIf { !it.isRecycled }
+        }
+
+        protected abstract fun getInternal(key: PageBitmapKey): Bitmap?
+        protected abstract fun putInternal(key: PageBitmapKey, bitmap: Bitmap)
+        protected abstract fun valuesInternal(): Collection<Bitmap>
+        protected abstract fun clearInternal()
+        protected abstract fun cleanUpInternal()
+    }
+
+    private inner class CaffeineBitmapCache(maxCacheBytes: Long) : BitmapCache() {
+        private val delegate = Caffeine.newBuilder()
+            .maximumWeight(maxCacheBytes)
+            .weigher<PageBitmapKey, Bitmap> { _, bitmap -> safeByteCount(bitmap) }
+            .executor { it.run() }
+            .removalListener<PageBitmapKey, Bitmap> { _, bitmap, cause ->
+                if (cause == RemovalCause.REPLACED || cause == RemovalCause.EXPLICIT || cause.wasEvicted()) {
+                    bitmap?.let { recycleBitmap(it) }
+                }
+            }
+            .build<PageBitmapKey, Bitmap>()
+
+        override fun getInternal(key: PageBitmapKey): Bitmap? = delegate.getIfPresent(key)
+
+        override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
+            delegate.put(key, bitmap)
+        }
+
+        override fun valuesInternal(): Collection<Bitmap> = delegate.asMap().values
+
+        override fun clearInternal() {
+            delegate.invalidateAll()
+        }
+
+        override fun cleanUpInternal() {
+            delegate.cleanUp()
+        }
+    }
+
+    private inner class LruBitmapCache(maxCacheBytes: Long) : BitmapCache() {
+        private val cacheSize = maxCacheBytes.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+        private val lock = Any()
+        private val delegate = object : LruCache<PageBitmapKey, Bitmap>(cacheSize) {
+            override fun sizeOf(key: PageBitmapKey, value: Bitmap): Int = safeByteCount(value)
+
+            override fun entryRemoved(evicted: Boolean, key: PageBitmapKey, oldValue: Bitmap, newValue: Bitmap?) {
+                if (evicted || newValue == null) {
+                    recycleBitmap(oldValue)
+                }
+            }
+        }
+
+        override fun getInternal(key: PageBitmapKey): Bitmap? = synchronized(lock) {
+            delegate.get(key)
+        }
+
+        override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
+            synchronized(lock) {
+                delegate.put(key, bitmap)?.let { previous ->
+                    if (previous !== bitmap) {
+                        recycleBitmap(previous)
+                    }
+                }
+            }
+        }
+
+        override fun valuesInternal(): Collection<Bitmap> = synchronized(lock) {
+            delegate.snapshot().values.toList()
+        }
+
+        override fun clearInternal() {
+            synchronized(lock) {
+                delegate.evictAll()
+            }
+        }
+
+        override fun cleanUpInternal() {
+            // LruCache does not require explicit cleanup.
+        }
     }
 }
