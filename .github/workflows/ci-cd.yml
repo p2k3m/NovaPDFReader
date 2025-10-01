@@ -132,6 +132,8 @@ jobs:
           ANDROID_SIGNING_STORE_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
           ANDROID_SIGNING_KEY_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_JSON_SECRET: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_PROJECT_ID_VALUE: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
         run: |
           set -e
           missing=false
@@ -187,6 +189,18 @@ jobs:
           if [ -z "${ANDROID_SIGNING_KEY_PASSWORD_SECRET:-}" ]; then
             echo "::error::Missing ANDROID_SIGNING_KEY_PASSWORD secret required to access the signing key."
             echo "Remediation: Store the key password (often the same as the store password unless you set a separate value) as the ANDROID_SIGNING_KEY_PASSWORD repository secret."
+            missing=true
+          fi
+
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT_JSON_SECRET:-}" ]; then
+            echo "::error::Missing FIREBASE_SERVICE_ACCOUNT_JSON secret required for Firebase Test Lab instrumentation coverage."
+            echo "Remediation: Create a Google Cloud service account with the Firebase Test Lab Admin and Storage Object Admin roles, generate a JSON key, and save the key contents as the FIREBASE_SERVICE_ACCOUNT_JSON repository secret."
+            missing=true
+          fi
+
+          if [ -z "${FIREBASE_PROJECT_ID_VALUE:-}" ]; then
+            echo "::error::Missing FIREBASE_PROJECT_ID repository variable or secret required to target the Firebase project for physical device testing."
+            echo "Remediation: Note the Google Cloud project ID that hosts Firebase Test Lab (e.g., nova-pdf-prod) and store it either as the FIREBASE_PROJECT_ID repository variable or secret."
             missing=true
           fi
 
@@ -940,3 +954,128 @@ jobs:
           if [ -d "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}" ]; then
             aws s3 cp "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/" "s3://${BUCKET}/${S3_PREFIX}/logs/" --recursive
           fi
+
+  firebase-instrumentation:
+    name: Firebase instrumentation (physical devices)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: build-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device_label: pixel6-physical
+            model: oriole
+            version: 33
+          - device_label: pixel7pro-physical
+            model: cheetah
+            version: 33
+    env:
+      FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+      RESULTS_JSON: ${{ runner.temp }}/firebase-results.json
+    steps:
+      - name: Validate Firebase configuration
+        run: |
+          set -e
+          if [ -z "${FIREBASE_PROJECT_ID:-}" ]; then
+            echo "::error::Firebase project ID not provided; ensure FIREBASE_PROJECT_ID is configured as a repository variable or secret."
+            exit 1
+          fi
+          if [ -z "${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "::error::Firebase service account secret FIREBASE_SERVICE_ACCOUNT_JSON is missing."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.FIREBASE_PROJECT_ID }}
+      - name: Assemble instrumentation artifacts
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace --no-build-cache
+      - name: Run Firebase Test Lab instrumentation
+        id: firebase
+        env:
+          DEVICE_MODEL: ${{ matrix.model }}
+          DEVICE_VERSION: ${{ matrix.version }}
+          DEVICE_LABEL: ${{ matrix.device_label }}
+        run: |
+          set -euo pipefail
+          results_path="$RESULTS_JSON"
+          rm -f "$results_path"
+
+          set +e
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app app/build/outputs/apk/debug/app-debug.apk \
+            --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --device model="$DEVICE_MODEL",version="$DEVICE_VERSION",locale=en,orientation=portrait \
+            --timeout 30m \
+            --num-flaky-test-attempts=1 \
+            --results-history-name="ci-physical-devices" \
+            --format=json > "$results_path"
+          status=$?
+          set -e
+
+          if [ $status -ne 0 ]; then
+            echo "::error::gcloud firebase test command failed with exit code $status"
+            cat "$results_path" || true
+            exit $status
+          fi
+
+          python3 - <<'PY'
+import json
+import os
+import sys
+
+results_path = os.environ["RESULTS_JSON"]
+with open(results_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+outcome = payload.get("outcomeSummary")
+storage_path = payload.get("resultStoragePath")
+matrix_id = payload.get("testMatrixId")
+
+print(f"Firebase Test Lab matrix {matrix_id} completed with outcome {outcome}")
+
+if storage_path:
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+        output.write(f"storage_path={storage_path}\n")
+        output.write(f"matrix_id={matrix_id}\n")
+
+if outcome != "SUCCESS":
+    print(f"::error::Firebase instrumentation failed with outcome {outcome}")
+    sys.exit(1)
+PY
+      - name: Download Firebase results
+        if: always()
+        env:
+          STORAGE_PATH: ${{ steps.firebase.outputs.storage_path }}
+          DEVICE_LABEL: ${{ matrix.device_label }}
+        run: |
+          set -euo pipefail
+          if [ -z "${STORAGE_PATH:-}" ]; then
+            echo "No Firebase results storage path found; skipping download."
+            exit 0
+          fi
+
+          target_dir="firebase-results/${DEVICE_LABEL}"
+          mkdir -p "$target_dir"
+          gcloud storage cp --recursive "${STORAGE_PATH}/*" "$target_dir/"
+      - name: Upload Firebase artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-${{ matrix.device_label }}
+          path: firebase-results
+          if-no-files-found: warn
