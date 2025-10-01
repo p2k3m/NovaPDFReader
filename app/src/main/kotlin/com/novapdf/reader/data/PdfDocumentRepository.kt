@@ -603,21 +603,27 @@ class PdfDocumentRepository(
         crashReporter?.recordNonFatal(throwable, metadata)
     }
 
-    private fun parseDocumentOutline(session: PdfDocumentSession): List<PdfOutlineNode> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return emptyList()
-        }
-        return try {
-            val duplicate = ParcelFileDescriptor.dup(session.fileDescriptor.fileDescriptor)
-            duplicate.use { descriptor ->
-                parseOutlineFromDescriptor(descriptor)
+    @WorkerThread
+    private suspend fun parseDocumentOutline(session: PdfDocumentSession): List<PdfOutlineNode> {
+        return withContext(ioDispatcher) {
+            ensureWorkerThread()
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                return@withContext emptyList()
             }
-        } catch (_: Throwable) {
-            emptyList()
+            try {
+                val duplicate = ParcelFileDescriptor.dup(session.fileDescriptor.fileDescriptor)
+                duplicate.use { descriptor ->
+                    parseOutlineFromDescriptor(descriptor)
+                }
+            } catch (_: Throwable) {
+                emptyList()
+            }
         }
     }
 
+    @WorkerThread
     private fun parseOutlineFromDescriptor(descriptor: ParcelFileDescriptor): List<PdfOutlineNode> {
+        ensureWorkerThread()
         return try {
             val pdfDocumentClass = Class.forName("android.graphics.pdf.PdfDocument")
             val instance = instantiatePdfDocument(pdfDocumentClass, descriptor) ?: return emptyList()
@@ -640,7 +646,9 @@ class PdfDocumentRepository(
         }
     }
 
+    @WorkerThread
     private fun instantiatePdfDocument(pdfDocumentClass: Class<*>, descriptor: ParcelFileDescriptor): Any? {
+        ensureWorkerThread()
         pdfDocumentClass.constructors.firstOrNull { constructor ->
             constructor.parameterCount == 1 && ParcelFileDescriptor::class.java.isAssignableFrom(constructor.parameterTypes[0])
         }?.let { constructor ->
