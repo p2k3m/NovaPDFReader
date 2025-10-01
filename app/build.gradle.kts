@@ -66,6 +66,7 @@ val baselineProfileProject = rootProject.findProject(":baselineprofile")
 
 android {
     namespace = "com.novapdf.reader"
+    testNamespace = "$resolvedApplicationId.test"
     compileSdk = 35
 
     defaultConfig {
@@ -77,6 +78,11 @@ android {
 
         vectorDrawables.useSupportLibrary = true
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testApplicationId = "$resolvedApplicationId.test"
+        manifestPlaceholders += mapOf(
+            "novapdfAppId" to resolvedApplicationId,
+            "novapdfTestAppId" to "$resolvedApplicationId.test"
+        )
 
         buildConfigField("int", "LOW_END_MIN_PPM", "8")
         buildConfigField("int", "LOW_END_MAX_PPM", "90")
