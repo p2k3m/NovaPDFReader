@@ -15,6 +15,7 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.data.remote.RemotePdfException
 import com.shockwave.pdfium.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,6 +43,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -318,6 +320,55 @@ class PdfViewerViewModelSearchTest {
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
         assertEquals(app.getString(R.string.error_remote_open_failed), (status as DocumentStatus.Error).message)
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `openRemoteDocument surfaces corrupt download failure`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        val failingUrl = "https://example.com/corrupt.pdf"
+        val corruptFailure = RemotePdfException(
+            RemotePdfException.Reason.CORRUPTED,
+            IOException("Corrupt PDF"),
+        )
+        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(corruptFailure))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        viewModel.openRemoteDocument(failingUrl)
+        advanceUntilIdle()
+
+        verify(downloadManager).download(eq(failingUrl))
+        val status = viewModel.uiState.value.documentStatus
+        assertTrue(status is DocumentStatus.Error)
+        assertEquals(app.getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
     }
 
     @Test

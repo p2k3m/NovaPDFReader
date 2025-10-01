@@ -26,6 +26,7 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.data.remote.RemotePdfException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -345,10 +346,20 @@ open class PdfViewerViewModel(
                 val metadata = buildMap {
                     put("stage", "remoteDownload")
                     sourceUrl?.let { put("url", it) }
+                    if (throwable is RemotePdfException) {
+                        put("reason", throwable.reason.name)
+                    }
                 }
                 crashReporter.recordNonFatal(throwable, metadata)
             }
-            showError(app.getString(R.string.error_remote_open_failed))
+            val messageRes = when (throwable) {
+                is RemotePdfException -> when (throwable.reason) {
+                    RemotePdfException.Reason.CORRUPTED -> R.string.error_pdf_corrupted
+                    RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
+                }
+                else -> R.string.error_remote_open_failed
+            }
+            showError(app.getString(messageRes))
         }
     }
 
