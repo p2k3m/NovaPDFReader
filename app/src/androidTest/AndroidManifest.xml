@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation
+        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:targetPackage="${applicationId}"
+        android:targetProcesses="${applicationId}"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+</manifest>
