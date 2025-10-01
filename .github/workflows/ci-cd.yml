@@ -122,6 +122,8 @@ jobs:
       SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
       SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+      NOVAPDF_APP_ID: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -562,7 +564,7 @@ jobs:
         env:
           STRESS_DEST: stress-large.pdf
           THOUSAND_DEST: stress-thousand-pages.pdf
-          PACKAGE_NAME: com.novapdf.reader
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
 
@@ -721,6 +723,8 @@ jobs:
               print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
       - name: Validate ANR and crash-free logcat
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
           adb logcat -d > logcat-after-tests.txt
@@ -728,6 +732,10 @@ jobs:
           import pathlib
           import re
           import sys
+          import os
+
+          package_name = os.environ.get("PACKAGE_NAME", "com.novapdf.reader")
+          escaped_package = re.escape(package_name)
 
           log_path = pathlib.Path("logcat-after-tests.txt")
           if not log_path.exists():
@@ -737,31 +745,31 @@ jobs:
           contents = log_path.read_text(encoding="utf-8", errors="ignore")
           crash_signatures = [
               (
-                  re.compile(r"ANR in com\\.novapdf\\.reader"),
-                  "Detected Application Not Responding dialog for com.novapdf.reader during instrumentation tests",
+                  re.compile(rf"ANR in {escaped_package}"),
+                  f"Detected Application Not Responding dialog for {package_name} during instrumentation tests",
               ),
               (
-                  re.compile(r"Application is not responding: Process com\\.novapdf\\.reader"),
-                  "Detected system level 'Application is not responding' warning for com.novapdf.reader",
+                  re.compile(rf"Application is not responding: Process {escaped_package}"),
+                  f"Detected system level 'Application is not responding' warning for {package_name}",
               ),
               (
-                  re.compile(r"FATAL EXCEPTION: .*Process: com\\.novapdf\\.reader"),
-                  "Detected fatal crash in com.novapdf.reader during instrumentation tests",
+                  re.compile(rf"FATAL EXCEPTION: .*Process: {escaped_package}"),
+                  f"Detected fatal crash in {package_name} during instrumentation tests",
               ),
               (
                   re.compile(r"E AndroidRuntime: FATAL EXCEPTION"),
                   "AndroidRuntime reported a fatal exception while instrumentation tests were running",
               ),
               (
-                  re.compile(r"Fatal signal \d+ .*? \(SIG[A-Z]+\).*?com\\.novapdf\\.reader"),
-                  "Detected native crash (fatal signal) for com.novapdf.reader during instrumentation tests",
+                  re.compile(rf"Fatal signal \d+ .*? \(SIG[A-Z]+\).*?{escaped_package}"),
+                  f"Detected native crash (fatal signal) for {package_name} during instrumentation tests",
               ),
               (
-                  re.compile(r"Process com\\.novapdf\\.reader has died"),
-                  "System server logged that com.novapdf.reader process died during instrumentation tests",
+                  re.compile(rf"Process {escaped_package} has died"),
+                  f"System server logged that {package_name} process died during instrumentation tests",
               ),
               (
-                  re.compile(r"Force finishing activity com\\.novapdf\\.reader"),
+                  re.compile(rf"Force finishing activity {escaped_package}"),
                   "Activity manager force-finished NovaPDF Reader during instrumentation tests",
               ),
           ]
@@ -842,13 +850,14 @@ jobs:
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
       - name: Capture screenshots
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
 
           base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$base_dir"
 
-          PACKAGE_NAME="com.novapdf.reader"
           READY_FLAG="cache/screenshot_ready.flag"
           DONE_FLAG="cache/screenshot_done.flag"
           HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
@@ -875,7 +884,7 @@ jobs:
           adb shell am instrument -w -r \
             -e runScreenshotHarness true \
             -e class "$HARNESS_CLASS" \
-            com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner \
+            ${PACKAGE_NAME}.test/androidx.test.runner.AndroidJUnitRunner \
             >"$HARNESS_LOG" 2>&1 &
           harness_pid=$!
 
