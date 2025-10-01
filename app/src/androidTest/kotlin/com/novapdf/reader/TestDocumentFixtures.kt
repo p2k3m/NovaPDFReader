@@ -15,7 +15,7 @@ internal object TestDocumentFixtures {
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
-        val candidateDirectories = internalStorageCandidates(context)
+        val candidateDirectories = writableStorageCandidates(context)
 
         val existing = candidateDirectories
             .map { File(it, THOUSAND_PAGE_CACHE) }
@@ -33,13 +33,6 @@ internal object TestDocumentFixtures {
         createThousandPagePdf(destination)
         destination.toUri()
     }
-
-    private fun internalStorageCandidates(context: Context): List<File> = buildList {
-        context.cacheDir?.let(::add)
-        context.filesDir?.let(::add)
-        context.codeCacheDir?.let(::add)
-        context.noBackupFilesDir?.let(::add)
-    }.distinct()
 
     private fun createThousandPagePdf(destination: File) {
         val pdf = PdfDocument()

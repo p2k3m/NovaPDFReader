@@ -20,7 +20,7 @@ internal object StressDocumentFactory {
     private const val PAGE_COUNT = 32
 
     suspend fun installStressDocument(context: Context) = withContext(Dispatchers.IO) {
-        val candidateDirectories = internalStorageCandidates(context)
+        val candidateDirectories = writableStorageCandidates(context)
 
         val existing = candidateDirectories
             .map { File(it, LARGE_CACHE_FILE_NAME) }
@@ -48,13 +48,6 @@ internal object StressDocumentFactory {
         failures.forEach(failure::addSuppressed)
         throw failure
     }
-
-    private fun internalStorageCandidates(context: Context): List<File> = buildList {
-        context.cacheDir?.let(::add)
-        context.filesDir?.let(::add)
-        context.codeCacheDir?.let(::add)
-        context.noBackupFilesDir?.let(::add)
-    }.distinct()
 
     private fun generateStressDocument(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for stress PDF")
