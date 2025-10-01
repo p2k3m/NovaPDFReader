@@ -228,21 +228,17 @@ jobs:
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-      - name: Install AWS CLI
+      - name: Set up AWS CLI
+        uses: actions/setup-aws-cli@v2
+      - name: Validate AWS credential scope
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
         run: |
-          python3 -m pip install --user awscli
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          if [ -d "$HOME/Library/Python/3.11/bin" ]; then
-            echo "$HOME/Library/Python/3.11/bin" >> "$GITHUB_PATH"
-          fi
-          if [ -d "$HOME/Library/Python/3.12/bin" ]; then
-            echo "$HOME/Library/Python/3.12/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Configure AWS credentials
-        run: |
-          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws configure set default.region us-east-1
+          set -euo pipefail
+          aws sts get-caller-identity --query 'Account' --output text >/dev/null
+          aws iam get-user --query 'User.Arn' --output text >/dev/null 2>/dev/null || true
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --info
       - name: Start emulator
@@ -481,6 +477,9 @@ jobs:
       - name: Fetch stress PDF fixtures from S3
         id: fetch_pdfs
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
@@ -918,6 +917,9 @@ jobs:
       - name: Upload build outputs to S3
         if: success()
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
           S3_PREFIX: ci/${{ github.run_id }}/api${{ matrix.api }}/${{ matrix.device_label }}
         run: |
