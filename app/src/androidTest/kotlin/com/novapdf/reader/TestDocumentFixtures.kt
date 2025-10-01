@@ -1,13 +1,17 @@
 package com.novapdf.reader
 
 import android.content.Context
-import android.graphics.Paint
-import android.graphics.pdf.PdfDocument
 import androidx.core.net.toUri
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.novapdf.reader.search.PdfBoxInitializer
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
+import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 
 internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
@@ -30,35 +34,57 @@ internal object TestDocumentFixtures {
 
         val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
         destination.parentFile?.mkdirs()
-        createThousandPagePdf(destination)
+        createThousandPagePdf(context, destination)
         destination.toUri()
     }
 
-    private fun createThousandPagePdf(destination: File) {
-        val pdf = PdfDocument()
-        val paint = Paint().apply {
-            isAntiAlias = true
-            textSize = 14f
+    private suspend fun createThousandPagePdf(context: Context, destination: File) {
+        val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for thousand-page PDF")
+        if (!parentDir.exists() && !parentDir.mkdirs()) {
+            throw IOException("Unable to create cache directory for thousand-page PDF")
         }
+
+        val tempFile = File(parentDir, destination.name + ".tmp")
+        if (tempFile.exists() && !tempFile.delete()) {
+            throw IOException("Unable to clear stale thousand-page PDF cache")
+        }
+
+        PdfBoxInitializer.ensureInitialized(context)
+
+        val document = PDDocument()
+        val font = PDType1Font.HELVETICA
+
         try {
             repeat(THOUSAND_PAGE_COUNT) { index ->
-                val pageInfo = PdfDocument.PageInfo.Builder(612, 792, index + 1).create()
-                val page = pdf.startPage(pageInfo)
-                val canvas = page.canvas
-                val header = "Stress Test Document"
-                canvas.drawText(header, 72f, 72f, paint)
-                canvas.drawText("Page ${index + 1}", 72f, 108f, paint)
-                pdf.finishPage(page)
+                val page = PDPage(PDRectangle.LETTER)
+                document.addPage(page)
+
+                PDPageContentStream(document, page).use { stream ->
+                    stream.beginText()
+                    stream.setFont(font, 12f)
+                    stream.newLineAtOffset(72f, page.mediaBox.height - 72f)
+                    stream.showText("Stress Test Document")
+                    stream.newLineAtOffset(0f, -24f)
+                    stream.showText("Page ${index + 1}")
+                    stream.endText()
+                }
             }
-            destination.outputStream().use { output ->
-                pdf.writeTo(output)
-                output.flush()
-            }
+
+            document.save(tempFile)
         } catch (error: IOException) {
-            destination.delete()
+            tempFile.delete()
             throw error
         } finally {
-            pdf.close()
+            document.close()
+        }
+
+        if (destination.exists() && !destination.delete()) {
+            tempFile.delete()
+            throw IOException("Unable to replace cached thousand-page PDF")
+        }
+        if (!tempFile.renameTo(destination)) {
+            tempFile.delete()
+            throw IOException("Unable to move thousand-page PDF into cache")
         }
     }
 }
