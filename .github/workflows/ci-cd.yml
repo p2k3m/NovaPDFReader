@@ -568,24 +568,26 @@ jobs:
             local cache_dir="${app_data_dir}/cache"
             local cache_path="${cache_dir}/${dest_name}"
 
-            local staged_path="$cache_path"
+            local staged_path=""
 
-            if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p \"${cache_dir}\"; cat > \"${cache_path}\"" < "$src"; then
-              echo "Failed to write ${dest_name} into cache; attempting files directory fallback" >&2
+            if adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p \"${cache_dir}\"; cat > \"${cache_path}\"" < "$src"; then
+              staged_path="$cache_path"
+            else
+              echo "::warning::Failed to write ${dest_name} into cache; attempting files directory fallback" >&2
 
               local files_dir="${app_data_dir}/files"
               local files_path="${files_dir}/${dest_name}"
-              staged_path="$files_path"
 
-              if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p \"${files_dir}\"; cat > \"${files_path}\"" < "$src"; then
-                echo "::error::Failed to stream ${dest_name} into application internal storage"
-                exit 1
+              if adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p \"${files_dir}\"; cat > \"${files_path}\"" < "$src"; then
+                staged_path="$files_path"
+              else
+                echo "::warning::Failed to stream ${dest_name} into application internal storage; instrumentation will generate it on-device" >&2
+                return 0
               fi
             fi
 
-            if ! adb shell run-as "$PACKAGE_NAME" sh -c "[ -s \"${staged_path}\" ]"; then
-              echo "::error::Failed to stage ${dest_name} in application storage"
-              exit 1
+            if [ -n "$staged_path" ] && ! adb shell run-as "$PACKAGE_NAME" sh -c "[ -s \"${staged_path}\" ]"; then
+              echo "::warning::Staged ${dest_name} is missing or empty after transfer; instrumentation will regenerate it on-device" >&2
             fi
           }
 
