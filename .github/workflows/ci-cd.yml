@@ -848,13 +848,71 @@ jobs:
           base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$base_dir"
 
-          adb shell am start -n com.novapdf.reader/.MainActivity
+          PACKAGE_NAME="com.novapdf.reader"
+          READY_FLAG="cache/screenshot_ready.flag"
+          DONE_FLAG="cache/screenshot_done.flag"
+          HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
+          HARNESS_LOG="$base_dir/screenshot-harness.log"
+
+          cleanup_flags() {
+            adb shell run-as "$PACKAGE_NAME" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
+          }
+
+          cleanup_flags
+
+          harness_pid=""
+          finish_harness() {
+            if [ -n "${harness_pid:-}" ] && kill -0 "$harness_pid" >/dev/null 2>&1; then
+              echo "Stopping screenshot harness instrumentation" >&2
+              kill "$harness_pid" >/dev/null 2>&1 || true
+              wait "$harness_pid" >/dev/null 2>&1 || true
+            fi
+            cleanup_flags
+          }
+          trap finish_harness EXIT
+
+          echo "Launching screenshot harness instrumentation to load thousand-page PDF"
+          adb shell am instrument -w -r \
+            -e runScreenshotHarness true \
+            -e class "$HARNESS_CLASS" \
+            com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner \
+            >"$HARNESS_LOG" 2>&1 &
+          harness_pid=$!
+
+          wait_for_harness() {
+            local elapsed=0
+            local timeout=$((5 * 60))
+            while true; do
+              if ! kill -0 "$harness_pid" >/dev/null 2>&1; then
+                echo "::error::Screenshot harness instrumentation exited before reporting readiness" >&2
+                cat "$HARNESS_LOG" >&2 || true
+                wait "$harness_pid" || true
+                exit 1
+              fi
+
+              if adb shell run-as "$PACKAGE_NAME" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
+                break
+              fi
+
+              if [ $elapsed -ge $timeout ]; then
+                echo "::error::Timed out waiting for screenshot harness readiness flag" >&2
+                cat "$HARNESS_LOG" >&2 || true
+                exit 1
+              fi
+
+              sleep 2
+              elapsed=$((elapsed + 2))
+            done
+          }
+
+          wait_for_harness
+
           adb shell settings put system accelerometer_rotation 0 || true
           adb shell settings put system user_rotation 0 || true
           adb shell cmd uimode night no || true
           adb shell settings put secure high_text_contrast_enabled 0 || true
           adb shell settings put secure accessibility_display_daltonizer_enabled 0 || true
-          sleep 10
+          sleep 5
 
           capture_set() {
             local label="$1"
@@ -897,6 +955,21 @@ jobs:
           capture_set "dark-portrait-standard" portrait yes 0 none 4
           capture_set "dark-landscape-accessibility" landscape yes 1 1 4
           capture_set "light-landscape-standard" landscape no 0 none 3
+
+          if ! adb shell run-as "$PACKAGE_NAME" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
+            echo "::error::Failed to signal screenshot harness completion" >&2
+            exit 1
+          fi
+
+          if ! wait "$harness_pid"; then
+            status=$?
+            echo "::error::Screenshot harness instrumentation reported failure" >&2
+            cat "$HARNESS_LOG" >&2 || true
+            exit $status
+          fi
+
+          trap - EXIT
+          finish_harness
 
           adb shell settings put system user_rotation 0 || true
           adb shell cmd uimode night no || true
