@@ -1,0 +1,9 @@
+# Keep this directory limited to Android font resources.
+# Gradle's resource merger only accepts font XML or font binaries here.
+# Documentation belongs under docs/fonts/ instead.
+*
+!*.ttf
+!*.ttc
+!*.otf
+!*.xml
+!.gitignore
