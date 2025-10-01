@@ -849,6 +849,47 @@ jobs:
             sleep 5
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
+      - name: Install instrumentation harness for screenshots
+        run: |
+          set -euo pipefail
+
+          android_test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+
+          if [ ! -f "$android_test_apk" ]; then
+            echo "AndroidTest APK not found; assembling it now"
+            ./gradlew :app:assembleDebugAndroidTest --stacktrace
+          fi
+
+          echo "Installing $android_test_apk onto the emulator"
+          install_attempt=1
+          install_attempts_max=3
+          while true; do
+            if adb install --no-streaming -r -t "$android_test_apk"; then
+              break
+            fi
+
+            if [ $install_attempt -ge $install_attempts_max ]; then
+              echo "Failed to install $android_test_apk after $install_attempts_max attempts" >&2
+              exit 1
+            fi
+
+            install_attempt=$((install_attempt + 1))
+            echo "adb install failed (attempt $((install_attempt - 1))) — waiting for package manager before retrying"
+
+            retry_deadline=$((2 * 60))
+            retry_elapsed=0
+            until adb shell cmd package list packages >/dev/null 2>&1; do
+              sleep 5
+              retry_elapsed=$((retry_elapsed + 5))
+              if [ $retry_elapsed -ge $retry_deadline ]; then
+                echo "Package manager did not recover within $((retry_deadline / 60)) minutes after failed install" >&2
+                exit 1
+              fi
+            done
+
+            sleep 5
+            echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
+          done
       - name: Capture screenshots
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
