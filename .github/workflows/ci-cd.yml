@@ -14,6 +14,8 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +124,7 @@ jobs:
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
     steps:
       - name: Validate required secrets
+        id: validate_required_secrets
         env:
           AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -137,6 +140,7 @@ jobs:
         run: |
           set -e
           missing=false
+          firebase_missing=false
 
           if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ]; then
             echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
@@ -193,15 +197,22 @@ jobs:
           fi
 
           if [ -z "${FIREBASE_SERVICE_ACCOUNT_JSON_SECRET:-}" ]; then
-            echo "::error::Missing FIREBASE_SERVICE_ACCOUNT_JSON secret required for Firebase Test Lab instrumentation coverage."
+            echo "::warning::Missing FIREBASE_SERVICE_ACCOUNT_JSON secret required for Firebase Test Lab instrumentation coverage."
             echo "Remediation: Create a Google Cloud service account with the Firebase Test Lab Admin and Storage Object Admin roles, generate a JSON key, and save the key contents as the FIREBASE_SERVICE_ACCOUNT_JSON repository secret."
-            missing=true
+            firebase_missing=true
           fi
 
           if [ -z "${FIREBASE_PROJECT_ID_VALUE:-}" ]; then
-            echo "::error::Missing FIREBASE_PROJECT_ID repository variable or secret required to target the Firebase project for physical device testing."
+            echo "::warning::Missing FIREBASE_PROJECT_ID repository variable or secret required to target the Firebase project for physical device testing."
             echo "Remediation: Note the Google Cloud project ID that hosts Firebase Test Lab (e.g., nova-pdf-prod) and store it either as the FIREBASE_PROJECT_ID repository variable or secret."
-            missing=true
+            firebase_missing=true
+          fi
+
+          if [ "$firebase_missing" = true ]; then
+            echo "::notice::Firebase secrets missing; Firebase Test Lab jobs will be skipped."
+            echo "firebase_configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "firebase_configured=true" >> "$GITHUB_OUTPUT"
           fi
 
           if [ "$missing" = true ]; then
@@ -960,6 +971,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     needs: build-test
+    if: needs.build-test.result == 'success' && needs.build-test.outputs.firebase_configured == 'true'
     strategy:
       fail-fast: false
       matrix:
