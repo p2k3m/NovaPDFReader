@@ -2,14 +2,13 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.Until
 import androidx.work.WorkManager
 import java.io.File
 import java.util.Locale
@@ -115,20 +114,38 @@ class ScreenshotHarnessTest {
         activityRule.scenario.onActivity { activity ->
             activity.openDocumentForTest(documentUri)
         }
-        val statusVisible = device.wait(
-            Until.hasObject(By.textContains("Adaptive Flow")),
-            UI_WAIT_TIMEOUT
-        )
-        if (!statusVisible) {
-            throw IllegalStateException("Adaptive Flow status chip did not appear after opening document")
+
+        val deadline = SystemClock.elapsedRealtime() + DOCUMENT_OPEN_TIMEOUT
+        while (SystemClock.elapsedRealtime() < deadline) {
+            var documentReady = false
+            var errorMessage: String? = null
+            activityRule.scenario.onActivity { activity ->
+                val state = activity.currentDocumentStateForTest()
+                when (val status = state.documentStatus) {
+                    is DocumentStatus.Error -> errorMessage = status.message
+                    is DocumentStatus.Loading -> documentReady = false
+                    DocumentStatus.Idle -> documentReady = state.pageCount > 0
+                }
+            }
+
+            errorMessage?.let { message ->
+                throw IllegalStateException("Failed to load document for screenshots: $message")
+            }
+            if (documentReady) {
+                device.waitForIdle()
+                return
+            }
+
+            Thread.sleep(250)
         }
-        device.waitForIdle()
+
+        throw IllegalStateException("Timed out waiting for document to finish loading for screenshots")
     }
 
     private companion object {
         private const val SCREENSHOT_READY_FLAG = "screenshot_ready.flag"
         private const val SCREENSHOT_DONE_FLAG = "screenshot_done.flag"
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
-        private const val UI_WAIT_TIMEOUT = 5_000L
+        private const val DOCUMENT_OPEN_TIMEOUT = 30_000L
     }
 }
