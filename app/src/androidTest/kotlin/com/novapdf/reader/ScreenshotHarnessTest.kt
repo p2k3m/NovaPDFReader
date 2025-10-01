@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
@@ -13,6 +14,7 @@ import androidx.work.WorkManager
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -43,18 +45,14 @@ class ScreenshotHarnessTest {
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
-        withContext(Dispatchers.IO) {
-            WorkManager.getInstance(appContext).cancelAllWork().result.get(5, TimeUnit.SECONDS)
-        }
+        cancelWorkManagerJobs()
     }
 
     @After
     fun tearDown() = runBlocking {
         if (!harnessEnabled) return@runBlocking
-        withContext(Dispatchers.IO) {
-            WorkManager.getInstance(appContext).cancelAllWork().result.get(5, TimeUnit.SECONDS)
-            cleanupFlags()
-        }
+        cancelWorkManagerJobs()
+        withContext(Dispatchers.IO) { cleanupFlags() }
     }
 
     @Test
@@ -105,6 +103,19 @@ class ScreenshotHarnessTest {
         File(cacheDir, SCREENSHOT_DONE_FLAG).delete()
     }
 
+    private suspend fun cancelWorkManagerJobs() {
+        withContext(Dispatchers.IO) {
+            val manager = WorkManager.getInstance(appContext)
+            try {
+                manager.cancelAllWork().result.get(WORK_MANAGER_CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            } catch (error: TimeoutException) {
+                Log.w(TAG, "Timed out waiting for WorkManager cancellation during screenshot harness setup", error)
+            } catch (error: Exception) {
+                Log.w(TAG, "Unexpected failure cancelling WorkManager jobs for screenshot harness", error)
+            }
+        }
+    }
+
     private fun shouldRunHarness(): Boolean {
         val argument = InstrumentationRegistry.getArguments().getString(HARNESS_ARGUMENT)
         return argument?.lowercase(Locale.US) == "true"
@@ -147,5 +158,7 @@ class ScreenshotHarnessTest {
         private const val SCREENSHOT_DONE_FLAG = "screenshot_done.flag"
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
         private const val DOCUMENT_OPEN_TIMEOUT = 30_000L
+        private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
+        private const val TAG = "ScreenshotHarness"
     }
 }
