@@ -559,23 +559,25 @@ jobs:
             exit 1
           fi
 
+          echo "Application data directory resolved to $app_data_dir"
+
           stage_fixture() {
             local src="$1"
             local dest_name="$2"
 
             local staged_path="cache/${dest_name}"
 
-            if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; cd '$app_data_dir'; mkdir -p cache; cat > '${staged_path}'" < "$src"; then
+            if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p cache; cat > '${staged_path}'" < "$src"; then
               echo "Failed to write ${dest_name} into cache; attempting files directory fallback" >&2
 
               staged_path="files/${dest_name}"
-              if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; cd '$app_data_dir'; mkdir -p files; cat > '${staged_path}'" < "$src"; then
+              if ! adb shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p files; cat > '${staged_path}'" < "$src"; then
                 echo "::error::Failed to stream ${dest_name} into application internal storage"
                 exit 1
               fi
             fi
 
-            if ! adb shell run-as "$PACKAGE_NAME" sh -c "cd '$app_data_dir'; [ -s '${staged_path}' ]"; then
+            if ! adb shell run-as "$PACKAGE_NAME" sh -c "[ -s '${staged_path}' ]"; then
               echo "::error::Failed to stage ${dest_name} in application storage"
               exit 1
             fi
