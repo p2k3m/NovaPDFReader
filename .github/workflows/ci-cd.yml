@@ -1034,29 +1034,29 @@ jobs:
           fi
 
           python3 - <<'PY'
-import json
-import os
-import sys
+            import json
+            import os
+            import sys
 
-results_path = os.environ["RESULTS_JSON"]
-with open(results_path, "r", encoding="utf-8") as fh:
-    payload = json.load(fh)
+            results_path = os.environ["RESULTS_JSON"]
+            with open(results_path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
 
-outcome = payload.get("outcomeSummary")
-storage_path = payload.get("resultStoragePath")
-matrix_id = payload.get("testMatrixId")
+            outcome = payload.get("outcomeSummary")
+            storage_path = payload.get("resultStoragePath")
+            matrix_id = payload.get("testMatrixId")
 
-print(f"Firebase Test Lab matrix {matrix_id} completed with outcome {outcome}")
+            print(f"Firebase Test Lab matrix {matrix_id} completed with outcome {outcome}")
 
-if storage_path:
-    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-        output.write(f"storage_path={storage_path}\n")
-        output.write(f"matrix_id={matrix_id}\n")
+            if storage_path:
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    output.write(f"storage_path={storage_path}\n")
+                    output.write(f"matrix_id={matrix_id}\n")
 
-if outcome != "SUCCESS":
-    print(f"::error::Firebase instrumentation failed with outcome {outcome}")
-    sys.exit(1)
-PY
+            if outcome != "SUCCESS":
+                print(f"::error::Firebase instrumentation failed with outcome {outcome}")
+                sys.exit(1)
+          PY
       - name: Download Firebase results
         if: always()
         env:
