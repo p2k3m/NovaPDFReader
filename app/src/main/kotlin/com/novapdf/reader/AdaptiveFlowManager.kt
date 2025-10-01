@@ -64,6 +64,9 @@ class AdaptiveFlowManager(
     private val _preloadTargets = MutableStateFlow(emptyList<Int>())
     val preloadTargets: StateFlow<List<Int>> = _preloadTargets.asStateFlow()
 
+    private val _uiUnderLoad = MutableStateFlow(false)
+    val uiUnderLoad: StateFlow<Boolean> = _uiUnderLoad.asStateFlow()
+
     private val _readingSpeedPagesPerMinute = MutableStateFlow(30f)
     val readingSpeedPagesPerMinute: StateFlow<Float> = _readingSpeedPagesPerMinute.asStateFlow()
 
@@ -148,6 +151,8 @@ class AdaptiveFlowManager(
         updatePreloadTargets(pageIndex, totalPages)
     }
 
+    fun isUiUnderLoad(): Boolean = uiUnderLoad.value
+
     private fun computeReadingSpeed() {
         if (pageHistory.size < 2) return
         val intervals = pageHistory.zipWithNext { a, b -> b.second - a.second }
@@ -160,10 +165,16 @@ class AdaptiveFlowManager(
     private fun updatePreloadTargets(currentPage: Int, totalPages: Int) {
         coroutineScope.launch {
             if (isPreloadingSuspended()) {
+                if (!_uiUnderLoad.value) {
+                    _uiUnderLoad.value = true
+                }
                 if (_preloadTargets.value.isNotEmpty()) {
                     _preloadTargets.value = emptyList()
                 }
                 return@launch
+            }
+            if (_uiUnderLoad.value) {
+                _uiUnderLoad.value = false
             }
             val speed = readingSpeedPagesPerMinute.value
             val frameInterval = frameIntervalMillis.value
@@ -295,6 +306,7 @@ class AdaptiveFlowManager(
 
     private fun suspendPreloading(now: Long) {
         preloadSuspendedUntilMillis = now + BuildConfig.ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS
+        _uiUnderLoad.value = true
         if (_preloadTargets.value.isNotEmpty()) {
             _preloadTargets.value = emptyList()
         }
@@ -306,6 +318,7 @@ class AdaptiveFlowManager(
         preloadSuspendedUntilMillis = 0L
         aggregatedTotalFrames = 0
         aggregatedJankyFrames = 0
+        _uiUnderLoad.value = false
     }
 
     private fun registerFrameMetricsCallbacks() {

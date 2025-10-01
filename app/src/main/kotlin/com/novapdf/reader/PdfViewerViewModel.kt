@@ -176,7 +176,7 @@ open class PdfViewerViewModel(
         }
         viewModelScope.launch {
             adaptiveFlowManager.preloadTargets.collect { targets ->
-                if (targets.isNotEmpty()) {
+                if (targets.isNotEmpty() && !shouldThrottlePrefetch()) {
                     val width = viewportWidthPx
                     if (width > 0) {
                         pdfRepository.prefetchPages(targets, width)
@@ -185,6 +185,8 @@ open class PdfViewerViewModel(
             }
         }
     }
+
+    private fun shouldThrottlePrefetch(): Boolean = adaptiveFlowManager.isUiUnderLoad()
 
     fun openDocument(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -389,7 +391,7 @@ open class PdfViewerViewModel(
         adaptiveFlowManager.trackPageChange(index, session.pageCount)
         _uiState.value = _uiState.value.copy(currentPage = index)
         val preloadTargets = adaptiveFlowManager.preloadTargets.value
-        if (preloadTargets.isNotEmpty()) {
+        if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
             val width = viewportWidthPx
             if (width > 0) {
                 pdfRepository.prefetchPages(preloadTargets, width)
@@ -425,13 +427,13 @@ open class PdfViewerViewModel(
         if (widthPx <= 0) return
         viewportWidthPx = widthPx
         val preloadTargets = adaptiveFlowManager.preloadTargets.value
-        if (preloadTargets.isNotEmpty()) {
+        if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
             pdfRepository.prefetchPages(preloadTargets, viewportWidthPx)
         }
     }
 
     fun prefetchPages(indices: List<Int>, widthPx: Int) {
-        if (indices.isEmpty() || widthPx <= 0) return
+        if (indices.isEmpty() || widthPx <= 0 || shouldThrottlePrefetch()) return
         viewModelScope.launch(Dispatchers.IO) {
             pdfRepository.prefetchPages(indices, widthPx)
         }
