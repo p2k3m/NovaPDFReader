@@ -70,7 +70,9 @@ internal class ThousandPagePdfWriter(
 
         @Throws(IOException::class)
         fun write() {
-            writeAscii("%PDF-1.4\n")
+            writeAscii("%PDF-1.4\r\n")
+            // Indicate that the file may contain binary data per the PDF specification.
+            writeAscii("%\u00E2\u00E3\u00CF\u00D3\r\n")
 
             writeCatalog()
             writePages()
@@ -79,46 +81,45 @@ internal class ThousandPagePdfWriter(
             writeFontObject()
 
             val startXref = output.bytesWritten
-            writeAscii("xref\n")
-            writeAscii("0 ${totalObjects + 1}\n")
-            writeAscii("0000000000 65535 f \n")
+            writeAscii("xref\r\n")
+            writeAscii("0 ${totalObjects + 1}\r\n")
+            writeAscii("0000000000 65535 f \r\n")
             for (index in 1..totalObjects) {
                 val offset = objectOffsets[index]
-                writeAscii(String.format(Locale.US, "%010d 00000 n \n", offset))
+                writeAscii(String.format(Locale.US, "%010d 00000 n \r\n", offset))
             }
-            writeAscii("trailer\n")
-            writeAscii("<< /Size ${totalObjects + 1} /Root 1 0 R >>\n")
-            writeAscii("startxref\n")
-            writeAscii("$startXref\n")
-            writeAscii("%%EOF\n")
+            writeAscii("trailer\r\n")
+            writeAscii("<< /Size ${totalObjects + 1} /Root 1 0 R >>\r\n")
+            writeAscii("startxref\r\n")
+            writeAscii("$startXref\r\n")
+            writeAscii("%%EOF\r\n")
         }
 
         private fun writeCatalog() {
             startObject(1)
-            writeAscii("<< /Type /Catalog /Pages 2 0 R >>\n")
+            writeAscii("<< /Type /Catalog /Pages 2 0 R >>\r\n")
             endObject()
         }
 
         private fun writePages() {
             startObject(2)
-            writeAscii("<< /Type /Pages /Count $pageCount /Kids [")
+            writeAscii("<< /Type /Pages /Count $pageCount /Kids [\r\n")
             for (pageIndex in 0 until pageCount) {
                 val pageObjectNumber = pageObjectNumber(pageIndex)
-                writeAscii("$pageObjectNumber 0 R ")
+                writeAscii("$pageObjectNumber 0 R\r\n")
             }
-            writeAscii("] >>\n")
+            writeAscii("] >>\r\n")
             endObject()
         }
 
         private fun writePageObjects() {
             for (pageIndex in 0 until pageCount) {
-                val pageNumber = pageIndex + 1
                 val pageObjectNumber = pageObjectNumber(pageIndex)
                 val contentObjectNumber = contentObjectNumber(pageIndex)
                 startObject(pageObjectNumber)
                 writeAscii(
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pageWidth $pageHeight] " +
-                        "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> >> >>\n"
+                        "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> >> >>\r\n"
                 )
                 endObject()
             }
@@ -127,30 +128,29 @@ internal class ThousandPagePdfWriter(
         private fun writeContentStreams() {
             for (pageIndex in 0 until pageCount) {
                 val contentObjectNumber = contentObjectNumber(pageIndex)
-                val pageNumber = pageIndex + 1
-                val contentBytes = buildPageContent(pageNumber)
+                val contentBytes = buildPageContent(pageIndex + 1)
                 startObject(contentObjectNumber)
-                writeAscii("<< /Length ${contentBytes.size} >>\n")
-                writeAscii("stream\n")
+                writeAscii("<< /Length ${contentBytes.size} >>\r\n")
+                writeAscii("stream\r\n")
                 output.write(contentBytes)
-                writeAscii("\nendstream\n")
+                writeAscii("\r\nendstream\r\n")
                 endObject()
             }
         }
 
         private fun writeFontObject() {
             startObject(fontObjectNumber)
-            writeAscii("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n")
+            writeAscii("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\r\n")
             endObject()
         }
 
         private fun startObject(number: Int) {
             objectOffsets[number] = output.bytesWritten
-            writeAscii("$number 0 obj\n")
+            writeAscii("$number 0 obj\r\n")
         }
 
         private fun endObject() {
-            writeAscii("endobj\n")
+            writeAscii("endobj\r\n")
         }
 
         private fun pageObjectNumber(index: Int): Int = 3 + index
@@ -159,10 +159,10 @@ internal class ThousandPagePdfWriter(
 
         private fun buildPageContent(pageNumber: Int): ByteArray {
             val content = buildString {
-                append("BT /F1 24 Tf 72 720 Td (Adaptive Flow benchmark page $pageNumber) Tj ET\n")
-                append("BT /F1 14 Tf 72 680 Td (Total pages: $pageCount) Tj ET\n")
-                append("BT /F1 14 Tf 72 650 Td (Generated for screenshot harness) Tj ET\n")
-                append("BT /F1 12 Tf 72 620 Td (Page index: ${pageNumber - 1}) Tj ET\n")
+                append("BT /F1 24 Tf 72 720 Td (Adaptive Flow benchmark page $pageNumber) Tj ET\r\n")
+                append("BT /F1 14 Tf 72 680 Td (Total pages: $pageCount) Tj ET\r\n")
+                append("BT /F1 14 Tf 72 650 Td (Generated for screenshot harness) Tj ET\r\n")
+                append("BT /F1 12 Tf 72 620 Td (Page index: ${pageNumber - 1}) Tj ET\r\n")
             }
             return content.toByteArray(StandardCharsets.US_ASCII)
         }
