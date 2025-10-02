@@ -30,11 +30,16 @@ class FileCrashReporter(
 
     private val applicationScope: CoroutineScope = CoroutineScope(Job()) + Dispatchers.IO
     private val appContext = context.applicationContext
-    private val logDirectory: File = resolveLogDirectory(appContext)
+    private val logDirectory: File? = runCatching { resolveLogDirectory(appContext) }
+        .onFailure { error ->
+            Log.w(TAG, "Unable to resolve writable directory for crash logs; disabling persistence", error)
+        }
+        .getOrNull()
     private val timestampFormatter: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS", Locale.US).withZone(ZoneOffset.UTC)
     private val installed = AtomicBoolean(false)
     private val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+    private val directoryWarningLogged = AtomicBoolean(false)
 
     override fun install() {
         if (!installed.compareAndSet(false, true)) {
@@ -58,6 +63,14 @@ class FileCrashReporter(
     }
 
     private fun persist(kind: String, body: String, metadata: Map<String, String> = emptyMap()) {
+        val directory = logDirectory
+        if (directory == null) {
+            if (directoryWarningLogged.compareAndSet(false, true)) {
+                Log.w(TAG, "Crash reporter persistence disabled; dropping $kind event")
+            }
+            return
+        }
+
         val timestamp = timestampFormatter.format(Instant.now())
         val fileName = "$timestamp-$kind.log"
         val entry = buildString {
@@ -74,7 +87,7 @@ class FileCrashReporter(
         }
         applicationScope.launch {
             runCatching {
-                writeLog(File(logDirectory, fileName), entry)
+                writeLog(File(directory, fileName), entry)
                 trimLogs()
             }.onFailure { error ->
                 Log.w(TAG, "Unable to persist crash log", error)
@@ -90,7 +103,8 @@ class FileCrashReporter(
     }
 
     private fun trimLogs() {
-        val logs = logDirectory.listFiles { candidate -> candidate.extension.equals("log", true) }
+        val directory = logDirectory ?: return
+        val logs = directory.listFiles { candidate -> candidate.extension.equals("log", true) }
             ?.sortedByDescending(File::lastModified)
             ?: return
         if (logs.size <= maxLogFiles) return
@@ -107,23 +121,17 @@ class FileCrashReporter(
             val candidateContexts = buildList {
                 add(applicationContext)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    add(applicationContext.createDeviceProtectedStorageContext())
+                    runCatching { applicationContext.createDeviceProtectedStorageContext() }
+                        .getOrNull()
+                        ?.let(::add)
                 }
             }.filterNotNull()
 
             val candidateParents = LinkedHashSet<File>()
             candidateContexts.forEach { candidateContext ->
-                listOfNotNull(
-                    candidateContext.filesDir,
-                    candidateContext.cacheDir,
-                    candidateContext.codeCacheDir,
-                    candidateContext.noBackupFilesDir,
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        candidateContext.dataDir
-                    } else {
-                        null
-                    }
-                ).forEach { dir -> candidateParents += dir }
+                safeDirectoriesForContext(candidateContext).forEach { dir ->
+                    candidateParents += dir
+                }
             }
 
             val writableParent = candidateParents
@@ -132,18 +140,29 @@ class FileCrashReporter(
 
             val resolvedParent = writableParent ?: candidateContexts
                 .asSequence()
-                .mapNotNull { ctx ->
-                    listOfNotNull(
-                        ctx.cacheDir,
-                        ctx.filesDir,
-                        ctx.codeCacheDir,
-                        ctx.noBackupFilesDir
-                    ).firstOrNull()
-                }
+                .mapNotNull { ctx -> safeDirectoriesForContext(ctx).firstOrNull() }
                 .firstOrNull()
                 ?: throw IllegalStateException("Unable to resolve writable directory for crash logs")
 
             return File(resolvedParent, "crashlogs").apply { mkdirs() }
+        }
+
+        private fun safeDirectoriesForContext(context: Context): List<File> {
+            return buildList {
+                addIfPresent { context.filesDir }
+                addIfPresent { context.cacheDir }
+                addIfPresent { context.codeCacheDir }
+                addIfPresent { context.noBackupFilesDir }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    addIfPresent { context.dataDir }
+                }
+            }
+        }
+
+        private inline fun MutableList<File>.addIfPresent(block: () -> File?) {
+            runCatching { block() }
+                .getOrNull()
+                ?.let { add(it) }
         }
     }
 }
