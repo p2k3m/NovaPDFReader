@@ -2,14 +2,18 @@ package com.novapdf.reader
 
 import android.content.Context
 import androidx.core.net.toUri
+import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
     private const val THOUSAND_PAGE_COUNT = 1000
+    private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
@@ -44,7 +48,10 @@ internal object TestDocumentFixtures {
         }
 
         try {
-            writeThousandPagePdf(tempFile)
+            val downloaded = tryDownloadThousandPagePdf(tempFile)
+            if (!downloaded) {
+                writeThousandPagePdf(tempFile)
+            }
         } catch (error: IOException) {
             tempFile.delete()
             throw error
@@ -57,6 +64,45 @@ internal object TestDocumentFixtures {
         if (!tempFile.renameTo(destination)) {
             tempFile.delete()
             throw IOException("Unable to move thousand-page PDF into cache")
+        }
+    }
+
+    private fun tryDownloadThousandPagePdf(destination: File): Boolean {
+        val url = InstrumentationRegistry.getArguments().getString(THOUSAND_PAGE_URL_ARG)
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+
+        val connection = URL(url).openConnection() as? HttpURLConnection ?: return false
+
+        return try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 15_000
+            connection.readTimeout = 60_000
+            connection.instanceFollowRedirects = true
+
+            val responseCode = connection.responseCode
+            if (responseCode !in 200..299) {
+                return false
+            }
+
+            connection.inputStream.use { input ->
+                destination.outputStream().buffered().use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                }
+            }
+
+            if (destination.length() <= 0L) {
+                destination.delete()
+                return false
+            }
+
+            true
+        } catch (_: IOException) {
+            destination.delete()
+            false
+        } finally {
+            connection.disconnect()
         }
     }
 
