@@ -114,8 +114,12 @@ internal object TestDocumentFixtures {
                 }
             }
 
+            val sharedStream = "q\nQ\n"
+            val sharedStreamBytes = sharedStream.toByteArray(Charsets.US_ASCII)
             beginObject(sharedContentObject) {
-                write("<< /Length 0 >>\nstream\n\nendstream")
+                write("<< /Length ${sharedStreamBytes.size} >>\nstream\n")
+                write(sharedStream)
+                write("endstream")
             }
 
             val startXref = bytesWritten
