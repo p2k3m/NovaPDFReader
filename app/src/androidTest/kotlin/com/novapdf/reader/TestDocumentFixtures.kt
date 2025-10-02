@@ -6,12 +6,6 @@ import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.novapdf.reader.search.PdfBoxInitializer
-import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.pdmodel.PDPage
-import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
-import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
-import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 
 internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
@@ -19,26 +13,26 @@ internal object TestDocumentFixtures {
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
-        val candidateDirectories = writableStorageCandidates(context)
+            val candidateDirectories = writableStorageCandidates(context)
 
-        val existing = candidateDirectories
-            .map { File(it, THOUSAND_PAGE_CACHE) }
-            .firstOrNull { it.exists() && it.length() > 0L }
+            val existing = candidateDirectories
+                .map { File(it, THOUSAND_PAGE_CACHE) }
+                .firstOrNull { it.exists() && it.length() > 0L }
 
-        if (existing != null) {
-            return@withContext existing.toUri()
+            if (existing != null) {
+                return@withContext existing.toUri()
+            }
+
+            val destinationDirectory = candidateDirectories.firstOrNull()
+                ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
+
+            val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
+            destination.parentFile?.mkdirs()
+            createThousandPagePdf(destination)
+            destination.toUri()
         }
 
-        val destinationDirectory = candidateDirectories.firstOrNull()
-            ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
-
-        val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
-        destination.parentFile?.mkdirs()
-        createThousandPagePdf(context, destination)
-        destination.toUri()
-    }
-
-    private suspend fun createThousandPagePdf(context: Context, destination: File) {
+    private suspend fun createThousandPagePdf(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for thousand-page PDF")
         if (!parentDir.exists() && !parentDir.mkdirs()) {
             throw IOException("Unable to create cache directory for thousand-page PDF")
@@ -49,33 +43,11 @@ internal object TestDocumentFixtures {
             throw IOException("Unable to clear stale thousand-page PDF cache")
         }
 
-        PdfBoxInitializer.ensureInitialized(context)
-
-        val document = PDDocument()
-        val font = PDType1Font.HELVETICA
-
         try {
-            repeat(THOUSAND_PAGE_COUNT) { index ->
-                val page = PDPage(PDRectangle.LETTER)
-                document.addPage(page)
-
-                PDPageContentStream(document, page).use { stream ->
-                    stream.beginText()
-                    stream.setFont(font, 12f)
-                    stream.newLineAtOffset(72f, page.mediaBox.height - 72f)
-                    stream.showText("Stress Test Document")
-                    stream.newLineAtOffset(0f, -24f)
-                    stream.showText("Page ${index + 1}")
-                    stream.endText()
-                }
-            }
-
-            document.save(tempFile)
+            writeThousandPagePdf(tempFile)
         } catch (error: IOException) {
             tempFile.delete()
             throw error
-        } finally {
-            document.close()
         }
 
         if (destination.exists() && !destination.delete()) {
@@ -85,6 +57,79 @@ internal object TestDocumentFixtures {
         if (!tempFile.renameTo(destination)) {
             tempFile.delete()
             throw IOException("Unable to move thousand-page PDF into cache")
+        }
+    }
+
+    private fun writeThousandPagePdf(destination: File) {
+        val totalPages = THOUSAND_PAGE_COUNT
+        val totalObjects = 2 + totalPages
+
+        destination.outputStream().buffered().use { stream ->
+            var bytesWritten = 0L
+            fun write(text: String) {
+                val data = text.toByteArray(Charsets.US_ASCII)
+                stream.write(data)
+                bytesWritten += data.size
+            }
+
+            val objectOffsets = LongArray(totalObjects + 1)
+
+            fun beginObject(index: Int, body: () -> Unit) {
+                objectOffsets[index] = bytesWritten
+                write("$index 0 obj\n")
+                body()
+                write("\nendobj\n")
+            }
+
+            write("%PDF-1.4\n")
+
+            beginObject(1) {
+                write("<< /Type /Catalog /Pages 2 0 R >>")
+            }
+
+            val firstPageObject = 3
+            val kidsBuilder = StringBuilder("[")
+            for (i in 0 until totalPages) {
+                if (i > 0) {
+                    kidsBuilder.append(' ')
+                }
+                kidsBuilder.append("${firstPageObject + i} 0 R")
+                if ((i + 1) % 16 == 0 && i + 1 < totalPages) {
+                    kidsBuilder.append("\n ")
+                }
+            }
+            kidsBuilder.append(']')
+
+            beginObject(2) {
+                write("<< /Type /Pages /Count $totalPages /Kids ${kidsBuilder} >>")
+            }
+
+            repeat(totalPages) { index ->
+                val objectIndex = firstPageObject + index
+                beginObject(objectIndex) {
+                    write("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>")
+                }
+            }
+
+            val startXref = bytesWritten
+            write("xref\n")
+            write("0 ${totalObjects + 1}\n")
+            write("0000000000 65535 f \n")
+            for (i in 1..totalObjects) {
+                write(String.format("%010d 00000 n \n", objectOffsets[i]))
+            }
+
+            write("trailer\n")
+            write("<< /Size ${totalObjects + 1} /Root 1 0 R >>\n")
+            write("startxref\n")
+            write("$startXref\n")
+            write("%%EOF\n")
+            stream.flush()
+        }
+
+        if (destination.length() <= 0L) {
+            destination.delete()
+            throw IOException("Failed to generate thousand-page PDF; destination is empty")
         }
     }
 }
