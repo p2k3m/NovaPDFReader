@@ -157,7 +157,9 @@ class ScreenshotHarnessTest {
         private const val SCREENSHOT_READY_FLAG = "screenshot_ready.flag"
         private const val SCREENSHOT_DONE_FLAG = "screenshot_done.flag"
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
-        private const val DOCUMENT_OPEN_TIMEOUT = 30_000L
+        // Opening a thousand-page stress document can take a while on CI devices, so give the
+        // viewer ample time to finish rendering before failing the harness run.
+        private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
         private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
         private const val TAG = "ScreenshotHarness"
     }
