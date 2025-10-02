@@ -62,7 +62,8 @@ internal object TestDocumentFixtures {
 
     private fun writeThousandPagePdf(destination: File) {
         val totalPages = THOUSAND_PAGE_COUNT
-        val totalObjects = 2 + totalPages
+        val contentStreamCount = 1
+        val totalObjects = 2 + totalPages + contentStreamCount
 
         destination.outputStream().buffered().use { stream ->
             var bytesWritten = 0L
@@ -88,6 +89,7 @@ internal object TestDocumentFixtures {
             }
 
             val firstPageObject = 3
+            val sharedContentObject = firstPageObject + totalPages
             val kidsBuilder = StringBuilder("[")
             for (i in 0 until totalPages) {
                 if (i > 0) {
@@ -107,8 +109,13 @@ internal object TestDocumentFixtures {
             repeat(totalPages) { index ->
                 val objectIndex = firstPageObject + index
                 beginObject(objectIndex) {
-                    write("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>")
+                    write("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ")
+                    write("/Contents ${sharedContentObject} 0 R /Resources << >> >>")
                 }
+            }
+
+            beginObject(sharedContentObject) {
+                write("<< /Length 0 >>\nstream\n\nendstream")
             }
 
             val startXref = bytesWritten
