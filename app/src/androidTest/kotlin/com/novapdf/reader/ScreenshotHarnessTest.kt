@@ -35,6 +35,7 @@ class ScreenshotHarnessTest {
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
+    private lateinit var handshakeCacheDir: File
     private var harnessEnabled: Boolean = false
 
     @Before
@@ -44,6 +45,7 @@ class ScreenshotHarnessTest {
 
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
+        handshakeCacheDir = resolveHandshakeCacheDir()
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
         cancelWorkManagerJobs()
     }
@@ -66,10 +68,8 @@ class ScreenshotHarnessTest {
 
     private suspend fun waitForScreenshotHandshake() {
         withContext(Dispatchers.IO) {
-            val cacheDir = appContext.cacheDir
-                ?: throw IllegalStateException("Cache directory unavailable for screenshot handshake")
-            val readyFlag = File(cacheDir, SCREENSHOT_READY_FLAG)
-            val doneFlag = File(cacheDir, SCREENSHOT_DONE_FLAG)
+            val readyFlag = File(handshakeCacheDir, SCREENSHOT_READY_FLAG)
+            val doneFlag = File(handshakeCacheDir, SCREENSHOT_DONE_FLAG)
 
             if (doneFlag.exists() && !doneFlag.delete()) {
                 throw IllegalStateException("Unable to clear stale screenshot completion flag")
@@ -98,9 +98,17 @@ class ScreenshotHarnessTest {
     }
 
     private fun cleanupFlags() {
-        val cacheDir = appContext.cacheDir ?: return
-        File(cacheDir, SCREENSHOT_READY_FLAG).delete()
-        File(cacheDir, SCREENSHOT_DONE_FLAG).delete()
+        File(handshakeCacheDir, SCREENSHOT_READY_FLAG).delete()
+        File(handshakeCacheDir, SCREENSHOT_DONE_FLAG).delete()
+    }
+
+    private fun resolveHandshakeCacheDir(): File {
+        val contextCache = InstrumentationRegistry.getInstrumentation().context.cacheDir
+            ?: throw IllegalStateException("Instrumentation cache directory unavailable for screenshot handshake")
+        if (!contextCache.exists() && !contextCache.mkdirs()) {
+            throw IllegalStateException("Unable to create instrumentation cache directory for screenshot handshake")
+        }
+        return contextCache
     }
 
     private suspend fun cancelWorkManagerJobs() {

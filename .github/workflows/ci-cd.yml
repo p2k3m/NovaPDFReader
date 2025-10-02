@@ -904,8 +904,10 @@ jobs:
           HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
           HARNESS_LOG="$base_dir/screenshot-harness.log"
 
+          HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
+
           cleanup_flags() {
-            adb shell run-as "$PACKAGE_NAME" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
+            adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
           }
 
           cleanup_flags
@@ -940,7 +942,7 @@ jobs:
                 exit 1
               fi
 
-              if adb shell run-as "$PACKAGE_NAME" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
+              if adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
                 break
               fi
 
@@ -1006,7 +1008,7 @@ jobs:
           capture_set "dark-landscape-accessibility" landscape yes 1 1 4
           capture_set "light-landscape-standard" landscape no 0 none 3
 
-          if ! adb shell run-as "$PACKAGE_NAME" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
+          if ! adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
             echo "::error::Failed to signal screenshot harness completion" >&2
             exit 1
           fi
