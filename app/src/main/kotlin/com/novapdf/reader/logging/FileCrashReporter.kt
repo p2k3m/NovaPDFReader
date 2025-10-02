@@ -1,12 +1,15 @@
 package com.novapdf.reader.logging
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import java.io.File
 import java.io.FileWriter
+import java.io.IOException
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.LinkedHashSet
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -100,35 +103,73 @@ class FileCrashReporter(
         private const val TAG = "FileCrashReporter"
 
         private fun resolveLogDirectory(context: Context): File {
-            val candidateParents = listOfNotNull(
-                context.filesDir,
-                context.cacheDir,
-                context.codeCacheDir,
-                context.noBackupFilesDir
-            )
-            val parent = candidateParents.firstOrNull { parent ->
-                runCatching {
-                    if (!parent.exists() && !parent.mkdirs()) {
-                        return@runCatching false
+            val applicationContext = context.applicationContext
+            val candidateContexts = buildList {
+                add(applicationContext)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    add(applicationContext.createDeviceProtectedStorageContext())
+                }
+            }.filterNotNull()
+
+            val candidateParents = LinkedHashSet<File>()
+            candidateContexts.forEach { candidateContext ->
+                listOfNotNull(
+                    candidateContext.filesDir,
+                    candidateContext.cacheDir,
+                    candidateContext.codeCacheDir,
+                    candidateContext.noBackupFilesDir,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        candidateContext.dataDir
+                    } else {
+                        null
                     }
-                    // Probe that we can actually create files within the directory.
-                    val probe = File(parent, ".crashlog-probe-${'$'}{System.nanoTime()}")
-                    try {
-                        probe.outputStream().use { }
-                        true
-                    } finally {
-                        if (probe.exists() && !probe.delete()) {
-                            // Ignore cleanup failures; this is best-effort.
-                        }
-                    }
-                }.getOrElse { false }
+                ).forEach { dir -> candidateParents += dir }
             }
 
-            requireNotNull(parent) {
-                "Unable to resolve writable directory for crash logs"
-            }
+            val writableParent = candidateParents
+                .mapNotNull(::prepareWritableDirectory)
+                .firstOrNull()
 
-            return File(parent, "crashlogs").apply { mkdirs() }
+            val resolvedParent = writableParent ?: candidateContexts
+                .asSequence()
+                .mapNotNull { ctx ->
+                    listOfNotNull(
+                        ctx.cacheDir,
+                        ctx.filesDir,
+                        ctx.codeCacheDir,
+                        ctx.noBackupFilesDir
+                    ).firstOrNull()
+                }
+                .firstOrNull()
+                ?: throw IllegalStateException("Unable to resolve writable directory for crash logs")
+
+            return File(resolvedParent, "crashlogs").apply { mkdirs() }
         }
+    }
+}
+
+private fun prepareWritableDirectory(directory: File?): File? {
+    if (directory == null) return null
+
+    return try {
+        if (!directory.exists() && !directory.mkdirs()) {
+            return null
+        }
+
+        val probe = File(directory, ".crashlog-probe-${'$'}{System.nanoTime()}")
+        try {
+            probe.outputStream().use { /* Ensure directory is writable */ }
+            directory
+        } catch (error: IOException) {
+            null
+        } catch (error: SecurityException) {
+            null
+        } finally {
+            if (probe.exists() && !probe.delete()) {
+                // Ignore failure to delete the probe file; it is harmless temporary state.
+            }
+        }
+    } catch (error: SecurityException) {
+        null
     }
 }
