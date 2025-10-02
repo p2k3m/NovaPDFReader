@@ -3,13 +3,15 @@ package com.novapdf.reader
 import android.content.Context
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.pdf.PdfDocument
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Locale
-import kotlin.text.Charsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -116,88 +118,59 @@ internal object TestDocumentFixtures {
             }
         } ?: throw IOException("Missing cache directory for thousand-page PDF")
 
-        val totalPages = THOUSAND_PAGE_COUNT
-        val totalObjects = 2 + (totalPages * 2) + 2
-        val resourceObject = 3 + (totalPages * 2)
-        val fontObject = resourceObject + 1
-        val offsets = LongArray(totalObjects + 1)
-
-        var offset = 0L
+        val pdfDocument = PdfDocument()
+        val titlePaint = Paint().apply {
+            color = Color.BLACK
+            textSize = 24f
+            isAntiAlias = true
+            typeface = Typeface.MONOSPACE
+        }
+        val subtitlePaint = Paint(titlePaint).apply {
+            textSize = 14f
+            color = Color.DKGRAY
+        }
 
         try {
-            BufferedOutputStream(destination.outputStream()).use { rawOutput ->
-                fun writeAscii(value: String) {
-                    val bytes = value.toByteArray(Charsets.US_ASCII)
-                    rawOutput.write(bytes)
-                    offset += bytes.size
+            repeat(THOUSAND_PAGE_COUNT) { index ->
+                val pageNumber = index + 1
+                val pageInfo = PdfDocument.PageInfo.Builder(612, 792, pageNumber).create()
+                val page = pdfDocument.startPage(pageInfo)
+                val canvas = page.canvas
+
+                canvas.drawColor(Color.WHITE)
+                canvas.drawText(
+                    "Adaptive Flow benchmark page $pageNumber",
+                    72f,
+                    108f,
+                    titlePaint
+                )
+                canvas.drawText(
+                    "Total pages: $THOUSAND_PAGE_COUNT",
+                    72f,
+                    156f,
+                    subtitlePaint
+                )
+                canvas.drawText(
+                    "Generated for screenshot harness",
+                    72f,
+                    186f,
+                    subtitlePaint
+                )
+
+                pdfDocument.finishPage(page)
+            }
+
+            destination.outputStream().use { outputStream ->
+                BufferedOutputStream(outputStream).use { buffered ->
+                    pdfDocument.writeTo(buffered)
+                    buffered.flush()
                 }
-
-                fun beginObject(index: Int, writer: () -> Unit) {
-                    offsets[index] = offset
-                    writeAscii("$index 0 obj\n")
-                    writer()
-                    writeAscii("\nendobj\n")
-                }
-
-                writeAscii("%PDF-1.4\n")
-
-                beginObject(1) {
-                    writeAscii("<< /Type /Catalog /Pages 2 0 R >>")
-                }
-
-                beginObject(2) {
-                    writeAscii("<< /Type /Pages /Count $totalPages /Kids [\n")
-                    for (index in 0 until totalPages) {
-                        val pageObject = 3 + (index * 2)
-                        writeAscii(" $pageObject 0 R")
-                        if ((index + 1) % 8 == 0) {
-                            writeAscii("\n")
-                        }
-                    }
-                    writeAscii("\n] >>")
-                }
-
-                for (index in 0 until totalPages) {
-                    val pageObject = 3 + (index * 2)
-                    val contentObject = pageObject + 1
-
-                    beginObject(pageObject) {
-                        writeAscii(
-                            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents $contentObject 0 R /Resources $resourceObject 0 R >>"
-                        )
-                    }
-
-                    beginObject(contentObject) {
-                        val text = "BT /F1 24 Tf 72 720 Td (Adaptive Flow benchmark page ${index + 1}) Tj ET\n"
-                        val data = text.toByteArray(Charsets.US_ASCII)
-                        writeAscii("<< /Length ${data.size} >>\nstream\n")
-                        rawOutput.write(data)
-                        offset += data.size
-                        writeAscii("endstream\n")
-                    }
-                }
-
-                beginObject(resourceObject) {
-                    writeAscii("<< /Font << /F1 $fontObject 0 R >> >>")
-                }
-
-                beginObject(fontObject) {
-                    writeAscii("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-                }
-
-                val startXref = offset
-                writeAscii("xref\n")
-                writeAscii("0 ${totalObjects + 1}\n")
-                writeAscii("0000000000 65535 f \n")
-                for (index in 1..totalObjects) {
-                    writeAscii(String.format(Locale.US, "%010d %05d n \n", offsets[index], 0))
-                }
-                writeAscii("trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n$startXref\n%%EOF\n")
-                rawOutput.flush()
             }
         } catch (error: IOException) {
             destination.delete()
             throw error
+        } finally {
+            pdfDocument.close()
         }
 
         if (destination.length() <= 0L) {
