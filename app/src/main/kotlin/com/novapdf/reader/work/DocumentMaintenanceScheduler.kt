@@ -1,6 +1,7 @@
 package com.novapdf.reader.work
 
 import android.content.Context
+import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -14,58 +15,89 @@ import java.util.concurrent.TimeUnit
 class DocumentMaintenanceScheduler(context: Context) {
 
     private val appContext = context.applicationContext
-    private val workManager = WorkManager.getInstance(appContext)
 
     fun scheduleAutosave(documentId: String? = null) {
-        val builder = OneTimeWorkRequestBuilder<DocumentMaintenanceWorker>()
-            .setInitialDelay(AUTOSAVE_DELAY_MINUTES, TimeUnit.MINUTES)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
-            .addTag(DocumentMaintenanceWorker.TAG_AUTOSAVE)
-        documentId?.let {
-            builder.setInputData(workDataOf(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS to arrayOf(it)))
+        withWorkManager("scheduleAutosave") { workManager ->
+            val builder = OneTimeWorkRequestBuilder<DocumentMaintenanceWorker>()
+                .setInitialDelay(AUTOSAVE_DELAY_MINUTES, TimeUnit.MINUTES)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
+                .addTag(DocumentMaintenanceWorker.TAG_AUTOSAVE)
+            documentId?.let {
+                builder.setInputData(workDataOf(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS to arrayOf(it)))
+            }
+            val request = builder.build()
+            workManager.enqueueUniqueWork(
+                DocumentMaintenanceWorker.AUTOSAVE_WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
+                request
+            )
         }
-        val request = builder.build()
-        workManager.enqueueUniqueWork(
-            DocumentMaintenanceWorker.AUTOSAVE_WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            request
-        )
     }
 
     fun requestImmediateSync(documentId: String? = null) {
-        val builder = OneTimeWorkRequestBuilder<DocumentMaintenanceWorker>()
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .addTag(DocumentMaintenanceWorker.TAG_IMMEDIATE)
-        documentId?.let {
-            builder.setInputData(workDataOf(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS to arrayOf(it)))
+        withWorkManager("requestImmediateSync") { workManager ->
+            val builder = OneTimeWorkRequestBuilder<DocumentMaintenanceWorker>()
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .addTag(DocumentMaintenanceWorker.TAG_IMMEDIATE)
+            documentId?.let {
+                builder.setInputData(workDataOf(DocumentMaintenanceWorker.KEY_DOCUMENT_IDS to arrayOf(it)))
+            }
+            val request = builder.build()
+            workManager.enqueueUniqueWork(
+                DocumentMaintenanceWorker.IMMEDIATE_WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
+                request
+            )
         }
-        val request = builder.build()
-        workManager.enqueueUniqueWork(
-            DocumentMaintenanceWorker.IMMEDIATE_WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            request
-        )
     }
 
     fun ensurePeriodicSync() {
-        val request = PeriodicWorkRequestBuilder<DocumentMaintenanceWorker>(
-            PERIODIC_INTERVAL_MINUTES,
-            TimeUnit.MINUTES,
-            PERIODIC_FLEX_MINUTES,
-            TimeUnit.MINUTES
-        )
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
-            .addTag(DocumentMaintenanceWorker.TAG_PERIODIC)
-            .build()
-        workManager.enqueueUniquePeriodicWork(
-            DocumentMaintenanceWorker.PERIODIC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
+        withWorkManager("ensurePeriodicSync") { workManager ->
+            val request = PeriodicWorkRequestBuilder<DocumentMaintenanceWorker>(
+                PERIODIC_INTERVAL_MINUTES,
+                TimeUnit.MINUTES,
+                PERIODIC_FLEX_MINUTES,
+                TimeUnit.MINUTES
+            )
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_DELAY_MINUTES, TimeUnit.MINUTES)
+                .addTag(DocumentMaintenanceWorker.TAG_PERIODIC)
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                DocumentMaintenanceWorker.PERIODIC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                request
+            )
+        }
+    }
+
+    private inline fun withWorkManager(
+        operation: String,
+        block: (WorkManager) -> Unit,
+    ) {
+        val manager = runCatching { WorkManager.getInstance(appContext) }
+            .getOrElse { error ->
+                if (error is IllegalStateException) {
+                    Log.w(
+                        TAG,
+                        "Skipping $operation because WorkManager is not initialised yet",
+                        error
+                    )
+                } else {
+                    Log.w(TAG, "Unable to obtain WorkManager for $operation", error)
+                }
+                return
+            }
+
+        try {
+            block(manager)
+        } catch (error: Exception) {
+            Log.w(TAG, "WorkManager operation '$operation' failed", error)
+        }
     }
 
     companion object {
+        private const val TAG = "DocumentMaintenanceScheduler"
         private const val AUTOSAVE_DELAY_MINUTES = 2L
         private const val BACKOFF_DELAY_MINUTES = 5L
         private const val PERIODIC_INTERVAL_MINUTES = 30L
