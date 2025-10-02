@@ -27,7 +27,7 @@ class FileCrashReporter(
 
     private val applicationScope: CoroutineScope = CoroutineScope(Job()) + Dispatchers.IO
     private val appContext = context.applicationContext
-    private val logDirectory: File = File(appContext.filesDir, "crashlogs").apply { mkdirs() }
+    private val logDirectory: File = resolveLogDirectory(appContext)
     private val timestampFormatter: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS", Locale.US).withZone(ZoneOffset.UTC)
     private val installed = AtomicBoolean(false)
@@ -98,5 +98,37 @@ class FileCrashReporter(
 
     companion object {
         private const val TAG = "FileCrashReporter"
+
+        private fun resolveLogDirectory(context: Context): File {
+            val candidateParents = listOfNotNull(
+                context.filesDir,
+                context.cacheDir,
+                context.codeCacheDir,
+                context.noBackupFilesDir
+            )
+            val parent = candidateParents.firstOrNull { parent ->
+                runCatching {
+                    if (!parent.exists() && !parent.mkdirs()) {
+                        return@runCatching false
+                    }
+                    // Probe that we can actually create files within the directory.
+                    val probe = File(parent, ".crashlog-probe-${'$'}{System.nanoTime()}")
+                    try {
+                        probe.outputStream().use { }
+                        true
+                    } finally {
+                        if (probe.exists() && !probe.delete()) {
+                            // Ignore cleanup failures; this is best-effort.
+                        }
+                    }
+                }.getOrElse { false }
+            }
+
+            requireNotNull(parent) {
+                "Unable to resolve writable directory for crash logs"
+            }
+
+            return File(parent, "crashlogs").apply { mkdirs() }
+        }
     }
 }
