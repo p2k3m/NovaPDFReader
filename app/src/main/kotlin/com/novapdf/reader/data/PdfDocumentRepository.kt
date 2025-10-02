@@ -412,14 +412,26 @@ class PdfDocumentRepository(
         val session = openSession.value ?: return null
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
-            if (!session.document.hasPage(pageIndex)) {
-                pdfiumCore.openPage(session.document, pageIndex)
+            try {
+                if (!session.document.hasPage(pageIndex)) {
+                    pdfiumCore.openPage(session.document, pageIndex)
+                }
+                val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
+                val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
+                val size = Size(width, height)
+                pageSizeCache.put(pageIndex, size)
+                size
+            } catch (throwable: Throwable) {
+                Log.e(TAG, "Failed to obtain page size for index $pageIndex", throwable)
+                reportNonFatal(
+                    throwable,
+                    mapOf(
+                        "stage" to "pageSize",
+                        "pageIndex" to pageIndex.toString()
+                    )
+                )
+                null
             }
-            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
-            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
-            val size = Size(width, height)
-            pageSizeCache.put(pageIndex, size)
-            size
         }
     }
 
