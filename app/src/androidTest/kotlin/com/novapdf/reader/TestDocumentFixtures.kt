@@ -3,11 +3,6 @@ package com.novapdf.reader
 import android.content.Context
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Typeface
-import android.graphics.pdf.PdfDocument
-import java.io.BufferedOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -118,59 +113,13 @@ internal object TestDocumentFixtures {
             }
         } ?: throw IOException("Missing cache directory for thousand-page PDF")
 
-        val pdfDocument = PdfDocument()
-        val titlePaint = Paint().apply {
-            color = Color.BLACK
-            textSize = 24f
-            isAntiAlias = true
-            typeface = Typeface.MONOSPACE
-        }
-        val subtitlePaint = Paint(titlePaint).apply {
-            textSize = 14f
-            color = Color.DKGRAY
-        }
-
         try {
-            repeat(THOUSAND_PAGE_COUNT) { index ->
-                val pageNumber = index + 1
-                val pageInfo = PdfDocument.PageInfo.Builder(612, 792, pageNumber).create()
-                val page = pdfDocument.startPage(pageInfo)
-                val canvas = page.canvas
-
-                canvas.drawColor(Color.WHITE)
-                canvas.drawText(
-                    "Adaptive Flow benchmark page $pageNumber",
-                    72f,
-                    108f,
-                    titlePaint
-                )
-                canvas.drawText(
-                    "Total pages: $THOUSAND_PAGE_COUNT",
-                    72f,
-                    156f,
-                    subtitlePaint
-                )
-                canvas.drawText(
-                    "Generated for screenshot harness",
-                    72f,
-                    186f,
-                    subtitlePaint
-                )
-
-                pdfDocument.finishPage(page)
-            }
-
             destination.outputStream().use { outputStream ->
-                BufferedOutputStream(outputStream).use { buffered ->
-                    pdfDocument.writeTo(buffered)
-                    buffered.flush()
-                }
+                ThousandPagePdfWriter(THOUSAND_PAGE_COUNT).writeTo(outputStream)
             }
         } catch (error: IOException) {
             destination.delete()
             throw error
-        } finally {
-            pdfDocument.close()
         }
 
         if (destination.length() <= 0L) {
