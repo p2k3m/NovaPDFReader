@@ -21,6 +21,10 @@
         android:roundIcon="@drawable/ic_pdf"
         android:supportsRtl="true"
         android:theme="@style/Theme.NovaPDFReader">
+        <meta-data
+            android:name="androidx.profileinstaller.PROFILE_INSTALLER_ENABLED"
+            android:value="false" />
+
         <activity
             android:name="com.novapdf.reader.ReaderActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
