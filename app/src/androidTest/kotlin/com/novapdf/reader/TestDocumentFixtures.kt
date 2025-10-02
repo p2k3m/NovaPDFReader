@@ -1,6 +1,9 @@
 package com.novapdf.reader
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -107,81 +110,42 @@ internal object TestDocumentFixtures {
     }
 
     private fun writeThousandPagePdf(destination: File) {
-        val totalPages = THOUSAND_PAGE_COUNT
-        val contentStreamCount = 1
-        val totalObjects = 2 + totalPages + contentStreamCount
+        destination.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs()) {
+                throw IOException("Unable to create cache directory for thousand-page PDF")
+            }
+        } ?: throw IOException("Missing cache directory for thousand-page PDF")
 
-        destination.outputStream().buffered().use { stream ->
-            var bytesWritten = 0L
-            fun write(text: String) {
-                val data = text.toByteArray(Charsets.US_ASCII)
-                stream.write(data)
-                bytesWritten += data.size
+        val pageWidth = 612
+        val pageHeight = 792
+        val pageLabelPaint = Paint().apply {
+            color = Color.DKGRAY
+            textSize = 24f
+            isAntiAlias = true
+        }
+
+        val pdfDocument = PdfDocument()
+        try {
+            repeat(THOUSAND_PAGE_COUNT) { index ->
+                val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create()
+                val page = pdfDocument.startPage(pageInfo)
+                val canvas = page.canvas
+                canvas.drawColor(Color.WHITE)
+                canvas.drawText(
+                    "Adaptive Flow benchmark page ${index + 1}",
+                    36f,
+                    64f,
+                    pageLabelPaint
+                )
+                pdfDocument.finishPage(page)
             }
 
-            val objectOffsets = LongArray(totalObjects + 1)
-
-            fun beginObject(index: Int, body: () -> Unit) {
-                objectOffsets[index] = bytesWritten
-                write("$index 0 obj\n")
-                body()
-                write("\nendobj\n")
+            destination.outputStream().use { output ->
+                pdfDocument.writeTo(output)
+                output.flush()
             }
-
-            write("%PDF-1.4\n")
-
-            beginObject(1) {
-                write("<< /Type /Catalog /Pages 2 0 R >>")
-            }
-
-            val firstPageObject = 3
-            val sharedContentObject = firstPageObject + totalPages
-            val kidsBuilder = StringBuilder("[")
-            for (i in 0 until totalPages) {
-                if (i > 0) {
-                    kidsBuilder.append(' ')
-                }
-                kidsBuilder.append("${firstPageObject + i} 0 R")
-                if ((i + 1) % 16 == 0 && i + 1 < totalPages) {
-                    kidsBuilder.append("\n ")
-                }
-            }
-            kidsBuilder.append(']')
-
-            beginObject(2) {
-                write("<< /Type /Pages /Count $totalPages /Kids ${kidsBuilder} >>")
-            }
-
-            repeat(totalPages) { index ->
-                val objectIndex = firstPageObject + index
-                beginObject(objectIndex) {
-                    write("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ")
-                    write("/Contents ${sharedContentObject} 0 R /Resources << >> >>")
-                }
-            }
-
-            val sharedStream = "q\nQ\n"
-            val sharedStreamBytes = sharedStream.toByteArray(Charsets.US_ASCII)
-            beginObject(sharedContentObject) {
-                write("<< /Length ${sharedStreamBytes.size} >>\nstream\n")
-                write(sharedStream)
-                write("endstream")
-            }
-
-            val startXref = bytesWritten
-            write("xref\n")
-            write("0 ${totalObjects + 1}\n")
-            write("0000000000 65535 f \n")
-            for (i in 1..totalObjects) {
-                write(String.format("%010d 00000 n \n", objectOffsets[i]))
-            }
-
-            write("trailer\n")
-            write("<< /Size ${totalObjects + 1} /Root 1 0 R >>\n")
-            write("startxref\n")
-            write("$startXref\n")
-            write("%%EOF\n")
-            stream.flush()
+        } finally {
+            pdfDocument.close()
         }
 
         if (destination.length() <= 0L) {
