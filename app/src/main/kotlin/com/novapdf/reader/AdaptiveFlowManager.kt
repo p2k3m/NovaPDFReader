@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.Collections
+import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -47,6 +49,7 @@ class AdaptiveFlowManager(
     private val application: Application? = context.applicationContext as? Application
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
     private val frameMetricsAggregator: FrameMetricsAggregator? = frameMetricsAggregatorProvider()
+    private val activitiesWithFrameMetrics = Collections.newSetFromMap(WeakHashMap<Activity, Boolean>())
     private val isLowRamDevice: Boolean = activityManager?.isLowRamDevice == true
     private val minPagesPerMinute: Float
     private val maxPagesPerMinute: Float
@@ -93,11 +96,18 @@ class AdaptiveFlowManager(
 
     private val activityLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: Activity) {
-            frameMetricsAggregator?.add(activity)
+            frameMetricsAggregator?.let {
+                it.add(activity)
+                activitiesWithFrameMetrics.add(activity)
+            }
         }
 
         override fun onActivityPaused(activity: Activity) {
-            frameMetricsAggregator?.remove(activity)
+            frameMetricsAggregator?.let {
+                if (activitiesWithFrameMetrics.remove(activity)) {
+                    it.remove(activity)
+                }
+            }
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
@@ -339,5 +349,6 @@ class AdaptiveFlowManager(
         app.unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks)
         frameMetricsAggregator.stop()
         frameMetricsAggregator.reset()
+        activitiesWithFrameMetrics.clear()
     }
 }
