@@ -51,6 +51,7 @@ import kotlin.jvm.Volatile
 
 private const val TAG = "LuceneSearchCoordinator"
 private const val OCR_RENDER_TARGET_WIDTH = 1280
+private const val MAX_INDEXED_PAGE_COUNT = 400
 private val WHOLE_PAGE_RECT = RectSnapshot(0f, 0f, 1f, 1f)
 
 private data class PageSearchContent(
@@ -93,6 +94,20 @@ class LuceneSearchCoordinator(
 
     fun prepare(session: PdfDocumentSession) {
         prepareJob?.cancel()
+        if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
+            Log.i(
+                TAG,
+                "Skipping Lucene index preparation for large document " +
+                    "(${session.pageCount} pages)"
+            )
+            currentDocumentId = session.documentId
+            directory = null
+            indexSearcher = null
+            indexReader = null
+            pageContents = emptyList()
+            prepareJob = null
+            return
+        }
         prepareJob = scope.launch {
             runCatching { rebuildIndex(session) }
                 .onFailure { Log.w(TAG, "Failed to pre-build index", it) }
@@ -167,6 +182,18 @@ class LuceneSearchCoordinator(
     private suspend fun ensureIndexReady(session: PdfDocumentSession) {
         prepareJob?.let { job -> if (job.isActive) job.join() }
         if (currentDocumentId == session.documentId && indexSearcher != null) {
+            return
+        }
+        if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
+            Log.i(
+                TAG,
+                "Skipping Lucene index rebuild for large document (${session.pageCount} pages)"
+            )
+            currentDocumentId = session.documentId
+            directory = null
+            indexSearcher = null
+            indexReader = null
+            pageContents = emptyList()
             return
         }
         rebuildIndex(session)
