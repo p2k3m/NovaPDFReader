@@ -151,13 +151,26 @@ class ScreenshotHarnessTest {
             }
             .getOrNull()
 
-        val cacheDir = testCacheDir ?: instrumentation.context.credentialProtectedStorageContext().cacheDir
-            ?: throw IllegalStateException("Instrumentation cache directory unavailable for screenshot handshake")
+        val cacheDir = testCacheDir
+            ?: instrumentation.context.credentialProtectedStorageContext().cacheDir
+            ?: instrumentation.context.cacheDir
+            ?: deriveCacheDirFromFilesDir(instrumentation.context.filesDir)
+            ?: throw IllegalStateException(
+                "Instrumentation cache directory unavailable for screenshot handshake"
+            )
 
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
             throw IllegalStateException("Unable to create cache directory for screenshot handshake at ${cacheDir.absolutePath}")
         }
         return cacheDir
+    }
+
+    private fun deriveCacheDirFromFilesDir(filesDir: File?): File? {
+        if (filesDir == null) {
+            return null
+        }
+        val parent = filesDir.parentFile ?: return null
+        return File(parent, "cache")
     }
 
     private fun findTestPackageCacheDir(testPackageName: String): File {
