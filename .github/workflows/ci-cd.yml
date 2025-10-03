@@ -376,7 +376,11 @@ jobs:
             fi
 
             echo "Configuring ${{ matrix.device_label }} data partition size to ${final_disk_mb} MB"
-            printf 'disk.dataPartition.size=%sM\n' "$final_disk_mb" >> "$config_path"
+            if grep -q '^disk.dataPartition.size=' "$config_path"; then
+              perl -0pi -e "s/^disk\\.dataPartition\\.size=.*/disk.dataPartition.size=${final_disk_mb}M/" "$config_path"
+            else
+              printf 'disk.dataPartition.size=%sM\n' "$final_disk_mb" >> "$config_path"
+            fi
             disk_partition_args=("-partition-size" "$final_disk_mb")
           fi
 
