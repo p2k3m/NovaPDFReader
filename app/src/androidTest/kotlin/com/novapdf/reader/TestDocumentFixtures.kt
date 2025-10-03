@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.content.Context
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
+import com.novapdf.reader.BuildConfig
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -14,6 +15,8 @@ internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
     private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
     private const val THOUSAND_PAGE_COUNT = 1_000
+    private val DEFAULT_THOUSAND_PAGE_URL = BuildConfig.THOUSAND_PAGE_FIXTURE_URL
+        .takeIf { it.isNotBlank() }
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
@@ -48,8 +51,8 @@ internal object TestDocumentFixtures {
         }
 
         try {
-            val downloaded = tryDownloadThousandPagePdf(tempFile)
-            if (!downloaded) {
+            val preparedFromNetwork = tryDownloadThousandPagePdf(tempFile)
+            if (!preparedFromNetwork) {
                 writeThousandPagePdf(tempFile)
             }
         } catch (error: IOException) {
@@ -70,6 +73,7 @@ internal object TestDocumentFixtures {
     private fun tryDownloadThousandPagePdf(destination: File): Boolean {
         val url = InstrumentationRegistry.getArguments().getString(THOUSAND_PAGE_URL_ARG)
             ?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_THOUSAND_PAGE_URL
             ?: return false
 
         val connection = URL(url).openConnection() as? HttpURLConnection ?: return false
