@@ -495,17 +495,26 @@ jobs:
             local interval=5
             local elapsed=0
             local value=""
+            local expected_display="${expected//|/, }"
+
+            IFS='|' read -r -a expected_values <<< "$expected"
 
             while true; do
               if value=$(adb shell getprop "$property" 2>/dev/null); then
                 value=$(printf '%s' "$value" | tr -d '\r' | tr -d '\n')
-                if [ "$value" = "$expected" ]; then
-                  break
-                fi
+                for candidate in "${expected_values[@]}"; do
+                  if [ "$value" = "$candidate" ]; then
+                    return 0
+                  fi
+                done
               fi
 
               if [ $elapsed -ge $deadline ]; then
-                echo "${label} did not report $expected within $((deadline / 60)) minutes" >&2
+                local last_value="$value"
+                if [ -z "$last_value" ]; then
+                  last_value="<unset>"
+                fi
+                echo "${label} did not report an accepted value (${expected_display}) within $((deadline / 60)) minutes (last value: ${last_value})" >&2
                 exit 1
               fi
 
@@ -523,17 +532,26 @@ jobs:
             local interval=5
             local elapsed=0
             local value=""
+            local expected_display="${expected//|/, }"
+
+            IFS='|' read -r -a expected_values <<< "$expected"
 
             while true; do
               if value=$(adb shell settings get "$namespace" "$key" 2>/dev/null); then
                 value=$(printf '%s' "$value" | tr -d '\r' | tr -d '\n')
-                if [ "$value" = "$expected" ]; then
-                  break
-                fi
+                for candidate in "${expected_values[@]}"; do
+                  if [ "$value" = "$candidate" ]; then
+                    return 0
+                  fi
+                done
               fi
 
               if [ $elapsed -ge $deadline ]; then
-                echo "${label} did not reach value ${expected} within $((deadline / 60)) minutes" >&2
+                local last_value="$value"
+                if [ -z "$last_value" ]; then
+                  last_value="<unset>"
+                fi
+                echo "${label} did not reach an accepted value (${expected_display}) within $((deadline / 60)) minutes (last value: ${last_value})" >&2
                 exit 1
               fi
 
@@ -543,11 +561,11 @@ jobs:
           }
 
           echo "Waiting for credential encrypted storage to become available"
-          wait_for_property "sys.user.0.ce_available" "1" "Credential encrypted storage" $((5 * 60))
+          wait_for_property "sys.user.0.ce_available" "1|true" "Credential encrypted storage" $((5 * 60))
 
           echo "Waiting for settings provider readiness"
-          wait_for_settings_value global device_provisioned "1" "device provisioning" $((5 * 60))
-          wait_for_settings_value secure user_setup_complete "1" "user setup" $((5 * 60))
+          wait_for_settings_value global device_provisioned "1|true" "device provisioning" $((5 * 60))
+          wait_for_settings_value secure user_setup_complete "1|true" "user setup" $((5 * 60))
 
           while true; do
             if adb install --no-streaming -r "$apk_path"; then
