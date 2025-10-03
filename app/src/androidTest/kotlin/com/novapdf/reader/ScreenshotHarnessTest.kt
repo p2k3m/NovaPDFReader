@@ -148,8 +148,6 @@ class ScreenshotHarnessTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
 
         val candidateDirectories = buildList {
-            addAll(cacheCandidatesForContext(instrumentation.context))
-
             runCatching { findTestPackageCacheDir(testPackageName) }
                 .onFailure { error ->
                     Log.w(
@@ -160,6 +158,8 @@ class ScreenshotHarnessTest {
                 }
                 .getOrNull()
                 ?.let(::add)
+
+            addAll(cacheCandidatesForContext(instrumentation.context))
         }
 
         val cacheDir = candidateDirectories
