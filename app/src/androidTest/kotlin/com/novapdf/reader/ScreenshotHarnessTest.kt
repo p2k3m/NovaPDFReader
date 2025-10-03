@@ -193,7 +193,7 @@ class ScreenshotHarnessTest {
 
     private fun resolveTestPackageName(): String {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val arguments = instrumentation.arguments
+        val arguments = InstrumentationRegistry.getArguments()
         val targetInstrumentation = arguments.getString("targetInstrumentation")
 
         val parsed = targetInstrumentation
