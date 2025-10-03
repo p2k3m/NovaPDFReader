@@ -21,6 +21,7 @@ import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlin.collections.buildList
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -145,36 +146,44 @@ class ScreenshotHarnessTest {
 
     private fun resolveHandshakeCacheDir(testPackageName: String): File {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val testCacheDir = runCatching { findTestPackageCacheDir(testPackageName) }
-            .onFailure { error ->
-                Log.w(
-                    TAG,
-                    "Falling back to instrumentation context for screenshot handshake cache directory",
-                    error
-                )
-            }
-            .getOrNull()
 
-        val cacheDir = testCacheDir
-            ?: instrumentation.context.credentialProtectedStorageContext().cacheDir
-            ?: instrumentation.context.cacheDir
-            ?: deriveCacheDirFromFilesDir(instrumentation.context.filesDir)
+        val candidateDirectories = buildList {
+            addAll(cacheCandidatesForContext(instrumentation.context))
+
+            runCatching { findTestPackageCacheDir(testPackageName) }
+                .onFailure { error ->
+                    Log.w(
+                        TAG,
+                        "Falling back to instrumentation context for screenshot handshake cache directory",
+                        error
+                    )
+                }
+                .getOrNull()
+                ?.let(::add)
+        }
+
+        val cacheDir = candidateDirectories
+            .firstOrNull(::prepareCacheDirectory)
             ?: throw IllegalStateException(
                 "Instrumentation cache directory unavailable for screenshot handshake"
             )
 
-        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
-            throw IllegalStateException("Unable to create cache directory for screenshot handshake at ${cacheDir.absolutePath}")
-        }
         return cacheDir
     }
 
-    private fun deriveCacheDirFromFilesDir(filesDir: File?): File? {
-        if (filesDir == null) {
-            return null
+    private fun cacheCandidatesForContext(context: Context): List<File> {
+        return listOfNotNull(
+            context.cacheDir,
+            context.codeCacheDir,
+            context.credentialProtectedStorageContext().cacheDir
+        )
+    }
+
+    private fun prepareCacheDirectory(directory: File?): Boolean {
+        if (directory == null) {
+            return false
         }
-        val parent = filesDir.parentFile ?: return null
-        return File(parent, "cache")
+        return directory.exists() || directory.mkdirs()
     }
 
     private fun findTestPackageCacheDir(testPackageName: String): File {
