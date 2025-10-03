@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -161,8 +162,19 @@ class ScreenshotHarnessTest {
 
     private fun findTestPackageCacheDir(testPackageName: String): File {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val packageManager = instrumentation.targetContext.packageManager
-        val applicationInfo = packageManager.getApplicationInfo(testPackageName, 0)
+        val packageManager = instrumentation.context.packageManager
+        val applicationInfo = runCatching { packageManager.getApplicationInfo(testPackageName, 0) }
+            .getOrElse { error ->
+                val reason = if (error is PackageManager.NameNotFoundException || error is SecurityException) {
+                    IllegalStateException(
+                        "Unable to resolve application info for screenshot harness package $testPackageName",
+                        error
+                    )
+                } else {
+                    error
+                }
+                throw reason
+            }
 
         val baseDir = applicationInfo.dataDir
             ?: throw IllegalStateException("Missing data directory for screenshot harness package $testPackageName")
