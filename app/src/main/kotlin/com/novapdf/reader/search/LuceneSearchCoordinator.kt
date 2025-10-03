@@ -7,6 +7,7 @@ import android.graphics.RectF
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
@@ -88,7 +89,11 @@ class LuceneSearchCoordinator(
     private var indexReader: DirectoryReader? = null
     private var currentDocumentId: String? = null
     private var prepareJob: Job? = null
-    private val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val textRecognizer: TextRecognizer? = runCatching {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    }.onFailure { error ->
+        Log.w(TAG, "Text recognition unavailable; OCR fallback disabled", error)
+    }.getOrNull()
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
 
@@ -169,7 +174,7 @@ class LuceneSearchCoordinator(
         prepareJob?.cancel()
         prepareJob = null
         scope.cancel()
-        runCatching { textRecognizer.close() }
+        runCatching { textRecognizer?.close() }
         runCatching { indexReader?.close() }
         runCatching { directory?.close() }
         indexReader = null
@@ -386,8 +391,22 @@ class LuceneSearchCoordinator(
     }
 
     private suspend fun recognizeText(bitmap: Bitmap): OcrPageResult = suspendCancellableCoroutine { continuation ->
+        val recognizer = textRecognizer
+        if (recognizer == null) {
+            continuation.resume(
+                OcrPageResult(
+                    text = "",
+                    lines = emptyList(),
+                    fallbackRegions = detectTextRegions(bitmap),
+                    bitmapWidth = bitmap.width,
+                    bitmapHeight = bitmap.height
+                )
+            )
+            return@suspendCancellableCoroutine
+        }
+
         val image = InputImage.fromBitmap(bitmap, 0)
-        textRecognizer.process(image)
+        recognizer.process(image)
             .addOnSuccessListener { result ->
                 if (!continuation.isActive) return@addOnSuccessListener
                 val text = result.text?.trim().orEmpty()
