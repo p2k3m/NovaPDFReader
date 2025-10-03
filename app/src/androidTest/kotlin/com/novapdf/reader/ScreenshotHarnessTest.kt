@@ -190,7 +190,20 @@ class ScreenshotHarnessTest {
 
     private suspend fun cancelWorkManagerJobs() {
         withContext(Dispatchers.IO) {
-            val manager = WorkManager.getInstance(appContext)
+            val manager = runCatching { WorkManager.getInstance(appContext) }
+                .onFailure { error ->
+                    if (error is IllegalStateException) {
+                        Log.w(
+                            TAG,
+                            "Skipping WorkManager cancellation for screenshot harness; WorkManager is not initialised",
+                            error
+                        )
+                    } else {
+                        Log.w(TAG, "Unable to obtain WorkManager instance for screenshot harness", error)
+                    }
+                }
+                .getOrNull()
+                ?: return@withContext
             try {
                 manager.cancelAllWork().result.get(WORK_MANAGER_CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             } catch (error: TimeoutException) {
