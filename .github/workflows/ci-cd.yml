@@ -486,6 +486,69 @@ jobs:
           echo "Installing $apk_path onto the emulator"
           install_attempt=1
           install_attempts_max=3
+
+          wait_for_property() {
+            local property="$1"
+            local expected="$2"
+            local label="$3"
+            local deadline="$4"
+            local interval=5
+            local elapsed=0
+            local value=""
+
+            while true; do
+              if value=$(adb shell getprop "$property" 2>/dev/null); then
+                value=$(printf '%s' "$value" | tr -d '\r' | tr -d '\n')
+                if [ "$value" = "$expected" ]; then
+                  break
+                fi
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "${label} did not report $expected within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
+          wait_for_settings_value() {
+            local namespace="$1"
+            local key="$2"
+            local expected="$3"
+            local label="$4"
+            local deadline="$5"
+            local interval=5
+            local elapsed=0
+            local value=""
+
+            while true; do
+              if value=$(adb shell settings get "$namespace" "$key" 2>/dev/null); then
+                value=$(printf '%s' "$value" | tr -d '\r' | tr -d '\n')
+                if [ "$value" = "$expected" ]; then
+                  break
+                fi
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "${label} did not reach value ${expected} within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
+          echo "Waiting for credential encrypted storage to become available"
+          wait_for_property "sys.user.0.ce_available" "1" "Credential encrypted storage" $((5 * 60))
+
+          echo "Waiting for settings provider readiness"
+          wait_for_settings_value global device_provisioned "1" "device provisioning" $((5 * 60))
+          wait_for_settings_value secure user_setup_complete "1" "user setup" $((5 * 60))
+
           while true; do
             if adb install --no-streaming -r "$apk_path"; then
               break
