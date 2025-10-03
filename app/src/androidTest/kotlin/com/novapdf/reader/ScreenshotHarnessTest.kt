@@ -71,27 +71,27 @@ class ScreenshotHarnessTest {
     }
 
     private suspend fun waitForScreenshotHandshake() {
+        val readyFlag = File(handshakeCacheDir, SCREENSHOT_READY_FLAG)
+        val doneFlag = File(handshakeCacheDir, SCREENSHOT_DONE_FLAG)
+
+        if (!withContext(Dispatchers.IO) { clearFlag(doneFlag) }) {
+            throw IllegalStateException("Unable to clear stale screenshot completion flag")
+        }
+
+        withContext(Dispatchers.IO) { writeHandshakeFlag(readyFlag, "ready") }
+
+        val start = System.currentTimeMillis()
+        while (!doneFlag.exists()) {
+            if (!activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)) {
+                throw IllegalStateException("ReaderActivity unexpectedly stopped while waiting for screenshots")
+            }
+            if (System.currentTimeMillis() - start > TimeUnit.MINUTES.toMillis(5)) {
+                throw IllegalStateException("Timed out waiting for host screenshot completion signal")
+            }
+            Thread.sleep(250)
+        }
+
         withContext(Dispatchers.IO) {
-            val readyFlag = File(handshakeCacheDir, SCREENSHOT_READY_FLAG)
-            val doneFlag = File(handshakeCacheDir, SCREENSHOT_DONE_FLAG)
-
-            if (doneFlag.exists() && !doneFlag.delete()) {
-                throw IllegalStateException("Unable to clear stale screenshot completion flag")
-            }
-
-            writeHandshakeFlag(readyFlag, "ready")
-
-            val start = System.currentTimeMillis()
-            while (!doneFlag.exists()) {
-                if (!activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)) {
-                    throw IllegalStateException("ReaderActivity unexpectedly stopped while waiting for screenshots")
-                }
-                if (System.currentTimeMillis() - start > TimeUnit.MINUTES.toMillis(5)) {
-                    throw IllegalStateException("Timed out waiting for host screenshot completion signal")
-                }
-                Thread.sleep(250)
-            }
-
             deleteHandshakeFlag(doneFlag)
             deleteHandshakeFlag(readyFlag)
         }
@@ -103,29 +103,16 @@ class ScreenshotHarnessTest {
     }
 
     private fun writeHandshakeFlag(flag: File, contents: String) {
-        try {
-            flag.parentFile?.let { parent ->
-                if (!parent.exists() && !parent.mkdirs()) {
-                    throw IOException("Unable to create directory for handshake flag at ${parent.absolutePath}")
-                }
+        flag.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs()) {
+                throw IOException("Unable to create directory for handshake flag at ${parent.absolutePath}")
             }
-            flag.writeText(contents, Charsets.UTF_8)
-            return
-        } catch (error: Exception) {
-            Log.w(TAG, "Direct write for handshake flag ${flag.name} failed; falling back to shell command", error)
         }
 
-        val escapedDir = handshakeCacheDir.absolutePath.replace("'", "'\\''")
-        val escapedFlag = flag.absolutePath.replace("'", "'\\''")
-        val escapedContents = contents.replace("'", "'\\''")
-
-        val command =
-            "run-as $handshakePackageName sh -c \"mkdir -p '$escapedDir' && printf '%s' '$escapedContents' > '$escapedFlag'\""
-
-        runShellCommand(command)
-
-        if (!flag.exists()) {
-            throw IllegalStateException("Failed to create handshake flag at ${flag.absolutePath}")
+        runCatching {
+            flag.writeText(contents, Charsets.UTF_8)
+        }.onFailure { error ->
+            throw IOException("Failed to create handshake flag at ${flag.absolutePath}", error)
         }
     }
 
@@ -134,16 +121,7 @@ class ScreenshotHarnessTest {
             return
         }
 
-        if (flag.delete()) {
-            return
-        }
-
-        val escapedFlag = flag.absolutePath.replace("'", "'\\''")
-        val command = "run-as $handshakePackageName sh -c \"rm -f '$escapedFlag'\""
-
-        runShellCommand(command)
-
-        if (flag.exists()) {
+        if (!flag.delete()) {
             if (failOnError) {
                 throw IllegalStateException("Unable to delete handshake flag at ${flag.absolutePath}")
             } else {
@@ -152,11 +130,11 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun runShellCommand(command: String) {
-        try {
-            device.executeShellCommand(command)
-        } catch (error: Exception) {
-            throw IllegalStateException("Failed to execute shell command for screenshot harness", error)
+    private fun clearFlag(flag: File): Boolean {
+        return if (!flag.exists()) {
+            true
+        } else {
+            flag.delete()
         }
     }
 
