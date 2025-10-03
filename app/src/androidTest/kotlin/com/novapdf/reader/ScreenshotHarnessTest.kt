@@ -105,11 +105,7 @@ class ScreenshotHarnessTest {
 
     private fun resolveHandshakeCacheDir(): File {
         val instrumentationContext = InstrumentationRegistry.getInstrumentation().context
-        val credentialContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            instrumentationContext.createCredentialProtectedStorageContext()
-        } else {
-            instrumentationContext
-        }
+        val credentialContext = instrumentationContext.credentialProtectedStorageContext()
 
         val contextCache = credentialContext.cacheDir
             ?: throw IllegalStateException("Instrumentation cache directory unavailable for screenshot handshake")
@@ -117,6 +113,22 @@ class ScreenshotHarnessTest {
             throw IllegalStateException("Unable to create instrumentation cache directory for screenshot handshake")
         }
         return contextCache
+    }
+
+    private fun Context.credentialProtectedStorageContext(): Context {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return this
+        }
+
+        val method = runCatching {
+            Context::class.java.getMethod("createCredentialProtectedStorageContext")
+        }.getOrNull()
+
+        val protectedContext = method?.let { createMethod ->
+            runCatching { createMethod.invoke(this) as? Context }.getOrNull()
+        }
+
+        return protectedContext ?: this
     }
 
     private suspend fun cancelWorkManagerJobs() {
