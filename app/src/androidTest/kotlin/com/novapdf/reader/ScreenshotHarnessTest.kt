@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.Lifecycle
@@ -103,7 +104,14 @@ class ScreenshotHarnessTest {
     }
 
     private fun resolveHandshakeCacheDir(): File {
-        val contextCache = InstrumentationRegistry.getInstrumentation().context.cacheDir
+        val instrumentationContext = InstrumentationRegistry.getInstrumentation().context
+        val credentialContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            instrumentationContext.createCredentialProtectedStorageContext()
+        } else {
+            instrumentationContext
+        }
+
+        val contextCache = credentialContext.cacheDir
             ?: throw IllegalStateException("Instrumentation cache directory unavailable for screenshot handshake")
         if (!contextCache.exists() && !contextCache.mkdirs()) {
             throw IllegalStateException("Unable to create instrumentation cache directory for screenshot handshake")
