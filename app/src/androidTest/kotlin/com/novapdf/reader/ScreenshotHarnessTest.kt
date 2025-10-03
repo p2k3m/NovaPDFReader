@@ -48,8 +48,8 @@ class ScreenshotHarnessTest {
 
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
-        handshakeCacheDir = resolveHandshakeCacheDir()
-        handshakePackageName = InstrumentationRegistry.getInstrumentation().context.packageName
+        handshakePackageName = resolveTestPackageName()
+        handshakeCacheDir = resolveHandshakeCacheDir(handshakePackageName)
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
         cancelWorkManagerJobs()
     }
@@ -160,16 +160,50 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun resolveHandshakeCacheDir(): File {
-        val instrumentationContext = InstrumentationRegistry.getInstrumentation().context
-        val credentialContext = instrumentationContext.credentialProtectedStorageContext()
+    private fun resolveHandshakeCacheDir(testPackageName: String): File {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val testCacheDir = runCatching { findTestPackageCacheDir(testPackageName) }
+            .onFailure { error ->
+                Log.w(
+                    TAG,
+                    "Falling back to instrumentation context for screenshot handshake cache directory",
+                    error
+                )
+            }
+            .getOrNull()
 
-        val contextCache = credentialContext.cacheDir
+        val cacheDir = testCacheDir ?: instrumentation.context.credentialProtectedStorageContext().cacheDir
             ?: throw IllegalStateException("Instrumentation cache directory unavailable for screenshot handshake")
-        if (!contextCache.exists() && !contextCache.mkdirs()) {
-            throw IllegalStateException("Unable to create instrumentation cache directory for screenshot handshake")
+
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw IllegalStateException("Unable to create cache directory for screenshot handshake at ${cacheDir.absolutePath}")
         }
-        return contextCache
+        return cacheDir
+    }
+
+    private fun findTestPackageCacheDir(testPackageName: String): File {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val packageManager = instrumentation.targetContext.packageManager
+        val applicationInfo = packageManager.getApplicationInfo(testPackageName, 0)
+
+        val baseDir = applicationInfo.dataDir
+            ?: throw IllegalStateException("Missing data directory for screenshot harness package $testPackageName")
+        return File(baseDir, "cache")
+    }
+
+    private fun resolveTestPackageName(): String {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = instrumentation.arguments
+        val targetInstrumentation = arguments.getString("targetInstrumentation")
+
+        val parsed = targetInstrumentation
+            ?.substringBefore('/')
+            ?.takeIf { it.isNotBlank() }
+        if (!parsed.isNullOrEmpty()) {
+            return parsed
+        }
+
+        return instrumentation.context.packageName
     }
 
     private fun Context.credentialProtectedStorageContext(): Context {
