@@ -26,7 +26,10 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             f"Detected fatal crash in {package_name} during instrumentation tests",
         ),
         (
-            re.compile(r"E AndroidRuntime: FATAL EXCEPTION"),
+            re.compile(
+                rf"E AndroidRuntime: FATAL EXCEPTION[\s\S]+?Process:\s+{escaped}",
+                re.MULTILINE,
+            ),
             "AndroidRuntime reported a fatal exception while instrumentation tests were running",
         ),
         (
