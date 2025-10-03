@@ -587,10 +587,17 @@ jobs:
 
           adb wait-for-device
 
-          app_data_dir=$(adb shell run-as "$PACKAGE_NAME" sh -c 'pwd' | tr -d '\r' | tr -d '\n')
+          if ! app_data_dir_output=$(adb shell run-as "$PACKAGE_NAME" sh -c 'pwd' 2>&1); then
+            echo "::warning::Unable to resolve application data directory via run-as: ${app_data_dir_output}" >&2
+            echo "::warning::Skipping PDF fixture staging; instrumentation will generate fixtures on-device" >&2
+            exit 0
+          fi
+
+          app_data_dir=$(printf '%s' "$app_data_dir_output" | tr -d '\r' | tr -d '\n')
           if [ -z "$app_data_dir" ]; then
-            echo "::error::Unable to determine application data directory via run-as"
-            exit 1
+            echo "::warning::Application data directory is empty; skipping PDF fixture staging" >&2
+            echo "::warning::Instrumentation will generate fixtures on-device" >&2
+            exit 0
           fi
 
           echo "Application data directory resolved to $app_data_dir"
