@@ -159,16 +159,24 @@ internal class ThousandPagePdfWriter(
 
         private fun buildPageContent(pageNumber: Int): ByteArray {
             val content = buildString {
-                append("BT /F1 24 Tf 72 720 Td (Adaptive Flow benchmark page $pageNumber) Tj ET\n")
-                append("BT /F1 14 Tf 72 680 Td (Total pages: $pageCount) Tj ET\n")
-                append("BT /F1 14 Tf 72 650 Td (Generated for screenshot harness) Tj ET\n")
-                append("BT /F1 12 Tf 72 620 Td (Page index: ${pageNumber - 1}) Tj ET\n")
+                appendLine("BT /F1 24 Tf 72 720 Td (Adaptive Flow benchmark page $pageNumber) Tj ET")
+                appendLine("BT /F1 14 Tf 72 680 Td (Total pages: $pageCount) Tj ET")
+                appendLine("BT /F1 14 Tf 72 650 Td (Generated for screenshot harness) Tj ET")
+                append("BT /F1 12 Tf 72 620 Td (Page index: ${pageNumber - 1}) Tj ET")
             }
-            return content.toByteArray(StandardCharsets.US_ASCII)
+            return normaliseLineEndings(content).toByteArray(StandardCharsets.US_ASCII)
         }
 
         private fun writeAscii(value: String) {
-            output.write(value.toByteArray(StandardCharsets.US_ASCII))
+            output.write(normaliseLineEndings(value).toByteArray(StandardCharsets.US_ASCII))
+        }
+
+        private fun normaliseLineEndings(input: String): String {
+            if (!input.contains('\n') && !input.contains('\r')) {
+                return input
+            }
+            val withoutCarriageReturns = input.replace("\r\n", "\n").replace('\r', '\n')
+            return withoutCarriageReturns.replace("\n", "\r\n")
         }
     }
 }
