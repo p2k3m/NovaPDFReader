@@ -168,6 +168,11 @@ android {
         execution = "ANDROIDX_TEST_ORCHESTRATOR"
     }
 
+    sourceSets {
+        getByName("test").java.srcDir("src/sharedTest/kotlin")
+        getByName("androidTest").java.srcDir("src/sharedTest/kotlin")
+    }
+
     adbOptions {
         installOptions.add("-t")
 
@@ -594,6 +599,7 @@ dependencies {
     testImplementation("androidx.test:core:1.5.0")
     testImplementation("androidx.room:room-testing:2.6.1")
     testImplementation("androidx.work:work-testing:2.9.0")
+    testImplementation("org.apache.pdfbox:pdfbox:2.0.31")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
