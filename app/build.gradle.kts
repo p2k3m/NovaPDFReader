@@ -41,6 +41,9 @@ fun Project.resolveReleaseKeystore(defaultPath: String = "signing/release.keysto
     return candidate
 }
 
+fun String.asJavaStringLiteral(): String =
+    replace("\\", "\\\\").replace("\"", "\\\"")
+
 inline fun <reified T : Task> TaskContainer.namedOrNull(name: String): TaskProvider<T>? =
     try {
         named(name, T::class.java)
@@ -63,6 +66,11 @@ val resolvedApplicationId = (findProperty("NOVAPDF_APP_ID") as? String)
     ?: "com.novapdf.reader"
 
 val baselineProfileProject = rootProject.findProject(":baselineprofile")
+
+val thousandPageFixtureUrlProvider = providers
+    .environmentVariable("THOUSAND_PAGE_FIXTURE_URL")
+    .orElse(providers.gradleProperty("thousandPageFixtureUrl"))
+    .orElse("")
 
 android {
     namespace = "com.novapdf.reader"
@@ -90,6 +98,12 @@ android {
         buildConfigField("int", "HIGH_END_MAX_PPM", "210")
         buildConfigField("float", "ADAPTIVE_FLOW_JANK_FRAME_THRESHOLD_MS", "16.0f")
         buildConfigField("long", "ADAPTIVE_FLOW_PRELOAD_COOLDOWN_MS", "750L")
+        val thousandPageFixtureUrl = thousandPageFixtureUrlProvider.getOrElse("")
+        buildConfigField(
+            "String",
+            "THOUSAND_PAGE_FIXTURE_URL",
+            "\"${thousandPageFixtureUrl.asJavaStringLiteral()}\""
+        )
 
     }
 
