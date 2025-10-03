@@ -83,10 +83,10 @@ internal class ThousandPagePdfWriter(
             val startXref = output.bytesWritten
             writeAscii("xref\r\n")
             writeAscii("0 ${totalObjects + 1}\r\n")
-            writeAscii("0000000000 65535 f \r\n")
+            writeAscii("0000000000 65535 f\r\n")
             for (index in 1..totalObjects) {
                 val offset = objectOffsets[index]
-                writeAscii(String.format(Locale.US, "%010d 00000 n \r\n", offset))
+                writeAscii(String.format(Locale.US, "%010d 00000 n\r\n", offset))
             }
             writeAscii("trailer\r\n")
             writeAscii("<< /Size ${totalObjects + 1} /Root 1 0 R >>\r\n")
