@@ -351,22 +351,26 @@ jobs:
             final_disk_mb=$requested_disk_mb
             available_mb=$(df -Pm "$avd_root" | awk 'NR==2 {print $4}')
             reserve_mb=2048
+            # The emulator inflates the userdata image from a sparse template and
+            # requires extra scratch space beyond the requested partition size.
+            # Allocate additional headroom to avoid "not enough space" failures.
+            partition_overhead_mb=2500
 
             if [[ "$available_mb" =~ ^[0-9]+$ ]]; then
-              if [ "$available_mb" -le "$reserve_mb" ]; then
+              if [ "$available_mb" -le $((reserve_mb + partition_overhead_mb)) ]; then
                 echo "Only ${available_mb} MB free on $avd_root; cannot allocate userdata partition." >&2
                 exit 1
               fi
 
-              safe_max=$((available_mb - reserve_mb))
+              safe_max=$((available_mb - reserve_mb - partition_overhead_mb))
               if [ "$safe_max" -le 0 ]; then
-                echo "Insufficient disk space after reserving ${reserve_mb} MB (available: ${available_mb} MB)." >&2
+                echo "Insufficient disk space after reserving ${reserve_mb} MB and accounting for emulator overhead of ${partition_overhead_mb} MB (available: ${available_mb} MB)." >&2
                 exit 1
               fi
 
               if [ "$safe_max" -lt "$final_disk_mb" ]; then
                 final_disk_mb=$safe_max
-                echo "Requested data partition size ${requested_disk_mb} MB exceeds available capacity (${available_mb} MB available, reserving ${reserve_mb} MB). Using ${final_disk_mb} MB instead."
+                echo "Requested data partition size ${requested_disk_mb} MB exceeds available capacity (${available_mb} MB available, reserving ${reserve_mb} MB and emulator overhead ${partition_overhead_mb} MB). Using ${final_disk_mb} MB instead."
               fi
             fi
 
