@@ -1,6 +1,9 @@
 package com.novapdf.reader
 
 import android.content.Context
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
 import com.novapdf.reader.BuildConfig
@@ -101,12 +104,30 @@ internal object TestDocumentFixtures {
                 return false
             }
 
+            if (!validateThousandPagePdf(destination)) {
+                destination.delete()
+                return false
+            }
+
             true
         } catch (_: IOException) {
             destination.delete()
             false
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun validateThousandPagePdf(candidate: File): Boolean {
+        return try {
+            ParcelFileDescriptor.open(candidate, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                PdfRenderer(descriptor).use { renderer ->
+                    renderer.pageCount >= THOUSAND_PAGE_COUNT
+                }
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Validation of downloaded thousand-page PDF failed", error)
+            false
         }
     }
 
@@ -131,4 +152,5 @@ internal object TestDocumentFixtures {
             throw IOException("Failed to generate thousand-page PDF; destination is empty")
         }
     }
+    private const val TAG = "TestDocumentFixtures"
 }
