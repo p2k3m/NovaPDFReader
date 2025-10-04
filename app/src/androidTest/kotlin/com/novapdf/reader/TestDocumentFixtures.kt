@@ -1,8 +1,6 @@
 package com.novapdf.reader
 
 import android.content.Context
-import android.graphics.pdf.PdfRenderer
-import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Base64InputStream
 import android.util.Log
@@ -13,6 +11,7 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -155,11 +154,26 @@ internal object TestDocumentFixtures {
     }
 
     private fun validateThousandPagePdf(candidate: File): Boolean {
+        if (!candidate.exists() || candidate.length() <= 0L) {
+            return false
+        }
+
         return try {
-            ParcelFileDescriptor.open(candidate, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                PdfRenderer(descriptor).use { renderer ->
-                    renderer.pageCount >= THOUSAND_PAGE_COUNT
+            candidate.inputStream().buffered().use { input ->
+                val bytes = input.readBytes()
+                if (bytes.isEmpty()) {
+                    return@use false
                 }
+
+                val content = String(bytes, StandardCharsets.ISO_8859_1)
+                val headerValid = content.startsWith("%PDF-1.")
+                val footerValid = content.contains("%%EOF")
+                val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
+                val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
+
+                headerValid && footerValid &&
+                    content.contains(totalPagesMarker) &&
+                    content.contains(lastPageMarker)
             }
         } catch (error: Throwable) {
             Log.w(TAG, "Validation of downloaded thousand-page PDF failed", error)
