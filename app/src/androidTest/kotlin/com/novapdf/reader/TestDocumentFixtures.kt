@@ -34,13 +34,34 @@ internal object TestDocumentFixtures {
 
             val existing = candidateDirectories
                 .map { File(it, THOUSAND_PAGE_CACHE) }
-                .firstOrNull { it.exists() && it.length() > 0L }
+                .firstOrNull { candidate ->
+                    if (!candidate.exists() || candidate.length() <= 0L) {
+                        return@firstOrNull false
+                    }
+
+                    val valid = validateThousandPagePdf(candidate)
+                    if (valid) {
+                        Log.i(
+                            TAG,
+                            "Reusing cached thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
+                        )
+                        true
+                    } else {
+                        Log.w(
+                            TAG,
+                            "Cached thousand-page PDF at ${candidate.absolutePath} failed validation; deleting corrupted artifact"
+                        )
+                        if (!candidate.delete()) {
+                            Log.w(
+                                TAG,
+                                "Unable to delete corrupted thousand-page PDF at ${candidate.absolutePath}; future runs will attempt regeneration"
+                            )
+                        }
+                        false
+                    }
+                }
 
             if (existing != null) {
-                Log.i(
-                    TAG,
-                    "Reusing cached thousand-page PDF at ${existing.absolutePath} (size=${existing.length()} bytes)"
-                )
                 return@withContext existing.toUri()
             }
 
@@ -51,7 +72,25 @@ internal object TestDocumentFixtures {
             destination.parentFile?.mkdirs()
             Log.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
             createThousandPagePdf(destination)
-            Log.i(TAG, "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)")
+
+            if (!validateThousandPagePdf(destination)) {
+                Log.w(
+                    TAG,
+                    "Validation failed after generating thousand-page PDF at ${destination.absolutePath}; removing artifact"
+                )
+                if (!destination.delete()) {
+                    Log.w(
+                        TAG,
+                        "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after failed validation"
+                    )
+                }
+                throw IOException("Generated thousand-page PDF failed validation")
+            }
+
+            Log.i(
+                TAG,
+                "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)"
+            )
             destination.toUri()
         }
 
