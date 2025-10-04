@@ -12,7 +12,9 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import androidx.work.Configuration
 import androidx.work.WorkManager
+import androidx.work.testing.WorkManagerTestInitHelper
 import java.io.File
 import java.io.IOException
 import java.util.Locale
@@ -52,6 +54,7 @@ class ScreenshotHarnessTest {
         appContext = ApplicationProvider.getApplicationContext()
         handshakePackageName = resolveTestPackageName()
         handshakeCacheDir = resolveHandshakeCacheDir(handshakePackageName)
+        ensureWorkManagerInitialized(appContext)
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
         cancelWorkManagerJobs()
     }
@@ -261,6 +264,16 @@ class ScreenshotHarnessTest {
             } catch (error: Exception) {
                 Log.w(TAG, "Unexpected failure cancelling WorkManager jobs for screenshot harness", error)
             }
+        }
+    }
+
+    private fun ensureWorkManagerInitialized(context: Context) {
+        val appContext = context.applicationContext
+        runCatching { WorkManager.getInstance(appContext) }.onFailure {
+            val configuration = Configuration.Builder()
+                .setMinimumLoggingLevel(Log.DEBUG)
+                .build()
+            WorkManagerTestInitHelper.initializeTestWorkManager(appContext, configuration)
         }
     }
 
