@@ -47,13 +47,14 @@ class ScreenshotHarnessTest {
 
     @Before
     fun setUp() = runBlocking {
-        harnessEnabled = shouldRunHarness()
-        assumeTrue("Screenshot harness disabled", harnessEnabled)
+        val harnessRequested = shouldRunHarness()
+        assumeTrue("Screenshot harness disabled", harnessRequested)
 
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
         handshakePackageName = resolveTestPackageName()
         handshakeCacheDir = resolveHandshakeCacheDir(handshakePackageName)
+        harnessEnabled = true
         ensureWorkManagerInitialized(appContext)
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
         cancelWorkManagerJobs()
@@ -61,7 +62,9 @@ class ScreenshotHarnessTest {
 
     @After
     fun tearDown() = runBlocking {
-        if (!harnessEnabled) return@runBlocking
+        if (!harnessEnabled || !::handshakeCacheDir.isInitialized) {
+            return@runBlocking
+        }
         cancelWorkManagerJobs()
         withContext(Dispatchers.IO) { cleanupFlags() }
     }
@@ -107,6 +110,9 @@ class ScreenshotHarnessTest {
     }
 
     private fun cleanupFlags() {
+        if (!::handshakeCacheDir.isInitialized) {
+            return
+        }
         deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_READY_FLAG), failOnError = false)
         deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_DONE_FLAG), failOnError = false)
     }
@@ -242,6 +248,9 @@ class ScreenshotHarnessTest {
     }
 
     private suspend fun cancelWorkManagerJobs() {
+        if (!::appContext.isInitialized) {
+            return
+        }
         withContext(Dispatchers.IO) {
             val manager = runCatching { WorkManager.getInstance(appContext) }
                 .onFailure { error ->
