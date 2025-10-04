@@ -26,12 +26,21 @@ internal object TestDocumentFixtures {
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
             val candidateDirectories = writableStorageCandidates(context)
+            Log.i(
+                TAG,
+                "Resolved ${candidateDirectories.size} candidate directories for thousand-page PDF: " +
+                    candidateDirectories.joinToString { it.absolutePath }
+            )
 
             val existing = candidateDirectories
                 .map { File(it, THOUSAND_PAGE_CACHE) }
                 .firstOrNull { it.exists() && it.length() > 0L }
 
             if (existing != null) {
+                Log.i(
+                    TAG,
+                    "Reusing cached thousand-page PDF at ${existing.absolutePath} (size=${existing.length()} bytes)"
+                )
                 return@withContext existing.toUri()
             }
 
@@ -40,7 +49,9 @@ internal object TestDocumentFixtures {
 
             val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
             destination.parentFile?.mkdirs()
+            Log.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
             createThousandPagePdf(destination)
+            Log.i(TAG, "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)")
             destination.toUri()
         }
 
@@ -63,6 +74,7 @@ internal object TestDocumentFixtures {
                 false
             }
             if (!preparedFromAsset && !preparedFromNetwork) {
+                Log.i(TAG, "Generating thousand-page PDF via writer fallback")
                 writeThousandPagePdf(tempFile)
             }
         } catch (error: IOException) {
@@ -84,7 +96,10 @@ internal object TestDocumentFixtures {
         val url = InstrumentationRegistry.getArguments().getString(THOUSAND_PAGE_URL_ARG)
             ?.takeIf { it.isNotBlank() }
             ?: DEFAULT_THOUSAND_PAGE_URL
-            ?: return false
+            ?: run {
+                Log.i(TAG, "No thousand-page PDF download URL supplied; skipping network fetch")
+                return false
+            }
 
         val connection = URL(url).openConnection() as? HttpURLConnection ?: return false
 
@@ -99,6 +114,7 @@ internal object TestDocumentFixtures {
                 return false
             }
 
+            Log.i(TAG, "Downloading thousand-page PDF from $url")
             connection.inputStream.use { input ->
                 destination.outputStream().buffered().use { output ->
                     input.copyTo(output)
@@ -108,17 +124,21 @@ internal object TestDocumentFixtures {
 
             if (destination.length() <= 0L) {
                 destination.delete()
+                Log.w(TAG, "Downloaded thousand-page PDF was empty; deleting corrupted artifact")
                 return false
             }
 
             if (!validateThousandPagePdf(destination)) {
                 destination.delete()
+                Log.w(TAG, "Validation failed after downloading thousand-page PDF; removing artifact")
                 return false
             }
 
+            Log.i(TAG, "Successfully downloaded thousand-page PDF to ${destination.absolutePath}")
             true
         } catch (_: IOException) {
             destination.delete()
+            Log.w(TAG, "Failed to download thousand-page PDF from $url; falling back to bundled assets")
             false
         } finally {
             connection.disconnect()
@@ -128,6 +148,7 @@ internal object TestDocumentFixtures {
     private fun copyBundledThousandPagePdf(destination: File): Boolean {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         return try {
+            Log.i(TAG, "Attempting to hydrate thousand-page PDF from bundled asset")
             instrumentation.context.assets.open(THOUSAND_PAGE_ASSET_BASE64).use { assetStream ->
                 Base64InputStream(assetStream, Base64.DEFAULT).use { decodedStream ->
                     destination.outputStream().buffered().use { output ->
@@ -138,8 +159,13 @@ internal object TestDocumentFixtures {
             }
             if (!validateThousandPagePdf(destination)) {
                 destination.delete()
+                Log.w(TAG, "Bundled thousand-page PDF asset failed validation")
                 false
             } else {
+                Log.i(
+                    TAG,
+                    "Successfully restored thousand-page PDF from bundled asset (size=${destination.length()} bytes)"
+                )
                 true
             }
         } catch (error: IOException) {
@@ -155,26 +181,77 @@ internal object TestDocumentFixtures {
 
     private fun validateThousandPagePdf(candidate: File): Boolean {
         if (!candidate.exists() || candidate.length() <= 0L) {
+            Log.w(TAG, "Validation failed for thousand-page PDF; file missing or empty at ${candidate.absolutePath}")
             return false
         }
 
+        val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
+        val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
+        val windowSize = maxOf(totalPagesMarker.length, lastPageMarker.length, 32)
+        val buffer = ByteArray(16 * 1024)
+
         return try {
+            var footerValid = false
+            var totalPagesFound = false
+            var lastPageFound = false
+
             candidate.inputStream().buffered().use { input ->
-                val bytes = input.readBytes()
-                if (bytes.isEmpty()) {
-                    return@use false
+                val headerBytes = ByteArray(8)
+                val headerRead = input.read(headerBytes)
+                if (headerRead < 7) {
+                    Log.w(TAG, "Validation failed; unable to read PDF header from ${candidate.absolutePath}")
+                    return false
+                }
+                val headerText = String(headerBytes, 0, headerRead, StandardCharsets.ISO_8859_1)
+                if (!headerText.startsWith("%PDF-1.")) {
+                    Log.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
+                    return false
                 }
 
-                val content = String(bytes, StandardCharsets.ISO_8859_1)
-                val headerValid = content.startsWith("%PDF-1.")
-                val footerValid = content.contains("%%EOF")
-                val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
-                val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
+                var carry = headerText
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) {
+                        break
+                    }
 
-                headerValid && footerValid &&
-                    content.contains(totalPagesMarker) &&
-                    content.contains(lastPageMarker)
+                    val chunk = carry + String(buffer, 0, read, StandardCharsets.ISO_8859_1)
+                    if (!footerValid && chunk.contains("%%EOF")) {
+                        footerValid = true
+                    }
+                    if (!totalPagesFound && chunk.contains(totalPagesMarker)) {
+                        totalPagesFound = true
+                    }
+                    if (!lastPageFound && chunk.contains(lastPageMarker)) {
+                        lastPageFound = true
+                    }
+
+                    if (footerValid && totalPagesFound && lastPageFound) {
+                        break
+                    }
+
+                    carry = if (chunk.length > windowSize) {
+                        chunk.takeLast(windowSize)
+                    } else {
+                        chunk
+                    }
+                }
             }
+
+            val valid = footerValid && totalPagesFound && lastPageFound
+            if (!valid) {
+                Log.w(
+                    TAG,
+                    "Validation failed for thousand-page PDF (footer=$footerValid, " +
+                        "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
+                )
+            } else {
+                Log.i(
+                    TAG,
+                    "Validated thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
+                )
+            }
+            valid
         } catch (error: Throwable) {
             Log.w(TAG, "Validation of downloaded thousand-page PDF failed", error)
             false
