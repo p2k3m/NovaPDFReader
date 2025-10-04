@@ -64,7 +64,12 @@ internal class ThousandPagePdfWriter(
         private val pageWidth: Int,
         private val pageHeight: Int,
     ) {
-        private val fontObjectNumber = 3 + pageCount * 2
+        // Pdfium struggles with extremely large /Kids arrays, so organise pages into a balanced tree
+        // to keep each node's child list small and deterministic for stress testing.
+        private val groupCount = ((pageCount + MAX_PAGES_PER_GROUP - 1) / MAX_PAGES_PER_GROUP).coerceAtLeast(1)
+        private val pageObjectsStart = PAGE_GROUPS_START_OBJECT_NUMBER + groupCount
+        private val contentObjectsStart = pageObjectsStart + pageCount
+        private val fontObjectNumber = contentObjectsStart + pageCount
         private val totalObjects = fontObjectNumber
         private val objectOffsets = LongArray(totalObjects + 1)
 
@@ -75,7 +80,8 @@ internal class ThousandPagePdfWriter(
             writeAscii("%\u00E2\u00E3\u00CF\u00D3\n")
 
             writeCatalog()
-            writePages()
+            writePageRoot()
+            writePageGroups()
             writePageObjects()
             writeContentStreams()
             writeFontObject()
@@ -96,30 +102,49 @@ internal class ThousandPagePdfWriter(
         }
 
         private fun writeCatalog() {
-            startObject(1)
-            writeAscii("<< /Type /Catalog /Pages 2 0 R >>\n")
+            startObject(CATALOG_OBJECT_NUMBER)
+            writeAscii("<< /Type /Catalog /Pages ${ROOT_PAGES_OBJECT_NUMBER} 0 R >>\n")
             endObject()
         }
 
-        private fun writePages() {
-            startObject(2)
+        private fun writePageRoot() {
+            startObject(ROOT_PAGES_OBJECT_NUMBER)
             writeAscii("<< /Type /Pages /Count $pageCount /Kids [\n")
-            for (pageIndex in 0 until pageCount) {
-                val pageObjectNumber = pageObjectNumber(pageIndex)
-                writeAscii("$pageObjectNumber 0 R\n")
+            for (groupIndex in 0 until groupCount) {
+                val groupObjectNumber = pageGroupObjectNumber(groupIndex)
+                writeAscii("$groupObjectNumber 0 R\n")
             }
             writeAscii("] >>\n")
             endObject()
+        }
+
+        private fun writePageGroups() {
+            for (groupIndex in 0 until groupCount) {
+                val groupObjectNumber = pageGroupObjectNumber(groupIndex)
+                val startPage = groupIndex * MAX_PAGES_PER_GROUP
+                val endPage = minOf(pageCount, startPage + MAX_PAGES_PER_GROUP)
+                startObject(groupObjectNumber)
+                writeAscii(
+                    "<< /Type /Pages /Parent ${ROOT_PAGES_OBJECT_NUMBER} 0 R /Count ${endPage - startPage} /Kids [\n"
+                )
+                for (pageIndex in startPage until endPage) {
+                    val pageObjectNumber = pageObjectNumber(pageIndex)
+                    writeAscii("$pageObjectNumber 0 R\n")
+                }
+                writeAscii("] >>\n")
+                endObject()
+            }
         }
 
         private fun writePageObjects() {
             for (pageIndex in 0 until pageCount) {
                 val pageObjectNumber = pageObjectNumber(pageIndex)
                 val contentObjectNumber = contentObjectNumber(pageIndex)
+                val groupObjectNumber = pageGroupObjectNumber(pageIndex / MAX_PAGES_PER_GROUP)
                 startObject(pageObjectNumber)
                 writeAscii(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 $pageWidth $pageHeight] " +
-                        "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> >> >>\n"
+                    "<< /Type /Page /Parent $groupObjectNumber 0 R /MediaBox [0 0 $pageWidth $pageHeight] " +
+                        "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> /ProcSet [/PDF /Text] >> >>\n"
                 )
                 endObject()
             }
@@ -153,9 +178,11 @@ internal class ThousandPagePdfWriter(
             writeAscii("endobj\n")
         }
 
-        private fun pageObjectNumber(index: Int): Int = 3 + index
+        private fun pageGroupObjectNumber(index: Int): Int = PAGE_GROUPS_START_OBJECT_NUMBER + index
 
-        private fun contentObjectNumber(index: Int): Int = 3 + pageCount + index
+        private fun pageObjectNumber(index: Int): Int = pageObjectsStart + index
+
+        private fun contentObjectNumber(index: Int): Int = contentObjectsStart + index
 
         private fun buildPageContent(pageNumber: Int): ByteArray {
             val content = buildString {
@@ -177,6 +204,13 @@ internal class ThousandPagePdfWriter(
             }
             val withoutCarriageReturns = input.replace("\r\n", "\n").replace('\r', '\n')
             return withoutCarriageReturns.replace("\n", "\r\n")
+        }
+
+        companion object {
+            private const val CATALOG_OBJECT_NUMBER = 1
+            private const val ROOT_PAGES_OBJECT_NUMBER = 2
+            private const val PAGE_GROUPS_START_OBJECT_NUMBER = 3
+            private const val MAX_PAGES_PER_GROUP = 64
         }
     }
 }
