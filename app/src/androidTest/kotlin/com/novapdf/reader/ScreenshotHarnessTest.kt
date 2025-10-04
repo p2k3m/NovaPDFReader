@@ -48,15 +48,22 @@ class ScreenshotHarnessTest {
     @Before
     fun setUp() = runBlocking {
         val harnessRequested = shouldRunHarness()
+        Log.i(TAG, "Screenshot harness requested=$harnessRequested")
         assumeTrue("Screenshot harness disabled", harnessRequested)
 
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
         handshakePackageName = resolveTestPackageName()
         handshakeCacheDir = resolveHandshakeCacheDir(handshakePackageName)
+        Log.i(
+            TAG,
+            "Using handshake cache directory ${handshakeCacheDir.absolutePath} for package $handshakePackageName"
+        )
         harnessEnabled = true
         ensureWorkManagerInitialized(appContext)
+        Log.i(TAG, "Installing thousand-page stress document for screenshot harness")
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
+        Log.i(TAG, "Thousand-page document installed at ${documentUri}")
         cancelWorkManagerJobs()
     }
 
@@ -72,6 +79,7 @@ class ScreenshotHarnessTest {
     @Test
     fun openThousandPageDocumentForScreenshots() = runBlocking {
         val harnessActive = shouldRunHarness()
+        Log.i(TAG, "Screenshot harness active=$harnessActive")
         assumeTrue("Screenshot harness disabled", harnessActive)
 
         openDocumentInViewer()
@@ -90,15 +98,23 @@ class ScreenshotHarnessTest {
             )
         }
 
+        Log.i(TAG, "Writing screenshot ready flag to ${readyFlag.absolutePath}")
         withContext(Dispatchers.IO) { writeHandshakeFlag(readyFlag, "ready") }
+        Log.i(TAG, "Waiting for screenshot harness completion signal at ${doneFlag.absolutePath}")
 
         val start = System.currentTimeMillis()
+        var lastLog = start
         while (!doneFlag.exists()) {
             if (!activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)) {
                 throw IllegalStateException("ReaderActivity unexpectedly stopped while waiting for screenshots")
             }
             if (System.currentTimeMillis() - start > TimeUnit.MINUTES.toMillis(5)) {
                 throw IllegalStateException("Timed out waiting for host screenshot completion signal")
+            }
+            val now = System.currentTimeMillis()
+            if (now - lastLog >= TimeUnit.SECONDS.toMillis(15)) {
+                Log.i(TAG, "Screenshot harness still waiting; ready flag present=${readyFlag.exists()} done flag present=${doneFlag.exists()}")
+                lastLog = now
             }
             Thread.sleep(250)
         }
@@ -107,12 +123,14 @@ class ScreenshotHarnessTest {
             deleteHandshakeFlag(doneFlag)
             deleteHandshakeFlag(readyFlag)
         }
+        Log.i(TAG, "Screenshot harness handshake completed; flags cleared")
     }
 
     private fun cleanupFlags() {
         if (!::handshakeCacheDir.isInitialized) {
             return
         }
+        Log.i(TAG, "Cleaning up screenshot harness flags in ${handshakeCacheDir.absolutePath}")
         deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_READY_FLAG), failOnError = false)
         deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_DONE_FLAG), failOnError = false)
     }
@@ -176,6 +194,8 @@ class ScreenshotHarnessTest {
             ?: throw IllegalStateException(
                 "Instrumentation cache directory unavailable for screenshot handshake"
             )
+
+        Log.i(TAG, "Resolved screenshot handshake cache directory ${cacheDir.absolutePath}")
 
         return cacheDir
     }
@@ -267,7 +287,9 @@ class ScreenshotHarnessTest {
                 .getOrNull()
                 ?: return@withContext
             try {
+                Log.i(TAG, "Cancelling outstanding WorkManager jobs before screenshots")
                 manager.cancelAllWork().result.get(WORK_MANAGER_CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                Log.i(TAG, "WorkManager jobs cancelled for screenshot harness")
             } catch (error: TimeoutException) {
                 Log.w(TAG, "Timed out waiting for WorkManager cancellation during screenshot harness setup", error)
             } catch (error: Exception) {
@@ -282,6 +304,7 @@ class ScreenshotHarnessTest {
             val configuration = Configuration.Builder()
                 .setMinimumLoggingLevel(Log.DEBUG)
                 .build()
+            Log.i(TAG, "Initialising test WorkManager for screenshot harness")
             WorkManagerTestInitHelper.initializeTestWorkManager(appContext, configuration)
         }
     }
@@ -292,16 +315,20 @@ class ScreenshotHarnessTest {
     }
 
     private fun openDocumentInViewer() {
+        Log.i(TAG, "Opening thousand-page document in viewer: $documentUri")
         activityRule.scenario.onActivity { activity ->
             activity.openDocumentForTest(documentUri)
         }
 
         val deadline = SystemClock.elapsedRealtime() + DOCUMENT_OPEN_TIMEOUT
+        var lastLog = SystemClock.elapsedRealtime()
         while (SystemClock.elapsedRealtime() < deadline) {
             var documentReady = false
             var errorMessage: String? = null
+            var snapshot: PdfViewerUiState? = null
             activityRule.scenario.onActivity { activity ->
                 val state = activity.currentDocumentStateForTest()
+                snapshot = state
                 when (val status = state.documentStatus) {
                     is DocumentStatus.Error -> errorMessage = status.message
                     is DocumentStatus.Loading -> documentReady = false
@@ -313,10 +340,21 @@ class ScreenshotHarnessTest {
                 throw IllegalStateException("Failed to load document for screenshots: $message")
             }
             if (documentReady) {
+                Log.i(TAG, "Thousand-page document finished loading with pageCount=${snapshot?.pageCount}")
                 device.waitForIdle()
                 return
             }
 
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastLog >= 5_000L) {
+                val state = snapshot
+                Log.i(
+                    TAG,
+                    "Waiting for document to load; status=${state?.documentStatus?.javaClass?.simpleName} " +
+                        "pageCount=${state?.pageCount} renderProgress=${state?.renderProgress}"
+                )
+                lastLog = now
+            }
             Thread.sleep(250)
         }
 
