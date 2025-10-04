@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.Lifecycle
@@ -147,12 +148,12 @@ class ScreenshotHarnessTest {
                 logHarnessError(error.message ?: "Timed out waiting for screenshot completion", error)
                 throw error
             }
-            completedFlag = doneFlags.firstOrNull(File::exists)
+            completedFlag = doneFlags.firstOrNull(::flagExists)
             val now = System.currentTimeMillis()
             if (now - lastLog >= TimeUnit.SECONDS.toMillis(15)) {
                 logHarnessInfo(
-                    "Screenshot harness still waiting; ready flags present=${readyFlags.count(File::exists)} " +
-                        "done flags present=${doneFlags.count(File::exists)}"
+                    "Screenshot harness still waiting; ready flags present=${readyFlags.count(::flagExists)} " +
+                        "done flags present=${doneFlags.count(::flagExists)}"
                 )
                 lastLog = now
             }
@@ -182,19 +183,29 @@ class ScreenshotHarnessTest {
     }
 
     private fun writeHandshakeFlag(flag: File, contents: String) {
-        flag.parentFile?.let { parent ->
-            if (!parent.exists() && !parent.mkdirs()) {
-                val error = IOException(
-                    "Unable to create directory for handshake flag at ${parent.absolutePath}"
-                )
-                logHarnessError(error.message ?: "Unable to create handshake directory", error)
-                throw error
-            }
+        val parent = flag.parentFile
+        if (parent != null && !ensureHandshakeDirectory(parent)) {
+            val error = IOException(
+                "Unable to create directory for handshake flag at ${parent.absolutePath}"
+            )
+            logHarnessError(error.message ?: "Unable to create handshake directory", error)
+            throw error
         }
 
-        runCatching {
+        try {
             flag.writeText(contents, Charsets.UTF_8)
-        }.onFailure { error ->
+            return
+        } catch (error: SecurityException) {
+            if (writeFlagWithRunAs(flag, contents)) {
+                return
+            }
+            val wrapped = IOException("Failed to create handshake flag at ${flag.absolutePath}", error)
+            logHarnessError(wrapped.message ?: "Failed to create handshake flag", wrapped)
+            throw wrapped
+        } catch (error: IOException) {
+            if (writeFlagWithRunAs(flag, contents)) {
+                return
+            }
             val wrapped = IOException("Failed to create handshake flag at ${flag.absolutePath}", error)
             logHarnessError(wrapped.message ?: "Failed to create handshake flag", wrapped)
             throw wrapped
@@ -203,10 +214,12 @@ class ScreenshotHarnessTest {
 
     private fun deleteHandshakeFlag(flag: File, failOnError: Boolean = true) {
         if (!flag.exists()) {
-            return
+            if (!existsWithRunAs(flag)) {
+                return
+            }
         }
 
-        if (!flag.delete()) {
+        if (!deleteFlag(flag)) {
             if (failOnError) {
                 val error = IllegalStateException(
                     "Unable to delete handshake flag at ${flag.absolutePath}"
@@ -220,11 +233,16 @@ class ScreenshotHarnessTest {
     }
 
     private fun clearFlag(flag: File): Boolean {
-        return if (!flag.exists()) {
-            true
-        } else {
-            flag.delete()
+        if (!flag.exists()) {
+            if (!existsWithRunAs(flag)) {
+                return true
+            }
         }
+
+        if (flag.delete()) {
+            return true
+        }
+        return deleteFlagWithRunAs(flag)
     }
 
     private fun resolveHandshakeCacheDirs(testPackageName: String): List<File> {
@@ -277,19 +295,11 @@ class ScreenshotHarnessTest {
             return false
         }
 
-        return try {
-            if (directory.exists() || directory.mkdirs()) {
-                true
-            } else {
-                logHarnessWarn(
-                    "Unable to prepare screenshot handshake cache directory at ${directory.absolutePath}"
-                )
-                false
-            }
-        } catch (error: SecurityException) {
+        return if (ensureHandshakeDirectory(directory)) {
+            true
+        } else {
             logHarnessWarn(
-                "Skipping screenshot handshake cache directory at ${directory.absolutePath}; access denied",
-                error
+                "Unable to prepare screenshot handshake cache directory at ${directory.absolutePath}"
             )
             false
         }
@@ -452,6 +462,138 @@ class ScreenshotHarnessTest {
         val error = IllegalStateException("Timed out waiting for document to finish loading for screenshots")
         logHarnessError(error.message ?: "Timed out waiting for document load", error)
         throw error
+    }
+
+    private fun flagExists(flag: File): Boolean {
+        return try {
+            if (flag.exists()) {
+                true
+            } else {
+                existsWithRunAs(flag)
+            }
+        } catch (_: SecurityException) {
+            existsWithRunAs(flag)
+        }
+    }
+
+    private fun ensureHandshakeDirectory(directory: File): Boolean {
+        if (directory.safeExists()) {
+            return true
+        }
+
+        val created = try {
+            directory.mkdirs()
+        } catch (_: SecurityException) {
+            false
+        }
+        if (created || directory.safeExists()) {
+            return true
+        }
+
+        if (canUseRunAs(directory) && createDirectoryWithRunAs(directory)) {
+            return true
+        }
+
+        return directory.safeExists()
+    }
+
+    private fun File.safeExists(): Boolean = runCatching { exists() }.getOrElse { false }
+
+    private fun canUseRunAs(file: File): Boolean {
+        if (!::handshakePackageName.isInitialized) {
+            return false
+        }
+        val path = file.absolutePath
+        val packageName = handshakePackageName
+        return path.contains("/$packageName/")
+    }
+
+    private fun createDirectoryWithRunAs(directory: File): Boolean {
+        if (!canUseRunAs(directory)) {
+            return false
+        }
+        val command = "mkdir -p \"${directory.absolutePath}\""
+        runAsShellCommand(command, logError = false)
+        return directory.safeExists() || directoryExistsWithRunAs(directory)
+    }
+
+    private fun writeFlagWithRunAs(flag: File, contents: String): Boolean {
+        if (!canUseRunAs(flag)) {
+            return false
+        }
+        flag.parentFile?.let { parent ->
+            if (!createDirectoryWithRunAs(parent)) {
+                return false
+            }
+        }
+        val escaped = sanitizeForSingleQuotes(contents)
+        val command = "printf '%s' '$escaped' > \"${flag.absolutePath}\""
+        runAsShellCommand(command, logError = false)
+        return existsWithRunAs(flag)
+    }
+
+    private fun deleteFlag(flag: File): Boolean {
+        return try {
+            if (flag.delete()) {
+                true
+            } else {
+                deleteFlagWithRunAs(flag)
+            }
+        } catch (_: SecurityException) {
+            deleteFlagWithRunAs(flag)
+        }
+    }
+
+    private fun deleteFlagWithRunAs(flag: File): Boolean {
+        if (!canUseRunAs(flag)) {
+            return false
+        }
+        val command = "rm -f \"${flag.absolutePath}\""
+        runAsShellCommand(command, logError = false)
+        return !existsWithRunAs(flag)
+    }
+
+    private fun existsWithRunAs(flag: File): Boolean {
+        if (!canUseRunAs(flag)) {
+            return false
+        }
+        val command = "if [ -f \"${flag.absolutePath}\" ]; then echo EXISTS; fi"
+        val output = runAsShellCommand(command, logError = false) ?: return false
+        return output.lineSequence().any { it.trim() == "EXISTS" }
+    }
+
+    private fun directoryExistsWithRunAs(directory: File): Boolean {
+        if (!canUseRunAs(directory)) {
+            return false
+        }
+        val command = "if [ -d \"${directory.absolutePath}\" ]; then echo DIR; fi"
+        val output = runAsShellCommand(command, logError = false) ?: return false
+        return output.lineSequence().any { it.trim() == "DIR" }
+    }
+
+    private fun runAsShellCommand(rawCommand: String, logError: Boolean = true): String? {
+        if (!::handshakePackageName.isInitialized) {
+            return null
+        }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val sanitized = sanitizeForSingleQuotes(rawCommand)
+        val fullCommand = "run-as $handshakePackageName sh -c '$sanitized'"
+        return try {
+            instrumentation.uiAutomation.executeShellCommand(fullCommand).use { descriptor ->
+                ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
+                    stream.bufferedReader().use { it.readText() }
+                }
+            }
+        } catch (error: Throwable) {
+            if (logError) {
+                logHarnessWarn("run-as command failed: $rawCommand", error)
+            }
+            null
+        }
+    }
+
+    private fun sanitizeForSingleQuotes(value: String): String {
+        return value.replace("'", "'\"'\"'")
     }
 
     private companion object {
