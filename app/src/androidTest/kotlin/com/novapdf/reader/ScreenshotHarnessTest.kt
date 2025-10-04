@@ -276,7 +276,23 @@ class ScreenshotHarnessTest {
         if (directory == null) {
             return false
         }
-        return directory.exists() || directory.mkdirs()
+
+        return try {
+            if (directory.exists() || directory.mkdirs()) {
+                true
+            } else {
+                logHarnessWarn(
+                    "Unable to prepare screenshot handshake cache directory at ${directory.absolutePath}"
+                )
+                false
+            }
+        } catch (error: SecurityException) {
+            logHarnessWarn(
+                "Skipping screenshot handshake cache directory at ${directory.absolutePath}; access denied",
+                error
+            )
+            false
+        }
     }
 
     private fun findTestPackageCacheDir(testPackageName: String): File {
