@@ -95,7 +95,8 @@ class PdfDocumentRepository(
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
-    private val renderScope = CoroutineScope(Job() + ioDispatcher)
+    private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
+    private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
@@ -328,7 +329,7 @@ class PdfDocumentRepository(
     }
 
     @WorkerThread
-    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(ioDispatcher) {
+    private suspend fun <T> withContextGuard(block: suspend () -> T): T = withContext(pdfDispatcher) {
         ensureWorkerThread()
         block()
     }
