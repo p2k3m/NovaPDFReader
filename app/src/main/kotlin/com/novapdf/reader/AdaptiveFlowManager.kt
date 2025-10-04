@@ -8,6 +8,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import android.os.Build
 import android.os.Bundle
 import android.view.Choreographer
@@ -43,8 +44,8 @@ class AdaptiveFlowManager(
         }
     }
 ) : SensorEventListener {
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val accelerometer: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val accelerometer: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private var choreographer: Choreographer? = null
     private val application: Application? = context.applicationContext as? Application
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -78,6 +79,7 @@ class AdaptiveFlowManager(
 
     private var lastTiltMagnitude = 0f
     private var isRegistered = false
+    private var sensorWarningLogged = false
     private var isFrameCallbackRegistered = false
     private var lastFrameTimeNanos = 0L
     private val frameDurations = ArrayDeque<Float>()
@@ -133,9 +135,14 @@ class AdaptiveFlowManager(
 
     fun start() {
         if (!isRegistered) {
-            accelerometer?.also { sensor ->
-                sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+            val manager = sensorManager
+            val sensor = accelerometer
+            if (manager != null && sensor != null) {
+                manager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
                 isRegistered = true
+            } else if (!sensorWarningLogged) {
+                sensorWarningLogged = true
+                Log.w(TAG, "Skipping accelerometer registration; sensor manager or accelerometer unavailable")
             }
         }
         registerFrameMetricsCallbacks()
@@ -144,7 +151,7 @@ class AdaptiveFlowManager(
 
     fun stop() {
         if (isRegistered) {
-            sensorManager.unregisterListener(this)
+            sensorManager?.unregisterListener(this)
             isRegistered = false
         }
         unregisterFrameMetricsCallbacks()
@@ -350,5 +357,8 @@ class AdaptiveFlowManager(
         frameMetricsAggregator.stop()
         frameMetricsAggregator.reset()
         activitiesWithFrameMetrics.clear()
+    }
+    companion object {
+        private const val TAG = "AdaptiveFlowManager"
     }
 }
