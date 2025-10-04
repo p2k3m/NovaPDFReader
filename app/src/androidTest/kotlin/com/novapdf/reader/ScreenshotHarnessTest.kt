@@ -49,7 +49,7 @@ class ScreenshotHarnessTest {
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
-    private lateinit var handshakeCacheDir: File
+    private lateinit var handshakeCacheDirs: List<File>
     private lateinit var handshakePackageName: String
     private var harnessEnabled: Boolean = false
 
@@ -63,9 +63,10 @@ class ScreenshotHarnessTest {
         appContext = ApplicationProvider.getApplicationContext()
         handshakePackageName = resolveTestPackageName()
         logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
-        handshakeCacheDir = resolveHandshakeCacheDir(handshakePackageName)
+        handshakeCacheDirs = resolveHandshakeCacheDirs(handshakePackageName)
         logHarnessInfo(
-            "Using handshake cache directory ${handshakeCacheDir.absolutePath} for package $handshakePackageName"
+            "Using handshake cache directories ${handshakeCacheDirs.joinToString { it.absolutePath }} " +
+                "for package $handshakePackageName"
         )
         harnessEnabled = true
         ensureWorkManagerInitialized(appContext)
@@ -77,7 +78,7 @@ class ScreenshotHarnessTest {
 
     @After
     fun tearDown() = runBlocking {
-        if (!harnessEnabled || !::handshakeCacheDir.isInitialized) {
+        if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
             return@runBlocking
         }
         cancelWorkManagerJobs()
@@ -95,22 +96,45 @@ class ScreenshotHarnessTest {
     }
 
     private suspend fun waitForScreenshotHandshake() {
-        val readyFlag = File(handshakeCacheDir, SCREENSHOT_READY_FLAG)
-        val doneFlag = File(handshakeCacheDir, SCREENSHOT_DONE_FLAG)
-
-        if (!withContext(Dispatchers.IO) { clearFlag(doneFlag) }) {
-            logHarnessWarn(
-                "Unable to clear stale screenshot completion flag at ${doneFlag.absolutePath}; continuing with existing flag"
-            )
+        val readyFlags = handshakeCacheDirs.map { directory ->
+            File(directory, SCREENSHOT_READY_FLAG)
+        }
+        val doneFlags = handshakeCacheDirs.map { directory ->
+            File(directory, SCREENSHOT_DONE_FLAG)
         }
 
-        logHarnessInfo("Writing screenshot ready flag to ${readyFlag.absolutePath}")
-        withContext(Dispatchers.IO) { writeHandshakeFlag(readyFlag, "ready") }
-        logHarnessInfo("Waiting for screenshot harness completion signal at ${doneFlag.absolutePath}")
+        withContext(Dispatchers.IO) {
+            doneFlags.forEach { flag ->
+                if (!clearFlag(flag)) {
+                    logHarnessWarn(
+                        "Unable to clear stale screenshot completion flag at ${flag.absolutePath}; continuing with existing flag"
+                    )
+                }
+            }
+        }
+
+        readyFlags.forEach { flag ->
+            logHarnessInfo("Writing screenshot ready flag to ${flag.absolutePath}")
+        }
+        withContext(Dispatchers.IO) {
+            readyFlags.forEach { flag ->
+                runCatching { writeHandshakeFlag(flag, "ready") }
+                    .onFailure { error ->
+                        logHarnessWarn(
+                            "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location",
+                            error
+                        )
+                    }
+            }
+        }
+        logHarnessInfo(
+            "Waiting for screenshot harness completion signal at ${doneFlags.joinToString { it.absolutePath }}"
+        )
 
         val start = System.currentTimeMillis()
         var lastLog = start
-        while (!doneFlag.exists()) {
+        var completedFlag: File? = null
+        while (completedFlag == null) {
             if (!activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)) {
                 val error = IllegalStateException(
                     "ReaderActivity unexpectedly stopped while waiting for screenshots"
@@ -123,10 +147,12 @@ class ScreenshotHarnessTest {
                 logHarnessError(error.message ?: "Timed out waiting for screenshot completion", error)
                 throw error
             }
+            completedFlag = doneFlags.firstOrNull(File::exists)
             val now = System.currentTimeMillis()
             if (now - lastLog >= TimeUnit.SECONDS.toMillis(15)) {
                 logHarnessInfo(
-                    "Screenshot harness still waiting; ready flag present=${readyFlag.exists()} done flag present=${doneFlag.exists()}"
+                    "Screenshot harness still waiting; ready flags present=${readyFlags.count(File::exists)} " +
+                        "done flags present=${doneFlags.count(File::exists)}"
                 )
                 lastLog = now
             }
@@ -134,19 +160,25 @@ class ScreenshotHarnessTest {
         }
 
         withContext(Dispatchers.IO) {
-            deleteHandshakeFlag(doneFlag)
-            deleteHandshakeFlag(readyFlag)
+            doneFlags.forEach { flag ->
+                deleteHandshakeFlag(flag, failOnError = flag == completedFlag)
+            }
+            readyFlags.forEach { flag ->
+                deleteHandshakeFlag(flag, failOnError = false)
+            }
         }
         logHarnessInfo("Screenshot harness handshake completed; flags cleared")
     }
 
     private fun cleanupFlags() {
-        if (!::handshakeCacheDir.isInitialized) {
+        if (!::handshakeCacheDirs.isInitialized) {
             return
         }
-        logHarnessInfo("Cleaning up screenshot harness flags in ${handshakeCacheDir.absolutePath}")
-        deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_READY_FLAG), failOnError = false)
-        deleteHandshakeFlag(File(handshakeCacheDir, SCREENSHOT_DONE_FLAG), failOnError = false)
+        handshakeCacheDirs.forEach { directory ->
+            logHarnessInfo("Cleaning up screenshot harness flags in ${directory.absolutePath}")
+            deleteHandshakeFlag(File(directory, SCREENSHOT_READY_FLAG), failOnError = false)
+            deleteHandshakeFlag(File(directory, SCREENSHOT_DONE_FLAG), failOnError = false)
+        }
     }
 
     private fun writeHandshakeFlag(flag: File, contents: String) {
@@ -195,7 +227,7 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun resolveHandshakeCacheDir(testPackageName: String): File {
+    private fun resolveHandshakeCacheDirs(testPackageName: String): List<File> {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
 
         val candidateDirectories = buildList {
@@ -212,15 +244,24 @@ class ScreenshotHarnessTest {
             addAll(cacheCandidatesForContext(instrumentation.context))
         }
 
-        val cacheDir = candidateDirectories
-            .firstOrNull(::prepareCacheDirectory)
-            ?: throw IllegalStateException(
+        val resolvedDirectories = candidateDirectories
+            .filter(::prepareCacheDirectory)
+            .mapNotNull { directory ->
+                runCatching { directory.canonicalFile }.getOrElse { directory }
+            }
+            .distinctBy { it.absolutePath }
+
+        if (resolvedDirectories.isEmpty()) {
+            throw IllegalStateException(
                 "Instrumentation cache directory unavailable for screenshot handshake"
             )
+        }
 
-        logHarnessInfo("Resolved screenshot handshake cache directory ${cacheDir.absolutePath}")
+        logHarnessInfo(
+            "Resolved screenshot handshake cache directories ${resolvedDirectories.joinToString { it.absolutePath }}"
+        )
 
-        return cacheDir
+        return resolvedDirectories
     }
 
     private fun cacheCandidatesForContext(context: Context): List<File> {
