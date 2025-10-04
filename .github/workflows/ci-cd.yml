@@ -560,12 +560,41 @@ jobs:
             done
           }
 
+          wait_for_service() {
+            local service="$1"
+            local label="$2"
+            local deadline="$3"
+            local interval=5
+            local elapsed=0
+            local status=""
+
+            while true; do
+              if status=$(adb shell service check "$service" 2>/dev/null); then
+                status=$(printf '%s' "$status" | tr -d '\r' | tr -d '\n')
+                if printf '%s' "$status" | grep -qE ': found$'; then
+                  return 0
+                fi
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "${label} service did not become available within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
           echo "Waiting for credential encrypted storage to become available"
           wait_for_property "sys.user.0.ce_available" "1|true" "Credential encrypted storage" $((5 * 60))
 
           echo "Waiting for settings provider readiness"
           wait_for_settings_value global device_provisioned "1|true" "device provisioning" $((5 * 60))
           wait_for_settings_value secure user_setup_complete "1|true" "user setup" $((5 * 60))
+
+          echo "Waiting for StorageManager service availability"
+          wait_for_service "mount" "StorageManager" $((5 * 60))
 
           while true; do
             if adb install --no-streaming -r "$apk_path"; then
