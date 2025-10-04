@@ -3,6 +3,8 @@ package com.novapdf.reader
 import android.content.Context
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.util.Base64
+import android.util.Base64InputStream
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
@@ -18,6 +20,7 @@ internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
     private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
     private const val THOUSAND_PAGE_COUNT = 1_000
+    private const val THOUSAND_PAGE_ASSET_BASE64 = "thousand_page_fixture.base64"
     private val DEFAULT_THOUSAND_PAGE_URL = BuildConfig.THOUSAND_PAGE_FIXTURE_URL
         .takeIf { it.isNotBlank() }
 
@@ -54,8 +57,13 @@ internal object TestDocumentFixtures {
         }
 
         try {
-            val preparedFromNetwork = tryDownloadThousandPagePdf(tempFile)
-            if (!preparedFromNetwork) {
+            val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
+            val preparedFromNetwork = if (!preparedFromAsset) {
+                tryDownloadThousandPagePdf(tempFile)
+            } else {
+                false
+            }
+            if (!preparedFromAsset && !preparedFromNetwork) {
                 writeThousandPagePdf(tempFile)
             }
         } catch (error: IOException) {
@@ -115,6 +123,34 @@ internal object TestDocumentFixtures {
             false
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun copyBundledThousandPagePdf(destination: File): Boolean {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        return try {
+            instrumentation.context.assets.open(THOUSAND_PAGE_ASSET_BASE64).use { assetStream ->
+                Base64InputStream(assetStream, Base64.DEFAULT).use { decodedStream ->
+                    destination.outputStream().buffered().use { output ->
+                        decodedStream.copyTo(output)
+                        output.flush()
+                    }
+                }
+            }
+            if (!validateThousandPagePdf(destination)) {
+                destination.delete()
+                false
+            } else {
+                true
+            }
+        } catch (error: IOException) {
+            destination.delete()
+            Log.w(TAG, "Unable to copy bundled thousand-page PDF fixture", error)
+            false
+        } catch (error: SecurityException) {
+            destination.delete()
+            Log.w(TAG, "Security exception copying bundled thousand-page PDF fixture", error)
+            false
         }
     }
 
