@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -9,7 +10,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import androidx.work.Configuration
 import androidx.work.WorkManager
+import androidx.work.testing.WorkManagerTestInitHelper
 import com.novapdf.reader.work.DocumentMaintenanceWorker
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
@@ -38,6 +41,7 @@ class PdfViewerUiAutomatorTest {
     fun setUp() = runBlocking {
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
+        ensureWorkManagerInitialized(appContext)
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
         withContext(Dispatchers.IO) {
             WorkManager.getInstance(appContext).cancelAllWork().result.get(5, TimeUnit.SECONDS)
@@ -120,6 +124,16 @@ class PdfViewerUiAutomatorTest {
             statusVisible
         )
         device.waitForIdle()
+    }
+
+    private fun ensureWorkManagerInitialized(context: Context) {
+        val appContext = context.applicationContext
+        runCatching { WorkManager.getInstance(appContext) }.onFailure {
+            val configuration = Configuration.Builder()
+                .setMinimumLoggingLevel(Log.DEBUG)
+                .build()
+            WorkManagerTestInitHelper.initializeTestWorkManager(appContext, configuration)
+        }
     }
 
     private companion object {
