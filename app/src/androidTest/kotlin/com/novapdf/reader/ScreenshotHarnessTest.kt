@@ -434,7 +434,7 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private class HarnessTestWatcher(
+    class HarnessTestWatcher(
         private val onEvent: (String) -> Unit,
         private val onFailure: (String, Throwable) -> Unit,
     ) : TestWatcher() {
