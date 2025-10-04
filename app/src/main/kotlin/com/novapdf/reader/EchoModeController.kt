@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
@@ -11,13 +12,36 @@ import java.util.UUID
  * synthesis is unavailable on the current device.
  */
 class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
-    private val textToSpeech: TextToSpeech = TextToSpeech(context.applicationContext, this)
+    private val applicationContext = context.applicationContext
+    private val textToSpeech: TextToSpeech?
     private val pendingRequests = ArrayDeque<EchoRequest>()
 
     private var isInitialized = false
     private var readyForPlayback = false
 
+    init {
+        val initialised = runCatching { TextToSpeech(applicationContext, this) }
+        textToSpeech = initialised.getOrNull()
+        if (textToSpeech == null) {
+            // Some devices (particularly headless CI images) do not ship with a TTS engine. The
+            // platform constructor throws synchronously in that scenario, so mark the controller
+            // as initialised but unavailable so that callers can gracefully fall back to haptics
+            // instead of crashing the process during composition.
+            isInitialized = true
+            readyForPlayback = false
+            Log.w(TAG, "TextToSpeech engine unavailable; falling back to haptic feedback", initialised.exceptionOrNull())
+            drainPendingWithFallback()
+        }
+    }
+
     override fun onInit(status: Int) {
+        val engine = textToSpeech
+        if (engine == null) {
+            isInitialized = true
+            readyForPlayback = false
+            drainPendingWithFallback()
+            return
+        }
         isInitialized = true
         readyForPlayback = status == TextToSpeech.SUCCESS
         if (!readyForPlayback) {
@@ -25,7 +49,7 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
             return
         }
 
-        val localeResult = textToSpeech.setLanguage(Locale.getDefault())
+        val localeResult = engine.setLanguage(Locale.getDefault())
         if (localeResult == TextToSpeech.LANG_MISSING_DATA || localeResult == TextToSpeech.LANG_NOT_SUPPORTED) {
             readyForPlayback = false
             drainPendingWithFallback()
@@ -55,7 +79,13 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
             return
         }
 
-        val result = textToSpeech.speak(
+        val engine = textToSpeech
+        if (engine == null) {
+            onFallback()
+            return
+        }
+
+        val result = engine.speak(
             trimmedSummary,
             TextToSpeech.QUEUE_FLUSH,
             /* params = */ null,
@@ -71,14 +101,21 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
      */
     fun shutdown() {
         pendingRequests.clear()
-        textToSpeech.stop()
-        textToSpeech.shutdown()
+        textToSpeech?.let { engine ->
+            engine.stop()
+            engine.shutdown()
+        }
     }
 
     private fun flushPending() {
         while (pendingRequests.isNotEmpty()) {
             val request = pendingRequests.removeFirst()
-            val result = textToSpeech.speak(
+            val engine = textToSpeech
+            if (engine == null) {
+                request.onFallback()
+                continue
+            }
+            val result = engine.speak(
                 request.summary,
                 TextToSpeech.QUEUE_FLUSH,
                 /* params = */ null,
@@ -101,4 +138,8 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
         val onFallback: () -> Unit,
         val utteranceId: String = UUID.randomUUID().toString()
     )
+
+    private companion object {
+        private const val TAG = "EchoModeController"
+    }
 }
