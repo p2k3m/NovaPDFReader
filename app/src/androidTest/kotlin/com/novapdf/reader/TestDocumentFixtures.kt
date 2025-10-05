@@ -12,6 +12,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.regex.Pattern
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -304,17 +305,59 @@ internal object TestDocumentFixtures {
                     "Validation failed for thousand-page PDF (footer=$footerValid, " +
                         "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
                 )
-            } else {
-                Log.i(
-                    TAG,
-                    "Validated thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
-                )
+                return false
             }
-            valid
+
+            if (!validatePageTree(candidate)) {
+                Log.w(
+                    TAG,
+                    "Validation failed for thousand-page PDF due to oversized /Kids arrays"
+                )
+                return false
+            }
+
+            Log.i(
+                TAG,
+                "Validated thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
+            )
+            true
         } catch (error: Throwable) {
             Log.w(TAG, "Validation of downloaded thousand-page PDF failed", error)
             false
         }
+    }
+
+    private fun validatePageTree(candidate: File): Boolean {
+        val contents = try {
+            candidate.readText(StandardCharsets.ISO_8859_1)
+        } catch (error: IOException) {
+            Log.w(TAG, "Unable to read thousand-page PDF for page tree validation", error)
+            return false
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Security exception while reading thousand-page PDF for validation", error)
+            return false
+        }
+
+        val kidsMatcher = KIDS_ARRAY_PATTERN.matcher(contents)
+        while (kidsMatcher.find()) {
+            val kidsSection = kidsMatcher.group(1)
+            val referenceMatcher = REFERENCE_PATTERN.matcher(kidsSection)
+            var referenceCount = 0
+            while (referenceMatcher.find()) {
+                referenceCount++
+                if (referenceCount > MAX_KIDS_PER_ARRAY) {
+                    break
+                }
+            }
+            if (referenceCount > MAX_KIDS_PER_ARRAY) {
+                Log.w(
+                    TAG,
+                    "Detected oversized /Kids array with $referenceCount entries in ${candidate.absolutePath}"
+                )
+                return false
+            }
+        }
+        return true
     }
 
     private fun writeThousandPagePdf(destination: File) {
@@ -339,4 +382,9 @@ internal object TestDocumentFixtures {
         }
     }
     private const val TAG = "TestDocumentFixtures"
+    private val KIDS_ARRAY_PATTERN: Pattern =
+        Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
+    private val REFERENCE_PATTERN: Pattern =
+        Pattern.compile("\\d+\\s+\\d+\\s+R")
+    private const val MAX_KIDS_PER_ARRAY = 64
 }
