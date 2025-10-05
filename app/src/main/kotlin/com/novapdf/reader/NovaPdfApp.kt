@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.room.Room
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
@@ -13,14 +14,19 @@ import com.novapdf.reader.logging.FileCrashReporter
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 open class NovaPdfApp : Application() {
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scopeExceptionHandler = CoroutineExceptionHandler { _, error ->
+        logDeferredInitializationFailure("uncaught", error)
+    }
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + scopeExceptionHandler)
 
     val crashReporter: CrashReporter by lazy {
         FileCrashReporter(this).also { it.install() }
@@ -69,14 +75,13 @@ open class NovaPdfApp : Application() {
         crashReporter
 
         // Schedule heavy singletons to initialise off the main thread.
-        applicationScope.launch(Dispatchers.IO) {
-            databaseDelegate.value
-            bookmarkManagerDelegate.value
-            PdfBoxInitializer.ensureInitialized(applicationContext)
+        applicationScope.launch {
+            initializeDeferredComponents()
         }
 
         // Ensure periodic maintenance is configured.
-        documentMaintenanceScheduler
+        runCatching { documentMaintenanceScheduler }
+            .onFailure { error -> logDeferredInitializationFailure("maintenance", error) }
     }
 
     override fun onTerminate() {
@@ -85,5 +90,42 @@ open class NovaPdfApp : Application() {
         if (searchCoordinatorDelegate.isInitialized()) {
             searchCoordinator.dispose()
         }
+    }
+
+    private suspend fun initializeDeferredComponents() {
+        val databaseReady = withContext(Dispatchers.IO) {
+            runCatching { databaseDelegate.value }
+                .onFailure { error -> logDeferredInitializationFailure("database", error) }
+                .isSuccess
+        }
+        if (databaseReady) {
+            withContext(Dispatchers.IO) {
+                runCatching { bookmarkManagerDelegate.value }
+                    .onFailure { error -> logDeferredInitializationFailure("bookmarks", error) }
+            }
+        }
+        val pdfBoxReady = runCatching { PdfBoxInitializer.ensureInitialized(applicationContext) }
+            .onFailure { error -> logDeferredInitializationFailure("pdfbox", error) }
+            .getOrDefault(false)
+        if (!pdfBoxReady) {
+            logDeferredInitializationWarning(
+                "pdfbox",
+                "PDFBox resources failed to initialise; search indexing will be disabled"
+            )
+        }
+    }
+
+    private fun logDeferredInitializationFailure(stage: String, error: Throwable) {
+        Log.w(TAG, "Deferred initialisation failed for $stage", error)
+        crashReporter.recordNonFatal(error, mapOf("stage" to stage))
+    }
+
+    private fun logDeferredInitializationWarning(stage: String, message: String) {
+        Log.w(TAG, message)
+        crashReporter.logBreadcrumb("$stage: $message")
+    }
+
+    private companion object {
+        private const val TAG = "NovaPdfApp"
     }
 }
