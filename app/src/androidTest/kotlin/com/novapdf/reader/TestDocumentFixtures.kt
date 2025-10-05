@@ -12,6 +12,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.regex.Pattern
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -245,99 +247,76 @@ internal object TestDocumentFixtures {
             return false
         }
 
-        val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
-        val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
-        val windowSize = maxOf(totalPagesMarker.length, lastPageMarker.length, 32)
-        val buffer = ByteArray(16 * 1024)
-
-        return try {
-            var footerValid = false
-            var totalPagesFound = false
-            var lastPageFound = false
-
-            candidate.inputStream().buffered().use { input ->
-                val headerBytes = ByteArray(8)
-                val headerRead = input.read(headerBytes)
-                if (headerRead < 7) {
-                    Log.w(TAG, "Validation failed; unable to read PDF header from ${candidate.absolutePath}")
-                    return false
-                }
-                val headerText = String(headerBytes, 0, headerRead, StandardCharsets.ISO_8859_1)
-                if (!headerText.startsWith("%PDF-1.")) {
-                    Log.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
-                    return false
-                }
-
-                var carry = headerText
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read == -1) {
-                        break
-                    }
-
-                    val chunk = carry + String(buffer, 0, read, StandardCharsets.ISO_8859_1)
-                    if (!footerValid && chunk.contains("%%EOF")) {
-                        footerValid = true
-                    }
-                    if (!totalPagesFound && chunk.contains(totalPagesMarker)) {
-                        totalPagesFound = true
-                    }
-                    if (!lastPageFound && chunk.contains(lastPageMarker)) {
-                        lastPageFound = true
-                    }
-
-                    if (footerValid && totalPagesFound && lastPageFound) {
-                        break
-                    }
-
-                    carry = if (chunk.length > windowSize) {
-                        chunk.takeLast(windowSize)
-                    } else {
-                        chunk
-                    }
-                }
-            }
-
-            val valid = footerValid && totalPagesFound && lastPageFound
-            if (!valid) {
-                Log.w(
-                    TAG,
-                    "Validation failed for thousand-page PDF (footer=$footerValid, " +
-                        "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
-                )
-                return false
-            }
-
-            if (!validatePageTree(candidate)) {
-                Log.w(
-                    TAG,
-                    "Validation failed for thousand-page PDF due to oversized /Kids arrays"
-                )
-                return false
-            }
-
-            Log.i(
-                TAG,
-                "Validated thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
-            )
-            true
-        } catch (error: Throwable) {
-            Log.w(TAG, "Validation of downloaded thousand-page PDF failed", error)
-            false
-        }
-    }
-
-    private fun validatePageTree(candidate: File): Boolean {
-        val contents = try {
-            candidate.readText(StandardCharsets.ISO_8859_1)
+        val bytes = try {
+            candidate.readBytes()
         } catch (error: IOException) {
-            Log.w(TAG, "Unable to read thousand-page PDF for page tree validation", error)
+            Log.w(TAG, "Unable to read thousand-page PDF for validation", error)
             return false
         } catch (error: SecurityException) {
             Log.w(TAG, "Security exception while reading thousand-page PDF for validation", error)
             return false
         }
 
+        if (bytes.isEmpty()) {
+            Log.w(TAG, "Validation failed; thousand-page PDF is empty at ${candidate.absolutePath}")
+            return false
+        }
+
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        val digestHex = digest.toHexString()
+        if (!digestHex.equals(EXPECTED_THOUSAND_PAGE_DIGEST, ignoreCase = true)) {
+            Log.w(
+                TAG,
+                "Thousand-page PDF digest mismatch for ${candidate.absolutePath}; " +
+                    "expected=$EXPECTED_THOUSAND_PAGE_DIGEST actual=${digestHex.lowercase(Locale.US)}"
+            )
+            return false
+        }
+
+        val contents = try {
+            String(bytes, StandardCharsets.ISO_8859_1)
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to decode thousand-page PDF for validation", error)
+            return false
+        }
+
+        if (!contents.startsWith("%PDF-1.")) {
+            Log.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
+            return false
+        }
+
+        val footerValid = contents.contains("%%EOF")
+        val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
+        val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
+        val totalPagesFound = contents.contains(totalPagesMarker)
+        val lastPageFound = contents.contains(lastPageMarker)
+
+        if (!footerValid || !totalPagesFound || !lastPageFound) {
+            Log.w(
+                TAG,
+                "Validation failed for thousand-page PDF (footer=$footerValid, " +
+                    "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
+            )
+            return false
+        }
+
+        if (!validatePageTree(contents)) {
+            Log.w(
+                TAG,
+                "Validation failed for thousand-page PDF due to oversized /Kids arrays"
+            )
+            return false
+        }
+
+        Log.i(
+            TAG,
+            "Validated thousand-page PDF at ${candidate.absolutePath} " +
+                "(size=${candidate.length()} bytes, digest=${digestHex.lowercase(Locale.US)})"
+        )
+        return true
+    }
+
+    private fun validatePageTree(contents: String): Boolean {
         val kidsMatcher = KIDS_ARRAY_PATTERN.matcher(contents)
         while (kidsMatcher.find()) {
             val kidsSection = kidsMatcher.group(1)
@@ -382,9 +361,17 @@ internal object TestDocumentFixtures {
         }
     }
     private const val TAG = "TestDocumentFixtures"
+    private const val EXPECTED_THOUSAND_PAGE_DIGEST =
+        "8b837c6e6a828f4274ff3307e69f155c57fa61d510c9b4d773aa41540150f409"
     private val KIDS_ARRAY_PATTERN: Pattern =
         Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
     private val REFERENCE_PATTERN: Pattern =
         Pattern.compile("\\d+\\s+\\d+\\s+R")
     private const val MAX_KIDS_PER_ARRAY = 16
+
+    private fun ByteArray.toHexString(): String {
+        return joinToString(separator = "") { byte ->
+            String.format(Locale.US, "%02x", byte)
+        }
+    }
 }
