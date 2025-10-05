@@ -558,6 +558,8 @@ if (needsReleaseSigning) {
     configureReleaseSigning()
 }
 
+// Pdfium 1.9.2 includes the upstream fix for large page trees
+// (see docs/regressions/2024-09-pdfium-crash.md).
 val pdfiumAndroidVersion = "1.9.2"
 
 dependencies {
