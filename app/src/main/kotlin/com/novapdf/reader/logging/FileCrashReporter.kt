@@ -3,6 +3,7 @@ package com.novapdf.reader.logging
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import java.io.File
 import java.io.FileWriter
 import java.io.IOException
@@ -95,6 +96,9 @@ class FileCrashReporter(
         }
     }
 
+    @VisibleForTesting
+    internal fun crashLogDirectory(): File? = logDirectory
+
     private fun writeLog(file: File, entry: String) {
         FileWriter(file, false).use { writer ->
             writer.write(entry)
@@ -149,13 +153,13 @@ class FileCrashReporter(
 
         private fun safeDirectoriesForContext(context: Context): List<File> {
             return buildList {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    addIfPresent { context.dataDir }
+                }
                 addIfPresent { context.filesDir }
                 addIfPresent { context.cacheDir }
                 addIfPresent { context.codeCacheDir }
                 addIfPresent { context.noBackupFilesDir }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    addIfPresent { context.dataDir }
-                }
             }
         }
 
