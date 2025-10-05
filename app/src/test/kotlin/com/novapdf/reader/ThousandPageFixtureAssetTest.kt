@@ -34,8 +34,8 @@ class ThousandPageFixtureAssetTest {
             .map { referencePattern.findAll(it.groupValues[1]).count() }
             .maxOrNull() ?: 0
 
-        assertTrue(maxKids <= 8) {
-            "Expected balanced /Pages tree with <=8 kids per node but found $maxKids"
+        assertTrue(maxKids <= 4) {
+            "Expected balanced /Pages tree with <=4 kids per node but found $maxKids"
         }
     }
 }

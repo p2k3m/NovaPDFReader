@@ -282,7 +282,7 @@ internal class ThousandPagePdfWriter(
             private const val PAGE_NODES_START_OBJECT_NUMBER = 3
             // Keep the /Kids arrays intentionally small so legacy Pdfium builds avoid deep recursion
             // and excessively large sibling lists when traversing the thousand-page stress document.
-            private const val MAX_CHILDREN_PER_NODE = 8
+            private const val MAX_CHILDREN_PER_NODE = 4
         }
     }
 }
