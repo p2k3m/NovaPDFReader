@@ -604,6 +604,21 @@ class PdfDocumentRepository(
     }
 
     private fun createBitmapCache(): BitmapCache {
+        val caffeinePreconditionError = caffeinePreconditionFailure()
+        if (caffeinePreconditionError != null) {
+            Log.w(TAG, "Caffeine bitmap cache disabled; falling back to LruCache", caffeinePreconditionError)
+            reportNonFatal(
+                caffeinePreconditionError,
+                mapOf(
+                    "stage" to "bitmapCacheInit",
+                    "fallback" to "lru",
+                    "reason" to "caffeine_precondition_failed",
+                    "error_type" to caffeinePreconditionError::class.java.name
+                )
+            )
+            return LruBitmapCache(maxCacheBytes)
+        }
+
         return try {
             CaffeineBitmapCache(maxCacheBytes)
         } catch (error: Throwable) {
@@ -617,6 +632,12 @@ class PdfDocumentRepository(
             )
             LruBitmapCache(maxCacheBytes)
         }
+    }
+
+    private fun caffeinePreconditionFailure(): Throwable? {
+        return runCatching {
+            Thread::class.java.getDeclaredField("threadLocalRandomProbe")
+        }.exceptionOrNull()
     }
 
     private fun clearBitmapCacheLocked() {
