@@ -300,7 +300,7 @@ internal object TestDocumentFixtures {
             return false
         }
 
-        if (!validatePageTree(contents)) {
+        if (!validatePageTree(candidate, contents)) {
             Log.w(
                 TAG,
                 "Validation failed for thousand-page PDF due to oversized /Kids arrays"
@@ -316,7 +316,7 @@ internal object TestDocumentFixtures {
         return true
     }
 
-    private fun validatePageTree(contents: String): Boolean {
+    private fun validatePageTree(candidate: File, contents: String): Boolean {
         val kidsMatcher = KIDS_ARRAY_PATTERN.matcher(contents)
         while (kidsMatcher.find()) {
             val kidsSection = kidsMatcher.group(1)
