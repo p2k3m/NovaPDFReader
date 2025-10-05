@@ -1031,6 +1031,7 @@ jobs:
           HARNESS_LOGCAT="$base_dir/screenshot-harness-logcat.log"
 
           HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
+          APP_RUN_AS_PACKAGE="${PACKAGE_NAME}"
 
           cleanup_flags() {
             adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
@@ -1044,10 +1045,44 @@ jobs:
             rm -f "$HARNESS_LOGCAT"
             if adb logcat -d > "$HARNESS_LOGCAT"; then
               echo "Collected screenshot harness logcat at $HARNESS_LOGCAT" >&2
+              if [ -s "$HARNESS_LOGCAT" ]; then
+                echo "---- screenshot harness logcat (tail) ----" >&2
+                tail -n 200 "$HARNESS_LOGCAT" >&2 || true
+                echo "-----------------------------------------" >&2
+              fi
             else
               echo "Failed to capture screenshot harness logcat" >&2
             fi
             adb logcat -c >/dev/null 2>&1 || true
+          }
+          collect_app_crash_logs() {
+            local crash_dir="crashlogs"
+            local output_dir="${base_dir}/crashlogs"
+            mkdir -p "$output_dir"
+
+            local listing
+            if ! listing=$(adb shell run-as "$APP_RUN_AS_PACKAGE" ls -1 "$crash_dir" 2>/dev/null | tr -d '\r'); then
+              echo "Crash log directory unavailable for $APP_RUN_AS_PACKAGE" >&2
+              return
+            fi
+
+            listing=$(printf '%s\n' "$listing" | awk 'NF')
+            if [ -z "$listing" ]; then
+              echo "No crash logs captured for $APP_RUN_AS_PACKAGE" >&2
+              return
+            fi
+
+            echo "Collecting crash logs from $APP_RUN_AS_PACKAGE/$crash_dir" >&2
+            while IFS= read -r entry; do
+              local remote_path="$crash_dir/$entry"
+              local local_path="$output_dir/$entry"
+              if adb shell run-as "$APP_RUN_AS_PACKAGE" cat "$remote_path" > "$local_path"; then
+                echo "Saved crash log to $local_path" >&2
+                tail -n 40 "$local_path" >&2 || true
+              else
+                echo "Failed to export crash log $remote_path" >&2
+              fi
+            done <<< "$listing"
           }
           finish_harness() {
             if [ -n "${harness_pid:-}" ] && kill -0 "$harness_pid" >/dev/null 2>&1; then
@@ -1077,6 +1112,7 @@ jobs:
                 cat "$HARNESS_LOG" >&2 || true
                 wait "$harness_pid" || true
                 collect_harness_logcat
+                collect_app_crash_logs
                 exit 1
               fi
 
@@ -1088,6 +1124,7 @@ jobs:
                 echo "::error::Timed out waiting for screenshot harness readiness flag" >&2
                 cat "$HARNESS_LOG" >&2 || true
                 collect_harness_logcat
+                collect_app_crash_logs
                 exit 1
               fi
 
@@ -1157,6 +1194,7 @@ jobs:
             echo "::error::Screenshot harness instrumentation reported failure" >&2
             cat "$HARNESS_LOG" >&2 || true
             collect_harness_logcat
+            collect_app_crash_logs
             exit $status
           fi
 
