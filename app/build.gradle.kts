@@ -584,7 +584,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.profileinstaller:profileinstaller:1.3.1")
-    implementation("com.github.barteksc:pdfium-android:1.9.0") {
+    implementation("com.github.mhiew:pdfium-android:1.9.2") {
         exclude(group = "com.android.support", module = "support-compat")
     }
     // Caffeine 3.x requires MethodHandle support; stay on 2.x until we evaluate the upgrade impact
