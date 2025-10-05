@@ -386,5 +386,5 @@ internal object TestDocumentFixtures {
         Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
     private val REFERENCE_PATTERN: Pattern =
         Pattern.compile("\\d+\\s+\\d+\\s+R")
-    private const val MAX_KIDS_PER_ARRAY = 64
+    private const val MAX_KIDS_PER_ARRAY = 16
 }
