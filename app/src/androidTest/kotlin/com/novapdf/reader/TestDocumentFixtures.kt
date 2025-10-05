@@ -105,20 +105,24 @@ internal object TestDocumentFixtures {
             throw IOException("Unable to clear stale thousand-page PDF cache")
         }
 
-        try {
-            val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
-            val preparedFromNetwork = if (!preparedFromAsset) {
-                tryDownloadThousandPagePdf(tempFile)
-            } else {
-                false
+        val preparedFromWriter = tryGenerateThousandPagePdf(tempFile)
+
+        if (!preparedFromWriter) {
+            try {
+                val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
+                val preparedFromNetwork = if (!preparedFromAsset) {
+                    tryDownloadThousandPagePdf(tempFile)
+                } else {
+                    false
+                }
+                if (!preparedFromAsset && !preparedFromNetwork) {
+                    Log.i(TAG, "Falling back to thousand-page writer after asset/network failures")
+                    writeThousandPagePdf(tempFile)
+                }
+            } catch (error: IOException) {
+                tempFile.delete()
+                throw error
             }
-            if (!preparedFromAsset && !preparedFromNetwork) {
-                Log.i(TAG, "Generating thousand-page PDF via writer fallback")
-                writeThousandPagePdf(tempFile)
-            }
-        } catch (error: IOException) {
-            tempFile.delete()
-            throw error
         }
 
         if (destination.exists() && !destination.delete()) {
@@ -128,6 +132,18 @@ internal object TestDocumentFixtures {
         if (!tempFile.renameTo(destination)) {
             tempFile.delete()
             throw IOException("Unable to move thousand-page PDF into cache")
+        }
+    }
+
+    private fun tryGenerateThousandPagePdf(destination: File): Boolean {
+        return try {
+            Log.i(TAG, "Generating thousand-page PDF via local writer")
+            writeThousandPagePdf(destination)
+            true
+        } catch (error: IOException) {
+            destination.delete()
+            Log.w(TAG, "Unable to generate thousand-page PDF via writer", error)
+            false
         }
     }
 
