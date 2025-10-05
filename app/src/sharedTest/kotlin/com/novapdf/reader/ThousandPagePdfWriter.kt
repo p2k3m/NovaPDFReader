@@ -64,10 +64,11 @@ internal class ThousandPagePdfWriter(
         private val pageWidth: Int,
         private val pageHeight: Int,
     ) {
-        // Pdfium struggles with extremely large /Kids arrays, so organise pages into a balanced tree
-        // to keep each node's child list small and deterministic for stress testing.
-        private val groupCount = ((pageCount + MAX_PAGES_PER_GROUP - 1) / MAX_PAGES_PER_GROUP).coerceAtLeast(1)
-        private val pageObjectsStart = PAGE_GROUPS_START_OBJECT_NUMBER + groupCount
+        // Pdfium can crash when /Pages nodes expose very large /Kids arrays. Build a balanced tree
+        // with a small branching factor so the screenshot harness remains stable on older binaries.
+        private val pageTree = buildPageTree()
+        private val pageNodeCount = pageTree.allNodes.size
+        private val pageObjectsStart = PAGE_NODES_START_OBJECT_NUMBER + pageNodeCount
         private val contentObjectsStart = pageObjectsStart + pageCount
         private val fontObjectNumber = contentObjectsStart + pageCount
         private val totalObjects = fontObjectNumber
@@ -81,7 +82,7 @@ internal class ThousandPagePdfWriter(
 
             writeCatalog()
             writePageRoot()
-            writePageGroups()
+            writePageNodes()
             writePageObjects()
             writeContentStreams()
             writeFontObject()
@@ -110,26 +111,29 @@ internal class ThousandPagePdfWriter(
         private fun writePageRoot() {
             startObject(ROOT_PAGES_OBJECT_NUMBER)
             writeAscii("<< /Type /Pages /Count $pageCount /Kids [\n")
-            for (groupIndex in 0 until groupCount) {
-                val groupObjectNumber = pageGroupObjectNumber(groupIndex)
-                writeAscii("$groupObjectNumber 0 R\n")
+            pageTree.rootChildren.forEach { node ->
+                writeAscii("${node.objectNumber} 0 R\n")
             }
             writeAscii("] >>\n")
             endObject()
         }
 
-        private fun writePageGroups() {
-            for (groupIndex in 0 until groupCount) {
-                val groupObjectNumber = pageGroupObjectNumber(groupIndex)
-                val startPage = groupIndex * MAX_PAGES_PER_GROUP
-                val endPage = minOf(pageCount, startPage + MAX_PAGES_PER_GROUP)
-                startObject(groupObjectNumber)
+        private fun writePageNodes() {
+            pageTree.allNodes.forEach { node ->
+                startObject(node.objectNumber)
+                val parentObject = node.parent?.objectNumber ?: ROOT_PAGES_OBJECT_NUMBER
                 writeAscii(
-                    "<< /Type /Pages /Parent ${ROOT_PAGES_OBJECT_NUMBER} 0 R /Count ${endPage - startPage} /Kids [\n"
+                    "<< /Type /Pages /Parent $parentObject 0 R /Count ${node.totalPages} /Kids [\n"
                 )
-                for (pageIndex in startPage until endPage) {
-                    val pageObjectNumber = pageObjectNumber(pageIndex)
-                    writeAscii("$pageObjectNumber 0 R\n")
+                if (node.isLeaf) {
+                    for (pageIndex in node.pageIndices) {
+                        val pageObjectNumber = pageObjectNumber(pageIndex)
+                        writeAscii("$pageObjectNumber 0 R\n")
+                    }
+                } else {
+                    node.children.forEach { child ->
+                        writeAscii("${child.objectNumber} 0 R\n")
+                    }
                 }
                 writeAscii("] >>\n")
                 endObject()
@@ -137,16 +141,17 @@ internal class ThousandPagePdfWriter(
         }
 
         private fun writePageObjects() {
-            for (pageIndex in 0 until pageCount) {
-                val pageObjectNumber = pageObjectNumber(pageIndex)
-                val contentObjectNumber = contentObjectNumber(pageIndex)
-                val groupObjectNumber = pageGroupObjectNumber(pageIndex / MAX_PAGES_PER_GROUP)
-                startObject(pageObjectNumber)
-                writeAscii(
-                    "<< /Type /Page /Parent $groupObjectNumber 0 R /MediaBox [0 0 $pageWidth $pageHeight] " +
-                        "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> /ProcSet [/PDF /Text] >> >>\n"
-                )
-                endObject()
+            pageTree.leafNodes.forEach { node ->
+                for (pageIndex in node.pageIndices) {
+                    val pageObjectNumber = pageObjectNumber(pageIndex)
+                    val contentObjectNumber = contentObjectNumber(pageIndex)
+                    startObject(pageObjectNumber)
+                    writeAscii(
+                        "<< /Type /Page /Parent ${node.objectNumber} 0 R /MediaBox [0 0 $pageWidth $pageHeight] " +
+                            "/Contents $contentObjectNumber 0 R /Resources << /Font << /F1 $fontObjectNumber 0 R >> /ProcSet [/PDF /Text] >> >>\n"
+                    )
+                    endObject()
+                }
             }
         }
 
@@ -178,8 +183,6 @@ internal class ThousandPagePdfWriter(
             writeAscii("endobj\n")
         }
 
-        private fun pageGroupObjectNumber(index: Int): Int = PAGE_GROUPS_START_OBJECT_NUMBER + index
-
         private fun pageObjectNumber(index: Int): Int = pageObjectsStart + index
 
         private fun contentObjectNumber(index: Int): Int = contentObjectsStart + index
@@ -206,11 +209,78 @@ internal class ThousandPagePdfWriter(
             return withoutCarriageReturns.replace("\n", "\r\n")
         }
 
+        private fun buildPageTree(): PageTree {
+            val leafNodes = mutableListOf<PageTreeNode>()
+            var start = 0
+            while (start < pageCount) {
+                val end = minOf(pageCount, start + MAX_CHILDREN_PER_NODE)
+                leafNodes += PageTreeNode(
+                    pageRange = start until end,
+                    children = mutableListOf(),
+                    totalPages = end - start
+                )
+                start = end
+            }
+
+            val allNodes = mutableListOf<PageTreeNode>()
+            allNodes.addAll(leafNodes)
+
+            var currentLevel = leafNodes.toList()
+            while (currentLevel.size > MAX_CHILDREN_PER_NODE) {
+                val nextLevel = mutableListOf<PageTreeNode>()
+                var index = 0
+                while (index < currentLevel.size) {
+                    val sliceEnd = minOf(currentLevel.size, index + MAX_CHILDREN_PER_NODE)
+                    val children = currentLevel.subList(index, sliceEnd)
+                    val node = PageTreeNode(
+                        pageRange = null,
+                        children = children.toMutableList(),
+                        totalPages = children.sumOf(PageTreeNode::totalPages)
+                    )
+                    children.forEach { child -> child.parent = node }
+                    nextLevel += node
+                    allNodes += node
+                    index = sliceEnd
+                }
+                currentLevel = nextLevel
+            }
+
+            currentLevel.forEach { it.parent = null }
+
+            var nextObjectNumber = PAGE_NODES_START_OBJECT_NUMBER
+            allNodes.forEach { node ->
+                node.objectNumber = nextObjectNumber++
+            }
+
+            return PageTree(
+                rootChildren = currentLevel,
+                allNodes = allNodes,
+                leafNodes = leafNodes
+            )
+        }
+
+        private data class PageTree(
+            val rootChildren: List<PageTreeNode>,
+            val allNodes: List<PageTreeNode>,
+            val leafNodes: List<PageTreeNode>
+        )
+
+        private data class PageTreeNode(
+            val pageRange: IntRange?,
+            val children: MutableList<PageTreeNode>,
+            val totalPages: Int,
+            var parent: PageTreeNode? = null,
+            var objectNumber: Int = 0
+        ) {
+            val isLeaf: Boolean get() = pageRange != null
+            val pageIndices: IntRange get() = pageRange ?: IntRange.EMPTY
+        }
+
         companion object {
             private const val CATALOG_OBJECT_NUMBER = 1
             private const val ROOT_PAGES_OBJECT_NUMBER = 2
-            private const val PAGE_GROUPS_START_OBJECT_NUMBER = 3
-            private const val MAX_PAGES_PER_GROUP = 64
+            private const val PAGE_NODES_START_OBJECT_NUMBER = 3
+            private const val MAX_CHILDREN_PER_NODE = 16
         }
     }
 }
