@@ -362,12 +362,12 @@ internal object TestDocumentFixtures {
     }
     private const val TAG = "TestDocumentFixtures"
     private const val EXPECTED_THOUSAND_PAGE_DIGEST =
-        "8b837c6e6a828f4274ff3307e69f155c57fa61d510c9b4d773aa41540150f409"
+        "7d6484d4a4a768062325fc6d0f51ad19f2c2da17b9dc1bcfb80740239db89089"
     private val KIDS_ARRAY_PATTERN: Pattern =
         Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
     private val REFERENCE_PATTERN: Pattern =
         Pattern.compile("\\d+\\s+\\d+\\s+R")
-    private const val MAX_KIDS_PER_ARRAY = 16
+    private const val MAX_KIDS_PER_ARRAY = 4
 
     private fun ByteArray.toHexString(): String {
         return joinToString(separator = "") { byte ->
