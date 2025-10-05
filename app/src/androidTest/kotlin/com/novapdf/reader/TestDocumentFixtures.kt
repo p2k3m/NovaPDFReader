@@ -215,6 +215,10 @@ internal object TestDocumentFixtures {
             destination.delete()
             Log.w(TAG, "Security exception copying bundled thousand-page PDF fixture", error)
             false
+        } catch (error: Throwable) {
+            destination.delete()
+            Log.w(TAG, "Unexpected failure copying bundled thousand-page PDF fixture", error)
+            false
         }
     }
 

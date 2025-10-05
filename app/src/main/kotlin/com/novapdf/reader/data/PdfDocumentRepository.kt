@@ -367,9 +367,20 @@ class PdfDocumentRepository(
     private fun resolveMimeType(uri: Uri): String? {
         contentResolver.getType(uri)?.let { return it }
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val extension = MimeTypeMap.getFileExtensionFromUrl(uri.toString())?.lowercase(Locale.US)
+            val extensionFromUrl = MimeTypeMap.getFileExtensionFromUrl(uri.toString())?.lowercase(Locale.US)
+            val extension = when {
+                !extensionFromUrl.isNullOrEmpty() -> extensionFromUrl
+                else -> uri.path?.substringAfterLast('.', missingDelimiterValue = "")?.lowercase(Locale.US)
+            }
             if (!extension.isNullOrEmpty()) {
-                return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.let { return it }
+                if (extension == "pdf") {
+                    Log.i(TAG, "Falling back to manual PDF MIME type detection for $uri")
+                    return "application/pdf"
+                }
+                Log.w(TAG, "Unknown MIME type for file extension .$extension from $uri")
+            } else {
+                Log.w(TAG, "Unable to resolve file extension for $uri")
             }
         }
         return null

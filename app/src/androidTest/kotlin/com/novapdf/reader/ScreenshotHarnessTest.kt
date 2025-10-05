@@ -435,6 +435,13 @@ class ScreenshotHarnessTest {
             }
 
             errorMessage?.let { message ->
+                val snapshotState = snapshot
+                if (snapshotState != null) {
+                    logHarnessWarn(
+                        "Document load reported error with state=${snapshotState.documentStatus.javaClass.simpleName} " +
+                            "pageCount=${snapshotState.pageCount} renderProgress=${snapshotState.renderProgress}"
+                    )
+                }
                 val error = IllegalStateException("Failed to load document for screenshots: $message")
                 logHarnessError(error.message ?: "Failed to load document for screenshots", error)
                 throw error
