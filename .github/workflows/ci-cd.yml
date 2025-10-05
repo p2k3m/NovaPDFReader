@@ -1028,6 +1028,7 @@ jobs:
           DONE_FLAG="cache/screenshot_done.flag"
           HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
           HARNESS_LOG="$base_dir/screenshot-harness.log"
+          HARNESS_LOGCAT="$base_dir/screenshot-harness-logcat.log"
 
           HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
 
@@ -1038,6 +1039,16 @@ jobs:
           cleanup_flags
 
           harness_pid=""
+          rm -f "$HARNESS_LOGCAT"
+          collect_harness_logcat() {
+            rm -f "$HARNESS_LOGCAT"
+            if adb logcat -d > "$HARNESS_LOGCAT"; then
+              echo "Collected screenshot harness logcat at $HARNESS_LOGCAT" >&2
+            else
+              echo "Failed to capture screenshot harness logcat" >&2
+            fi
+            adb logcat -c >/dev/null 2>&1 || true
+          }
           finish_harness() {
             if [ -n "${harness_pid:-}" ] && kill -0 "$harness_pid" >/dev/null 2>&1; then
               echo "Stopping screenshot harness instrumentation" >&2
@@ -1049,6 +1060,7 @@ jobs:
           trap finish_harness EXIT
 
           echo "Launching screenshot harness instrumentation to load thousand-page PDF"
+          adb logcat -c >/dev/null 2>&1 || true
           adb shell am instrument -w -r \
             -e runScreenshotHarness true \
             -e class "$HARNESS_CLASS" \
@@ -1064,6 +1076,7 @@ jobs:
                 echo "::error::Screenshot harness instrumentation exited before reporting readiness" >&2
                 cat "$HARNESS_LOG" >&2 || true
                 wait "$harness_pid" || true
+                collect_harness_logcat
                 exit 1
               fi
 
@@ -1074,6 +1087,7 @@ jobs:
               if [ $elapsed -ge $timeout ]; then
                 echo "::error::Timed out waiting for screenshot harness readiness flag" >&2
                 cat "$HARNESS_LOG" >&2 || true
+                collect_harness_logcat
                 exit 1
               fi
 
@@ -1142,6 +1156,7 @@ jobs:
             status=$?
             echo "::error::Screenshot harness instrumentation reported failure" >&2
             cat "$HARNESS_LOG" >&2 || true
+            collect_harness_logcat
             exit $status
           fi
 
