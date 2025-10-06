@@ -13,6 +13,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.LinkedHashSet
 import java.util.Locale
 import java.util.regex.Pattern
 import kotlinx.coroutines.Dispatchers
@@ -28,47 +29,25 @@ internal object TestDocumentFixtures {
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
-            val candidateDirectories = writableStorageCandidates(context)
+            val storageCandidates = resolveStorageCandidates(context)
             Log.i(
                 TAG,
-                "Resolved ${candidateDirectories.size} candidate directories for thousand-page PDF: " +
-                    candidateDirectories.joinToString { it.absolutePath }
+                "Resolved ${storageCandidates.size} candidate directories for thousand-page PDF: " +
+                    storageCandidates.joinToString { candidate ->
+                        val marker = if (candidate.preferred) "*" else ""
+                        "${candidate.directory.absolutePath}$marker"
+                    }
             )
 
-            val existing = candidateDirectories
-                .map { File(it, THOUSAND_PAGE_CACHE) }
-                .firstOrNull { candidate ->
-                    if (!candidate.exists() || candidate.length() <= 0L) {
-                        return@firstOrNull false
-                    }
-
-                    val valid = validateThousandPagePdf(candidate)
-                    if (valid) {
-                        Log.i(
-                            TAG,
-                            "Reusing cached thousand-page PDF at ${candidate.absolutePath} (size=${candidate.length()} bytes)"
-                        )
-                        true
-                    } else {
-                        Log.w(
-                            TAG,
-                            "Cached thousand-page PDF at ${candidate.absolutePath} failed validation; deleting corrupted artifact"
-                        )
-                        if (!candidate.delete()) {
-                            Log.w(
-                                TAG,
-                                "Unable to delete corrupted thousand-page PDF at ${candidate.absolutePath}; future runs will attempt regeneration"
-                            )
-                        }
-                        false
-                    }
-                }
-
-            if (existing != null) {
-                return@withContext existing.toUri()
+            val orderedCandidates = storageCandidates.sortedByDescending { it.preferred }
+            locateReusableFixture(orderedCandidates)?.let { reusable ->
+                return@withContext reusable.toUri()
             }
 
-            val destinationDirectory = candidateDirectories.firstOrNull()
+            val destinationDirectory = orderedCandidates
+                .firstOrNull { it.preferred }
+                ?.directory
+                ?: orderedCandidates.firstOrNull()?.directory
                 ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
 
             val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
@@ -96,6 +75,137 @@ internal object TestDocumentFixtures {
             )
             destination.toUri()
         }
+
+    private fun resolveStorageCandidates(context: Context): List<StorageCandidate> {
+        val instrumentation = runCatching { InstrumentationRegistry.getInstrumentation() }.getOrNull()
+        val targetPackageName = instrumentation?.targetContext?.packageName ?: context.packageName
+        val candidateContexts = LinkedHashSet<Context>()
+        candidateContexts += context.applicationContext
+        candidateContexts += context
+        instrumentation?.targetContext?.applicationContext?.let(candidateContexts::add)
+        instrumentation?.targetContext?.let(candidateContexts::add)
+        instrumentation?.context?.applicationContext?.let(candidateContexts::add)
+        instrumentation?.context?.let(candidateContexts::add)
+
+        return candidateContexts
+            .filterNotNull()
+            .flatMap { candidateContext ->
+                writableStorageCandidates(candidateContext).map { directory ->
+                    val canonical = runCatching { directory.canonicalFile }.getOrElse { directory }
+                    val preferred = canonical.absolutePath.contains("/$targetPackageName/")
+                    StorageCandidate(canonical, preferred)
+                }
+            }
+            .distinctBy { it.directory.absolutePath }
+    }
+
+    private fun locateReusableFixture(candidates: List<StorageCandidate>): File? {
+        if (candidates.isEmpty()) {
+            return null
+        }
+
+        val preferred = candidates.filter(StorageCandidate::preferred)
+        preferred.forEach { candidate ->
+            findValidFixture(candidate)?.let { return it }
+        }
+
+        val fallbacks = candidates.filterNot(StorageCandidate::preferred)
+        fallbacks.forEach { candidate ->
+            val source = findValidFixture(candidate, logReuse = false) ?: return@forEach
+            val destinationDirectory = preferred.firstOrNull()?.directory
+            if (destinationDirectory != null && destinationDirectory != candidate.directory) {
+                migrateFixture(source, destinationDirectory)?.let { return it }
+            }
+            Log.i(
+                TAG,
+                "Reusing cached thousand-page PDF at ${source.absolutePath} (size=${source.length()} bytes)"
+            )
+            return source
+        }
+
+        return null
+    }
+
+    private fun findValidFixture(candidate: StorageCandidate, logReuse: Boolean = true): File? {
+        val file = File(candidate.directory, THOUSAND_PAGE_CACHE)
+        if (!file.exists() || file.length() <= 0L) {
+            return null
+        }
+
+        val valid = validateThousandPagePdf(file)
+        if (valid) {
+            if (logReuse) {
+                Log.i(
+                    TAG,
+                    "Reusing cached thousand-page PDF at ${file.absolutePath} (size=${file.length()} bytes)"
+                )
+            }
+            return file
+        }
+
+        Log.w(
+            TAG,
+            "Cached thousand-page PDF at ${file.absolutePath} failed validation; deleting corrupted artifact"
+        )
+        if (!file.delete()) {
+            Log.w(
+                TAG,
+                "Unable to delete corrupted thousand-page PDF at ${file.absolutePath}; future runs will attempt regeneration"
+            )
+        }
+        return null
+    }
+
+    private fun migrateFixture(source: File, destinationDirectory: File): File? {
+        if (!destinationDirectory.exists() && !destinationDirectory.mkdirs()) {
+            Log.w(
+                TAG,
+                "Unable to prepare destination directory ${destinationDirectory.absolutePath} for thousand-page PDF migration"
+            )
+            return null
+        }
+        val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
+        return try {
+            source.copyTo(destination, overwrite = true)
+            if (validateThousandPagePdf(destination)) {
+                Log.i(
+                    TAG,
+                    "Migrated cached thousand-page PDF from ${source.absolutePath} to ${destination.absolutePath}"
+                )
+                destination
+            } else {
+                Log.w(
+                    TAG,
+                    "Validation failed after migrating thousand-page PDF to ${destination.absolutePath}; removing artifact"
+                )
+                if (!destination.delete()) {
+                    Log.w(
+                        TAG,
+                        "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after migration"
+                    )
+                }
+                null
+            }
+        } catch (error: IOException) {
+            Log.w(
+                TAG,
+                "Unable to migrate thousand-page PDF to ${destination.absolutePath}",
+                error
+            )
+            if (destination.exists() && !destination.delete()) {
+                Log.w(
+                    TAG,
+                    "Unable to clean up failed thousand-page PDF migration at ${destination.absolutePath}"
+                )
+            }
+            null
+        }
+    }
+
+    private data class StorageCandidate(
+        val directory: File,
+        val preferred: Boolean,
+    )
 
     private suspend fun createThousandPagePdf(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for thousand-page PDF")
