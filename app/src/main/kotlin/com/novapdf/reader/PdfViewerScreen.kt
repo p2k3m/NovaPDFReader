@@ -2231,11 +2231,11 @@ private fun PdfPageItem(
 
     DisposableEffect(pageIndex) {
         onDispose {
-            pageBitmap?.let { bitmap ->
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-            }
+            // Avoid explicitly recycling the bitmap here. When the composable leaves the
+            // composition Compose can still issue a final draw pass, and calling
+            // Bitmap.recycle() results in "Canvas: trying to use a recycled bitmap"
+            // crashes on large documents. Clearing the reference lets the bitmap be
+            // collected naturally without tripping the renderer.
             pageBitmap = null
         }
     }
