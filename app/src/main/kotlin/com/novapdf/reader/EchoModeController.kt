@@ -22,7 +22,6 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
     @Volatile private var textToSpeech: TextToSpeech? = null
     private val pendingRequests = ArrayDeque<EchoRequest>()
     private val supervisor = SupervisorJob()
-    private val initScope = CoroutineScope(supervisor + Dispatchers.IO)
     private val mainScope = CoroutineScope(supervisor + Dispatchers.Main.immediate)
 
     private var isInitialized = false
@@ -138,18 +137,16 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
         if (isInitialized || initializationJob?.isActive == true) {
             return
         }
-        initializationJob = initScope.launch {
+        initializationJob = mainScope.launch {
             val initialised = runCatching { TextToSpeech(applicationContext, this@EchoModeController) }
             val engine = initialised.getOrNull()
             textToSpeech = engine
             initializationJob = null
             if (engine == null) {
                 Log.w(TAG, "TextToSpeech engine unavailable; falling back to haptic feedback", initialised.exceptionOrNull())
-                mainScope.launch {
-                    isInitialized = true
-                    readyForPlayback = false
-                    drainPendingWithFallback()
-                }
+                isInitialized = true
+                readyForPlayback = false
+                drainPendingWithFallback()
             }
         }
     }
