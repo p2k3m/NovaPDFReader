@@ -53,11 +53,11 @@ inline fun <reified T : Task> TaskContainer.namedOrNull(name: String): TaskProvi
     }
 
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.serialization")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
     id("org.jetbrains.kotlin.kapt")
-    id("androidx.baselineprofile")
+    alias(libs.plugins.androidx.baselineprofile)
     id("jacoco")
 }
 
@@ -73,17 +73,17 @@ val thousandPageFixtureUrlProvider = providers
     .orElse(providers.gradleProperty("thousandPageFixtureUrl"))
     .orElse("")
 
-val libs = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
+val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
 
 android {
     namespace = "com.novapdf.reader"
     testNamespace = "$resolvedApplicationId.test"
-    compileSdk = libs.findVersion("androidCompileSdk").get().requiredVersion.toInt()
+    compileSdk = versionCatalog.findVersion("androidCompileSdk").get().requiredVersion.toInt()
 
     defaultConfig {
         applicationId = resolvedApplicationId
-        minSdk = libs.findVersion("androidMinSdk").get().requiredVersion.toInt()
-        targetSdk = libs.findVersion("androidTargetSdk").get().requiredVersion.toInt()
+        minSdk = versionCatalog.findVersion("androidMinSdk").get().requiredVersion.toInt()
+        targetSdk = versionCatalog.findVersion("androidTargetSdk").get().requiredVersion.toInt()
         versionCode = 1
         versionName = "1.0.0"
 
@@ -146,7 +146,8 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
+        kotlinCompilerExtensionVersion =
+            versionCatalog.findVersion("androidxComposeCompiler").get().requiredVersion
     }
 
     kotlinOptions {
@@ -563,73 +564,76 @@ if (needsReleaseSigning) {
 
 // Pdfium 1.9.2 includes the upstream fix for large page trees
 // (see docs/regressions/2024-09-pdfium-crash.md).
-val pdfiumAndroidVersion = "1.9.2"
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
-    implementation("androidx.activity:activity-compose:1.9.2")
+    val composeBom = platform(versionCatalog.findLibrary("androidx-compose-bom").get())
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.compose)
     implementation(composeBom)
     androidTestImplementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.animation:animation")
-    implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.annotation:annotation:1.8.0")
-    implementation("com.google.errorprone:error_prone_annotations:2.26.1")
-    implementation("androidx.navigation:navigation-compose:2.8.0")
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.compose.material:material-icons-extended")
-    implementation("com.airbnb.android:lottie-compose:6.4.0")
-    implementation("androidx.core:core-splashscreen:1.0.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.constraintlayout:constraintlayout-compose:1.0.1")
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
-    implementation("com.github.mhiew:pdfium-android:$pdfiumAndroidVersion") {
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.animation)
+    implementation(libs.androidx.material)
+    implementation(libs.androidx.annotation)
+    implementation(libs.errorprone.annotations)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.lottie.compose)
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.constraintlayout.compose)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.profileinstaller)
+    implementation(libs.pdfium.android) {
         exclude(group = "com.android.support", module = "support-compat")
     }
     // Caffeine 3.x requires MethodHandle support; stay on 2.x until we evaluate the upgrade impact
-    implementation("com.github.ben-manes.caffeine:caffeine:2.9.3")
-    implementation("org.apache.lucene:lucene-core:8.11.4")
-    implementation("org.apache.lucene:lucene-analyzers-common:8.11.4")
-    implementation("org.apache.lucene:lucene-queryparser:8.11.4")
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
-    implementation("com.google.mlkit:text-recognition:16.0.0")
+    implementation(libs.caffeine)
+    implementation(libs.lucene.core)
+    implementation(libs.lucene.analyzers.common)
+    implementation(libs.lucene.queryparser)
+    implementation(libs.pdfbox.android)
+    implementation(libs.mlkit.text.recognition)
 
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    kapt("androidx.room:room-compiler:2.6.1")
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    kapt(libs.androidx.room.compiler)
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("io.coil-kt.coil3:coil-android:3.0.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.coil.android)
+    implementation(libs.coil.network.okhttp)
+    constraints {
+        // Pin OkHttp for Coil's OkHttp integration.
+        implementation(libs.okhttp)
+    }
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
-    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
-    testImplementation("org.mockito:mockito-inline:5.2.0")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
-    testImplementation("org.robolectric:robolectric:4.12.1")
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("androidx.test:core:1.5.0")
-    testImplementation("androidx.room:room-testing:2.6.1")
-    testImplementation("androidx.work:work-testing:2.9.0")
-    testImplementation("org.apache.pdfbox:pdfbox:2.0.31")
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.mockito.kotlin)
+    testImplementation(libs.mockito.inline)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.junit4)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.work.testing)
+    testImplementation(libs.pdfbox)
 
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
-    androidTestImplementation("androidx.work:work-testing:2.9.0")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    androidTestUtil("androidx.test:orchestrator:1.4.2")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.androidx.work.testing)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestUtil(libs.androidx.test.orchestrator)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     baselineProfileProject?.let { baselineProfile(it) }
 }
 
