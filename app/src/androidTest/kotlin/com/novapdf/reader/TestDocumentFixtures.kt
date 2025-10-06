@@ -278,20 +278,22 @@ internal object TestDocumentFixtures {
             throw IOException("Unable to clear stale thousand-page PDF cache")
         }
 
-        val preparedFromWriter = tryGenerateThousandPagePdf(tempFile)
+        val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
+        val preparedFromNetwork = if (!preparedFromAsset) {
+            tryDownloadThousandPagePdf(tempFile)
+        } else {
+            false
+        }
+        val preparedFromWriter = if (!preparedFromAsset && !preparedFromNetwork) {
+            tryGenerateThousandPagePdf(tempFile)
+        } else {
+            false
+        }
 
-        if (!preparedFromWriter) {
+        if (!preparedFromAsset && !preparedFromNetwork && !preparedFromWriter) {
             try {
-                val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
-                val preparedFromNetwork = if (!preparedFromAsset) {
-                    tryDownloadThousandPagePdf(tempFile)
-                } else {
-                    false
-                }
-                if (!preparedFromAsset && !preparedFromNetwork) {
-                    Log.i(TAG, "Falling back to thousand-page writer after asset/network failures")
-                    writeThousandPagePdf(tempFile)
-                }
+                Log.i(TAG, "Falling back to thousand-page writer after asset/network failures")
+                writeThousandPagePdf(tempFile)
             } catch (error: IOException) {
                 tempFile.delete()
                 throw error
