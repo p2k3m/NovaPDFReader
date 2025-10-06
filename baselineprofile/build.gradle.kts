@@ -1,5 +1,6 @@
 import com.android.build.api.dsl.TestExtension
 import com.android.build.api.variant.TestAndroidComponentsExtension
+import org.gradle.StartParameter
 import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.VersionCatalogsExtension
@@ -124,9 +125,34 @@ dependencies {
 val testExtension = extensions.getByType<TestExtension>()
 val androidComponents = extensions.getByType<TestAndroidComponentsExtension>()
 
+val baselineRequestTaskNames = setOf(
+    "baselineprofile", // allow gradle baselineprofile tasks without explicit task name
+    "connectedBenchmarkAndroidTest",
+    "frameRateBenchmark",
+    "memoryBenchmark",
+    "startupBenchmark",
+    "renderBenchmark"
+)
+
+fun String.isBaselineProfileTaskRequest(): Boolean {
+    if (contains(":baselineprofile")) {
+        return true
+    }
+    val taskName = substringAfterLast(":")
+    return baselineRequestTaskNames.any { candidate ->
+        taskName.equals(candidate, ignoreCase = false)
+    }
+}
+
+val baselineTasksRequested = gradle.startParameter.taskNames.any { it.isBaselineProfileTaskRequest() }
+
 val sdkDirectoryProvider = androidComponents.sdkComponents.sdkDirectory.map { it.asFile }
 
 val hasConnectedDeviceProvider = providers.provider {
+    if (!baselineTasksRequested) {
+        return@provider false
+    }
+
     val sdkDir = sdkDirectoryProvider.orNull ?: return@provider false
     val platformTools = File(sdkDir, "platform-tools")
     val adbExecutable = sequenceOf("adb", "adb.exe")
@@ -163,37 +189,39 @@ val hasConnectedDeviceProvider = providers.provider {
 
 val hasConnectedDevice by lazy { hasConnectedDeviceProvider.get() }
 
-if (skipConnectedTestsOnCi) {
-    androidComponents.beforeVariants { variantBuilder ->
-        variantBuilder.enable = false
-    }
-
-    tasks.matching { task ->
-        (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
-            task.name.startsWith("checkTestedAppObfuscation")
-    }.configureEach {
-        onlyIf {
-            logger.warn(
-                "Skipping task $name because connected Android tests are disabled on CI. " +
-                    "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
-            )
-            false
-        }
-    }
-} else {
-    androidComponents.beforeVariants { variantBuilder ->
-        if (!hasConnectedDevice) {
+if (baselineTasksRequested) {
+    if (skipConnectedTestsOnCi) {
+        androidComponents.beforeVariants { variantBuilder ->
             variantBuilder.enable = false
         }
-    }
 
-    tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
-        onlyIf {
-            val hasDevice = hasConnectedDevice
-            if (!hasDevice) {
-                logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+        tasks.matching { task ->
+            (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
+                task.name.startsWith("checkTestedAppObfuscation")
+        }.configureEach {
+            onlyIf {
+                logger.warn(
+                    "Skipping task $name because connected Android tests are disabled on CI. " +
+                        "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
+                )
+                false
             }
-            hasDevice
+        }
+    } else {
+        androidComponents.beforeVariants { variantBuilder ->
+            if (!hasConnectedDevice) {
+                variantBuilder.enable = false
+            }
+        }
+
+        tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
+            onlyIf {
+                val hasDevice = hasConnectedDevice
+                if (!hasDevice) {
+                    logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+                }
+                hasDevice
+            }
         }
     }
 }
@@ -275,17 +303,34 @@ tasks.register("renderBenchmark") {
     dependsOn("connectedBenchmarkAndroidTest")
 }
 
-gradle.taskGraph.whenReady {
-    val arguments = testExtension.defaultConfig.testInstrumentationRunnerArguments
+fun StartParameter.requestsTask(taskName: String): Boolean =
+    taskNames.any { requested ->
+        requested == taskName || requested.substringAfterLast(":") == taskName
+    }
+
+val configurationCacheIncompatibleReason =
+    "Baseline Profile connected checks invoke adb during configuration."
+
+tasks.matching { task -> task.name.startsWith("connected") }.configureEach {
+    notCompatibleWithConfigurationCache(configurationCacheIncompatibleReason)
+}
+
+listOf("frameRateBenchmark", "memoryBenchmark", "startupBenchmark", "renderBenchmark").forEach { taskName ->
+    tasks.named(taskName).configure {
+        notCompatibleWithConfigurationCache(configurationCacheIncompatibleReason)
+    }
+}
+
+testExtension.defaultConfig.testInstrumentationRunnerArguments.apply {
     when {
-        hasTask(":baselineprofile:frameRateBenchmark") ->
-            arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.FrameRateMetric"
-        hasTask(":baselineprofile:memoryBenchmark") ->
-            arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.MemoryMetric"
-        hasTask(":baselineprofile:startupBenchmark") ->
-            arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.StartupMetric"
-        hasTask(":baselineprofile:renderBenchmark") ->
-            arguments["annotation"] = "com.novapdf.reader.baselineprofile.annotations.RenderMetric"
-        else -> arguments.remove("annotation")
+        gradle.startParameter.requestsTask("frameRateBenchmark") ->
+            this["annotation"] = "com.novapdf.reader.baselineprofile.annotations.FrameRateMetric"
+        gradle.startParameter.requestsTask("memoryBenchmark") ->
+            this["annotation"] = "com.novapdf.reader.baselineprofile.annotations.MemoryMetric"
+        gradle.startParameter.requestsTask("startupBenchmark") ->
+            this["annotation"] = "com.novapdf.reader.baselineprofile.annotations.StartupMetric"
+        gradle.startParameter.requestsTask("renderBenchmark") ->
+            this["annotation"] = "com.novapdf.reader.baselineprofile.annotations.RenderMetric"
+        else -> remove("annotation")
     }
 }
