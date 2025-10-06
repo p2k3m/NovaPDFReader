@@ -39,6 +39,7 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
@@ -572,6 +573,56 @@ class PdfViewerViewModelSearchTest {
 
         val uiState = viewModel.uiState.value
         assertEquals(DocumentStatus.Idle, uiState.documentStatus)
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `prefetch is skipped for very large documents`() = runTest {
+        val app = TestPdfApp.getInstance()
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(adaptiveFlowManager.isUiUnderLoad()).thenReturn(false)
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
+
+        val session = PdfDocumentSession(
+            documentId = "huge",
+            uri = Uri.parse("file://huge"),
+            pageCount = LARGE_DOCUMENT_PAGE_THRESHOLD + 50,
+            document = mock<PdfDocument>(),
+            fileDescriptor = mock<ParcelFileDescriptor>()
+        )
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow(session))
+
+        app.installDependencies(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager
+        )
+
+        val viewModel = PdfViewerViewModel(app)
+
+        advanceUntilIdle()
+
+        viewModel.prefetchPages(listOf(0, 1), 1000)
+        advanceUntilIdle()
+
+        verify(pdfRepository, never()).prefetchPages(any(), any())
     }
 
 }

@@ -45,6 +45,7 @@ import kotlinx.coroutines.withContext
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
+internal const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -114,6 +115,7 @@ open class PdfViewerViewModel(
     private var searchJob: Job? = null
     private var remoteDownloadJob: Job? = null
     private var viewportWidthPx: Int = 1080
+    private var prefetchEnabled: Boolean = true
 
     private suspend fun setLoadingState(
         isLoading: Boolean,
@@ -159,6 +161,7 @@ open class PdfViewerViewModel(
                 DocumentContext(speed, sensitivity, session, outline, renderProgress)
             }.collect { context ->
                 val session = context.session
+                prefetchEnabled = session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true
                 val annotations = session?.let { annotationRepository.annotationsForDocument(it.documentId) }
                     .orEmpty()
                 val bookmarks = session?.let { bookmarkManager.bookmarks(it.documentId) } ?: emptyList()
@@ -186,7 +189,10 @@ open class PdfViewerViewModel(
         }
     }
 
-    private fun shouldThrottlePrefetch(): Boolean = adaptiveFlowManager.isUiUnderLoad()
+    private fun shouldThrottlePrefetch(): Boolean {
+        if (!prefetchEnabled) return true
+        return adaptiveFlowManager.isUiUnderLoad()
+    }
 
     fun openDocument(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
