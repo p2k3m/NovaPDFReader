@@ -252,12 +252,14 @@ class ScreenshotHarnessTest {
             runCatching { findTestPackageCacheDir(testPackageName) }
                 .onFailure { error ->
                     logHarnessWarn(
-                        "Falling back to instrumentation context for screenshot handshake cache directory",
+                        "Falling back to derived screenshot handshake cache directory",
                         error
                     )
                 }
                 .getOrNull()
                 ?.let(::add)
+
+            deriveTestPackageCacheDir(instrumentation, testPackageName)?.let(::add)
 
             addAll(cacheCandidatesForContext(instrumentation.context))
         }
@@ -326,19 +328,52 @@ class ScreenshotHarnessTest {
         return File(baseDir, "cache")
     }
 
+    private fun deriveTestPackageCacheDir(
+        instrumentation: android.app.Instrumentation,
+        testPackageName: String
+    ): File? {
+        val targetCacheDir = runCatching { instrumentation.targetContext.cacheDir }.getOrNull()
+            ?: return null
+        val userDirectory = targetCacheDir.parentFile?.parentFile ?: return null
+        return File(userDirectory, "$testPackageName/cache")
+    }
+
     private fun resolveTestPackageName(): String {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val arguments = InstrumentationRegistry.getArguments()
-        val targetInstrumentation = arguments.getString("targetInstrumentation")
 
-        val parsed = targetInstrumentation
-            ?.substringBefore('/')
-            ?.takeIf { it.isNotBlank() }
-        if (!parsed.isNullOrEmpty()) {
-            return parsed
+        val explicit = arguments.getString("testPackageName")?.takeIf { it.isNotBlank() }
+        if (!explicit.isNullOrEmpty()) {
+            return explicit
         }
 
-        return instrumentation.context.packageName
+        val targetInstrumentation = arguments.getString("targetInstrumentation")
+            ?.substringBefore('/')
+            ?.takeIf { it.isNotBlank() }
+        if (!targetInstrumentation.isNullOrEmpty()) {
+            return targetInstrumentation
+        }
+
+        val placeholder = arguments.getString("novapdfTestAppId")?.takeIf { it.isNotBlank() }
+        if (!placeholder.isNullOrEmpty()) {
+            return placeholder
+        }
+
+        val instrumentationPackage = instrumentation.context.packageName
+        if (instrumentationPackage.endsWith(".test")) {
+            return instrumentationPackage
+        }
+
+        val targetPackage = instrumentation.targetContext.packageName
+        val derived = if (instrumentationPackage.isNotBlank() &&
+            instrumentationPackage != targetPackage
+        ) {
+            instrumentationPackage
+        } else {
+            "$targetPackage.test"
+        }
+
+        return derived
     }
 
     private fun Context.credentialProtectedStorageContext(): Context {
