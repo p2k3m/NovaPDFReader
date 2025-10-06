@@ -450,7 +450,7 @@ class ScreenshotHarnessTest {
                 logHarnessInfo(
                     "Thousand-page document finished loading with pageCount=${snapshot?.pageCount}"
                 )
-                device.waitForIdle()
+                device.waitForIdle(DEVICE_IDLE_TIMEOUT_MS)
                 return
             }
 
@@ -611,6 +611,7 @@ class ScreenshotHarnessTest {
         // viewer ample time to finish rendering before failing the harness run.
         private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
         private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
+        private const val DEVICE_IDLE_TIMEOUT_MS = 10_000L
         private const val TAG = "ScreenshotHarness"
     }
 
