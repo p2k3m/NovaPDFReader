@@ -9,6 +9,10 @@ pluginManagement {
     }
 }
 
+plugins {
+    id("com.gradle.enterprise") version "3.16.1"
+}
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -29,6 +33,17 @@ dependencyResolutionManagement {
 
 rootProject.name = "NovaPDFReader"
 include(":app")
+
+if (System.getenv("CI") != null) {
+    gradleEnterprise {
+        buildScan {
+            publishOnFailure()
+            isUploadInBackground = false
+            termsOfServiceUrl = "https://gradle.com/terms-of-service"
+            termsOfServiceAgree = "yes"
+        }
+    }
+}
 
 fun isSdkDownloadEnabled(rootDir: File): Boolean {
     val gradlePropertiesFile = File(rootDir, "gradle.properties")
