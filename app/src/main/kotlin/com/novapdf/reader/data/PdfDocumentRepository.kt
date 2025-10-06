@@ -19,6 +19,7 @@ import android.util.Size
 import android.util.SparseArray
 import androidx.annotation.VisibleForTesting
 import androidx.annotation.WorkerThread
+import androidx.core.net.toUri
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
 import kotlinx.coroutines.CoroutineDispatcher
@@ -53,6 +54,8 @@ import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.search.PdfBoxInitializer
+import com.tom_roush.pdfbox.pdmodel.PDDocument
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
@@ -97,6 +100,15 @@ class PdfDocumentRepository(
     private val contentResolver: ContentResolver = context.contentResolver
     private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
+    private val repairedDocumentDir by lazy {
+        File(appContext.cacheDir, "pdf-repairs").apply {
+            if (!exists() && !mkdirs()) {
+                Log.w(TAG, "Unable to create PDF repair cache at ${absolutePath}")
+            } else if (exists() && !isDirectory) {
+                Log.w(TAG, "PDF repair cache path is not a directory: ${absolutePath}")
+            }
+        }
+    }
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
@@ -124,6 +136,8 @@ class PdfDocumentRepository(
         }
     }
 
+    private var repairedDocumentFile: File? = null
+
     init {
         appContext.registerComponentCallbacks(componentCallbacks)
     }
@@ -132,10 +146,16 @@ class PdfDocumentRepository(
     suspend fun open(uri: Uri): PdfDocumentSession {
         return withContextGuard {
             closeSessionInternal()
+            repairedDocumentFile?.let { file ->
+                if (file.exists() && !file.delete()) {
+                    Log.w(TAG, "Unable to delete previous repaired PDF at ${file.absolutePath}")
+                }
+            }
+            repairedDocumentFile = null
             if (!validateDocumentUri(uri)) {
                 throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
             }
-            val pfd = try {
+            var activePfd = try {
                 contentResolver.openFileDescriptor(uri, "r")
             } catch (security: SecurityException) {
                 reportNonFatal(
@@ -147,11 +167,11 @@ class PdfDocumentRepository(
                 )
                 throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
             } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
-            val document = try {
-                pdfiumCore.newDocument(pfd)
+            val document: PdfDocument = try {
+                pdfiumCore.newDocument(activePfd)
             } catch (throwable: Throwable) {
                 try {
-                    pfd.close()
+                    activePfd.close()
                 } catch (_: IOException) {
                 }
                 Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
@@ -162,15 +182,44 @@ class PdfDocumentRepository(
                         "uri" to uri.toString()
                     )
                 )
-                throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
+                val repaired = attemptPdfRepair(uri)
+                    ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
+
+                val repairedPfd = try {
+                    ParcelFileDescriptor.open(repaired, ParcelFileDescriptor.MODE_READ_ONLY)
+                } catch (error: Exception) {
+                    throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, error)
+                }
+
+                val repairedDocument = try {
+                    pdfiumCore.newDocument(repairedPfd)
+                } catch (second: Throwable) {
+                    try {
+                        repairedPfd.close()
+                    } catch (_: IOException) {
+                    }
+                    Log.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                    reportNonFatal(
+                        second,
+                        mapOf(
+                            "stage" to "pdfiumNewDocumentRepair",
+                            "uri" to uri.toString()
+                        )
+                    )
+                    throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
+                }
+
+                repairedDocumentFile = repaired
+                activePfd = repairedPfd
+                repairedDocument
             }
             val pageCount = pdfiumCore.getPageCount(document)
             val session = PdfDocumentSession(
                 documentId = uri.toString(),
-                uri = uri,
+                uri = repairedDocumentFile?.toUri() ?: uri,
                 pageCount = pageCount,
                 document = document,
-                fileDescriptor = pfd
+                fileDescriptor = activePfd
             )
             openSession.value = session
             outlineNodes.value = parseDocumentOutline(session)
@@ -587,12 +636,80 @@ class PdfDocumentRepository(
             }
         }
         openSession.value = null
+        repairedDocumentFile?.let { file ->
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
+            }
+        }
+        repairedDocumentFile = null
     }
 
     @WorkerThread
     private fun updateRenderProgress(progress: PdfRenderProgress) {
         ensureWorkerThread()
         renderProgressState.value = progress
+    }
+
+    private suspend fun attemptPdfRepair(uri: Uri): File? {
+        if (uri.scheme == ContentResolver.SCHEME_FILE) {
+            val path = uri.path
+            if (path != null && path.contains("/pdf-repairs/")) {
+                return null
+            }
+        }
+
+        val pdfBoxReady = try {
+            PdfBoxInitializer.ensureInitialized(appContext)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to initialise PDFBox resources for repair", error)
+            false
+        }
+        if (!pdfBoxReady) {
+            return null
+        }
+
+        val repairDir = repairedDocumentDir
+        if (!repairDir.isDirectory) {
+            Log.w(TAG, "Cannot repair PDF; repair cache directory is unavailable at ${repairDir.absolutePath}")
+            return null
+        }
+
+        val input = try {
+            contentResolver.openInputStream(uri)
+        } catch (openError: Exception) {
+            Log.w(TAG, "Unable to open input stream for PDF repair", openError)
+            null
+        }
+        if (input == null) {
+            return null
+        }
+
+        val repairedFile = try {
+            File.createTempFile("repaired-", ".pdf", repairDir)
+        } catch (createError: IOException) {
+            Log.w(TAG, "Unable to create temporary file for PDF repair", createError)
+            try {
+                input.close()
+            } catch (_: IOException) {
+            }
+            return null
+        }
+
+        return input.use { stream ->
+            try {
+                PDDocument.load(stream).use { document ->
+                    document.save(repairedFile)
+                }
+                crashReporter?.logBreadcrumb("pdfium repair: ${uri}")
+                repairedFile
+            } catch (repairError: Exception) {
+                Log.w(TAG, "Unable to repair PDF via PdfBox", repairError)
+                if (repairedFile.exists() && !repairedFile.delete()) {
+                    Log.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
+                }
+                null
+            }
+        }
     }
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
