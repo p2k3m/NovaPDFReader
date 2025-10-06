@@ -2098,21 +2098,17 @@ private fun ThumbnailItem(
     val latestRender by rememberUpdatedState(renderPage)
 
     LaunchedEffect(documentId, pageIndex) {
-        val previous = thumbnail
         if (documentId == null) {
             thumbnail = null
-            if (previous != null && !previous.isRecycled) {
-                previous.recycle()
-            }
             return@LaunchedEffect
         }
         val rendered = withContext(Dispatchers.IO) {
             latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
         }
+        // As with the main page bitmaps we avoid recycling the previous thumbnail here to
+        // keep the draw pipeline stable. The DisposableEffect below cleans up once the
+        // composable leaves composition.
         thumbnail = rendered
-        if (previous != null && previous != rendered && !previous.isRecycled) {
-            previous.recycle()
-        }
     }
 
     DisposableEffect(documentId, pageIndex) {
@@ -2253,11 +2249,6 @@ private fun PdfPageItem(
         val widthPx = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
         LaunchedEffect(state.documentId, pageIndex, widthPx) {
             if (state.documentId == null) {
-                pageBitmap?.let { bitmap ->
-                    if (!bitmap.isRecycled) {
-                        bitmap.recycle()
-                    }
-                }
                 pageBitmap = null
                 pageSize = null
                 return@LaunchedEffect
@@ -2270,11 +2261,12 @@ private fun PdfPageItem(
                 requested to bitmap
             }
             pageSize = size
-            val previous = pageBitmap
+            // Avoid recycling the previous bitmap here. Doing so can race with Compose's
+            // draw pipeline and trigger "Canvas: trying to use a recycled bitmap" crashes
+            // on large documents while the next frame is being composed. We instead allow
+            // the old bitmap to be released once it falls out of scope or when the composable
+            // leaves the composition (see the DisposableEffect above).
             pageBitmap = rendered
-            if (previous != null && previous != rendered && !previous.isRecycled) {
-                previous.recycle()
-            }
             isLoading = false
         }
 
