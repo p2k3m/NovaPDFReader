@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.whenStarted
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.novapdf.reader.R
@@ -280,7 +281,16 @@ open class ReaderActivity : ComponentActivity() {
 
     @VisibleForTesting
     internal fun openDocumentForTest(uri: Uri) {
-        viewModel.openDocument(uri)
+        if (!useComposeUi) {
+            viewModel.openDocument(uri)
+            return
+        }
+
+        lifecycleScope.launch {
+            lifecycle.whenStarted {
+                viewModel.openDocument(uri)
+            }
+        }
     }
 
     @VisibleForTesting
