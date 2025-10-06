@@ -10,6 +10,7 @@ import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
 import org.gradle.api.tasks.TaskContainer
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
@@ -20,6 +21,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
@@ -74,6 +76,8 @@ val thousandPageFixtureUrlProvider = providers
     .orElse("")
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
+
+val isCiEnvironment = parseOptionalBoolean(System.getenv("CI")) ?: false
 
 android {
     namespace = "com.novapdf.reader"
@@ -152,10 +156,14 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs = listOf(
+        freeCompilerArgs = freeCompilerArgs + listOf(
             "-opt-in=kotlin.RequiresOptIn",
-            "-Xcontext-receivers"
+            "-Xcontext-receivers",
+            "-Xjsr305=strict",
+            "-Xjvm-default=all",
+            "-progressive"
         )
+        allWarningsAsErrors = isCiEnvironment
     }
 
     compileOptions {
@@ -244,8 +252,6 @@ val allowCiConnectedTests = parseOptionalBoolean(
         ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
 )
 
-val isCiEnvironment = parseOptionalBoolean(System.getenv("CI")) ?: false
-
 fun locateAndroidSdkDir(): File? {
     val localProperties = rootProject.file("local.properties")
     if (localProperties.exists()) {
@@ -265,6 +271,27 @@ fun locateAndroidSdkDir(): File? {
         .mapNotNull { key -> System.getenv(key)?.takeIf { it.isNotBlank() } }
         .map { path -> File(path) }
         .firstOrNull { it.exists() }
+}
+
+tasks.withType<KotlinCompile>().configureEach {
+    kotlinOptions {
+        if ("-Xjsr305=strict" !in freeCompilerArgs) {
+            freeCompilerArgs = freeCompilerArgs + listOf("-Xjsr305=strict")
+        }
+        if ("-Xjvm-default=all" !in freeCompilerArgs) {
+            freeCompilerArgs = freeCompilerArgs + listOf("-Xjvm-default=all")
+        }
+        if ("-progressive" !in freeCompilerArgs) {
+            freeCompilerArgs = freeCompilerArgs + listOf("-progressive")
+        }
+        allWarningsAsErrors = isCiEnvironment
+    }
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    if (isCiEnvironment && "-Werror" !in options.compilerArgs) {
+        options.compilerArgs.add("-Werror")
+    }
 }
 
 if (requireConnectedDevice != true) {

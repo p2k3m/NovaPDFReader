@@ -4,6 +4,7 @@ import org.gradle.StartParameter
 import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.tasks.compile.JavaCompile
 import java.io.File
 import java.util.Properties
 import java.util.concurrent.TimeUnit
@@ -49,6 +50,12 @@ plugins {
     id("androidx.baselineprofile")
 }
 
+val isCiEnvironment = providers.environmentVariable("CI")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
+
+val isCiBuild = isCiEnvironment.get()
+
 android {
     namespace = "com.novapdf.reader.baselineprofile"
     compileSdk = libs.findVersion("androidCompileSdk").get().requiredVersion.toInt()
@@ -66,6 +73,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs = freeCompilerArgs + listOf(
+            "-Xjsr305=strict",
+            "-Xjvm-default=all",
+            "-progressive"
+        )
+        allWarningsAsErrors = isCiBuild
     }
 
     buildTypes {
@@ -104,11 +117,7 @@ val allowCiConnectedTests = parseOptionalBoolean(
         ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
 )
 
-val isCiEnvironment = providers.environmentVariable("CI")
-    .map { it.equals("true", ignoreCase = true) }
-    .orElse(false)
-
-val skipConnectedTestsOnCi = isCiEnvironment.get() && allowCiConnectedTests != true && requireConnectedDevice != true
+val skipConnectedTestsOnCi = isCiBuild && allowCiConnectedTests != true && requireConnectedDevice != true
 
 dependencies {
     implementation(project(":app"))
@@ -187,6 +196,12 @@ val hasConnectedDeviceProvider = providers.provider {
     }
 }
 
+tasks.withType<JavaCompile>().configureEach {
+    if (isCiBuild && "-Werror" !in options.compilerArgs) {
+        options.compilerArgs.add("-Werror")
+    }
+}
+
 val hasConnectedDevice by lazy { hasConnectedDeviceProvider.get() }
 
 if (baselineTasksRequested) {
@@ -235,7 +250,7 @@ val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
     }
 
     doLast {
-        if (isCiEnvironment.get()) {
+        if (isCiBuild) {
             logger.warn(
                 "Skipping emulator acceleration verification because the task is running " +
                     "in a CI environment without hardware acceleration access."
