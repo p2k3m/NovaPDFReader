@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 
 internal object TestDocumentFixtures {
     private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
+    private const val HARNESS_CACHE_DIRECTORY = "screenshot-harness"
     private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
     private const val THOUSAND_PAGE_COUNT = 1_000
     private const val THOUSAND_PAGE_ASSET_BASE64 = "thousand_page_fixture.base64"
@@ -41,7 +42,8 @@ internal object TestDocumentFixtures {
 
             val orderedCandidates = storageCandidates.sortedByDescending { it.preferred }
             locateReusableFixture(orderedCandidates)?.let { reusable ->
-                return@withContext reusable.toUri()
+                val accessible = ensureAccessibleForApp(context, reusable)
+                return@withContext accessible.toUri()
             }
 
             val destinationDirectory = orderedCandidates
@@ -73,7 +75,8 @@ internal object TestDocumentFixtures {
                 TAG,
                 "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)"
             )
-            destination.toUri()
+            val accessible = ensureAccessibleForApp(context, destination)
+            accessible.toUri()
         }
 
     private fun resolveStorageCandidates(context: Context): List<StorageCandidate> {
@@ -124,6 +127,63 @@ internal object TestDocumentFixtures {
         }
 
         return null
+    }
+
+    private fun ensureAccessibleForApp(context: Context, file: File): File {
+        val packageName = context.packageName
+        val canonicalPath = runCatching { file.canonicalPath }.getOrNull()
+        if (canonicalPath != null && canonicalPath.contains("/$packageName/")) {
+            return file
+        }
+
+        val targetDirectories = buildList {
+            add(File(context.cacheDir, HARNESS_CACHE_DIRECTORY))
+            context.filesDir?.let { add(File(it, HARNESS_CACHE_DIRECTORY)) }
+            context.externalCacheDir?.let { add(File(it, HARNESS_CACHE_DIRECTORY)) }
+            context.getExternalFilesDir(null)?.let { parent ->
+                add(File(parent, HARNESS_CACHE_DIRECTORY))
+            }
+        }
+
+        targetDirectories.forEach { directory ->
+            if (!directory.exists() && !directory.mkdirs()) {
+                Log.w(TAG, "Unable to prepare harness cache directory at ${directory.absolutePath}")
+                return@forEach
+            }
+
+            val destination = File(directory, THOUSAND_PAGE_CACHE)
+            if (copyFixture(file, destination)) {
+                Log.i(
+                    TAG,
+                    "Relocated thousand-page PDF to ${destination.absolutePath} for application accessibility"
+                )
+                return destination
+            }
+        }
+
+        Log.w(
+            TAG,
+            "Unable to relocate thousand-page PDF into application storage; using ${file.absolutePath}"
+        )
+        return file
+    }
+
+    private fun copyFixture(source: File, destination: File): Boolean {
+        return try {
+            source.inputStream().use { input ->
+                destination.outputStream().buffered().use { output ->
+                    input.copyTo(output)
+                    output.flush()
+                }
+            }
+            destination.length() > 0L && validateThousandPagePdf(destination)
+        } catch (error: IOException) {
+            Log.w(TAG, "Unable to copy thousand-page PDF to ${destination.absolutePath}", error)
+            if (destination.exists() && !destination.delete()) {
+                Log.w(TAG, "Failed to delete incomplete thousand-page PDF at ${destination.absolutePath}")
+            }
+            false
+        }
     }
 
     private fun findValidFixture(candidate: StorageCandidate, logReuse: Boolean = true): File? {
