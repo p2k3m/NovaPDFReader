@@ -15,6 +15,17 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
     }
+    versionCatalogs {
+        create("libs") {
+            val compileSdk = providers.gradleProperty("android.compileSdk").map(String::trim).get()
+            val minSdk = providers.gradleProperty("android.minSdk").map(String::trim).get()
+            val targetSdk = providers.gradleProperty("android.targetSdk").map(String::trim).get()
+
+            version("androidCompileSdk", compileSdk)
+            version("androidMinSdk", minSdk)
+            version("androidTargetSdk", targetSdk)
+        }
+    }
 }
 
 rootProject.name = "NovaPDFReader"

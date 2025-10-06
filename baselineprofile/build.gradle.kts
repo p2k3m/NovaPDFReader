@@ -2,6 +2,7 @@ import com.android.build.api.dsl.TestExtension
 import com.android.build.api.variant.TestAndroidComponentsExtension
 import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
+import org.gradle.api.artifacts.VersionCatalogsExtension
 import java.io.File
 import java.util.Properties
 import java.util.concurrent.TimeUnit
@@ -39,6 +40,8 @@ if (!rootLocalProperties.exists() && configuredAndroidSdk == null) {
     }
 }
 
+val libs = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
+
 plugins {
     id("com.android.test")
     id("org.jetbrains.kotlin.android")
@@ -47,11 +50,11 @@ plugins {
 
 android {
     namespace = "com.novapdf.reader.baselineprofile"
-    compileSdk = 35
+    compileSdk = libs.findVersion("androidCompileSdk").get().requiredVersion.toInt()
 
     defaultConfig {
-        minSdk = 26
-        targetSdk = 35
+        minSdk = libs.findVersion("androidMinSdk").get().requiredVersion.toInt()
+        targetSdk = libs.findVersion("androidTargetSdk").get().requiredVersion.toInt()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

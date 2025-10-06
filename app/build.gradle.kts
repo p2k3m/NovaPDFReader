@@ -19,6 +19,7 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.util.concurrent.TimeUnit
+import org.gradle.api.artifacts.VersionCatalogsExtension
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
@@ -72,15 +73,17 @@ val thousandPageFixtureUrlProvider = providers
     .orElse(providers.gradleProperty("thousandPageFixtureUrl"))
     .orElse("")
 
+val libs = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
+
 android {
     namespace = "com.novapdf.reader"
     testNamespace = "$resolvedApplicationId.test"
-    compileSdk = 35
+    compileSdk = libs.findVersion("androidCompileSdk").get().requiredVersion.toInt()
 
     defaultConfig {
         applicationId = resolvedApplicationId
-        minSdk = 26
-        targetSdk = 35
+        minSdk = libs.findVersion("androidMinSdk").get().requiredVersion.toInt()
+        targetSdk = libs.findVersion("androidTargetSdk").get().requiredVersion.toInt()
         versionCode = 1
         versionName = "1.0.0"
 
