@@ -4,10 +4,10 @@ import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.Action
 import org.gradle.api.GradleException
 import org.gradle.BuildResult
+import org.gradle.StartParameter
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
-import org.gradle.api.execution.TaskExecutionGraph
 import org.gradle.api.tasks.TaskContainer
 import org.gradle.api.tasks.TaskProvider
 import org.gradle.api.tasks.testing.Test
@@ -283,107 +283,118 @@ if (requireConnectedDevice != true) {
                 }
             }
         }
-    } else {
-        val sdkDirectory = locateAndroidSdkDir()
-        if (sdkDirectory == null) {
-            afterEvaluate {
-                tasks.namedOrNull<Task>("connectedAndroidTest")?.configure {
-                    setDependsOn(emptyList<Any>())
-                    doFirst {
-                        logger.warn(
-                            "Skipping connectedAndroidTest because the Android SDK was not found. " +
-                                "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
-                        )
-                    }
-                }
-            }
         } else {
-            val platformTools = File(sdkDirectory, "platform-tools")
-            val adbExecutable = sequenceOf("adb", "adb.exe")
-                .map { executable -> File(platformTools, executable) }
-                .firstOrNull { it.exists() }
-
-            val hasConnectedDevice by lazy {
-                when {
-                    adbExecutable == null -> {
-                        logger.warn("ADB executable not found. Skipping connected Android tests.")
-                        false
-                    }
-                    !adbExecutable.exists() -> {
-                        logger.warn(
-                            "ADB executable not found at ${adbExecutable.absolutePath}. Skipping connected Android tests."
-                        )
-                        false
-                    }
-                    else -> {
-                        runCatching {
-                            val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
-                                .redirectErrorStream(true)
-                                .start()
-                            if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                                process.destroy()
-                                logger.warn(
-                                    "Timed out while checking for connected Android devices. Skipping connected Android tests."
-                                )
-                                false
-                            } else {
-                                process.inputStream.bufferedReader().useLines { lines ->
-                                    lines.drop(1).any { line ->
-                                        val trimmed = line.trim()
-                                        val isDeviceListing = '\t' in line
-                                        isDeviceListing &&
-                                            trimmed.isNotEmpty() &&
-                                            !trimmed.endsWith("offline", ignoreCase = true)
-                                    }
-                                }
-                            }
-                        }.getOrElse { error ->
+            val sdkDirectory = locateAndroidSdkDir()
+            if (sdkDirectory == null) {
+                afterEvaluate {
+                    tasks.namedOrNull<Task>("connectedAndroidTest")?.configure {
+                        setDependsOn(emptyList<Any>())
+                        doFirst {
                             logger.warn(
-                                "Unable to query connected Android devices via adb. Skipping connected Android tests.",
-                                error
+                                "Skipping connectedAndroidTest because the Android SDK was not found. " +
+                                    "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
                             )
-                            false
                         }
                     }
                 }
-            }
+            } else {
+                val platformTools = File(sdkDirectory, "platform-tools")
+                val adbExecutable = sequenceOf("adb", "adb.exe")
+                    .map { executable -> File(platformTools, executable) }
+                    .firstOrNull { it.exists() }
 
-            tasks.matching { task ->
-                task.name == "connectedAndroidTest" ||
-                    (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
-            }.configureEach {
-                onlyIf {
-                    val hasDevice = hasConnectedDevice
-                    if (!hasDevice) {
-                        logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                if (gradle.startParameter.requestsConnectedAndroidTests()) {
+                    val hasConnectedDevice by lazy {
+                        when {
+                            adbExecutable == null -> {
+                                logger.warn("ADB executable not found. Skipping connected Android tests.")
+                                false
+                            }
+                            !adbExecutable.exists() -> {
+                                logger.warn(
+                                    "ADB executable not found at ${adbExecutable.absolutePath}. Skipping connected Android tests."
+                                )
+                                false
+                            }
+                            else -> {
+                                runCatching {
+                                    val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
+                                        .redirectErrorStream(true)
+                                        .start()
+                                    if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                                        process.destroy()
+                                        logger.warn(
+                                            "Timed out while checking for connected Android devices. Skipping connected Android tests."
+                                        )
+                                        false
+                                    } else {
+                                        process.inputStream.bufferedReader().useLines { lines ->
+                                            lines.drop(1).any { line ->
+                                                val trimmed = line.trim()
+                                                val isDeviceListing = '\t' in line
+                                                isDeviceListing &&
+                                                    trimmed.isNotEmpty() &&
+                                                    !trimmed.endsWith("offline", ignoreCase = true)
+                                            }
+                                        }
+                                    }
+                                }.getOrElse { error ->
+                                    logger.warn(
+                                        "Unable to query connected Android devices via adb. Skipping connected Android tests.",
+                                        error
+                                    )
+                                    false
+                                }
+                            }
+                        }
                     }
-                    hasDevice
-                }
-            }
 
-            tasks.matching { task ->
-                task.name.contains("Benchmark") &&
-                    (task.name.startsWith("assemble", ignoreCase = true) ||
-                        task.name.startsWith("bundle", ignoreCase = true) ||
-                        task.name.startsWith("package", ignoreCase = true))
-            }.configureEach {
-                onlyIf {
-                    val hasDevice = hasConnectedDevice
-                    if (!hasDevice) {
-                        logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+                    tasks.matching { task ->
+                        task.name == "connectedAndroidTest" ||
+                            (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
+                    }.configureEach {
+                        onlyIf {
+                            val hasDevice = hasConnectedDevice
+                            if (!hasDevice) {
+                                logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                            }
+                            hasDevice
+                        }
                     }
-                    hasDevice
-                }
-            }
 
-            androidComponents.beforeVariants { variantBuilder ->
-                val buildTypeName = variantBuilder.buildType ?: ""
-                if (buildTypeName.contains("benchmark", ignoreCase = true) && !hasConnectedDevice) {
-                    variantBuilder.enableUnitTest = false
+                    tasks.matching { task ->
+                        task.name.contains("Benchmark") &&
+                            (task.name.startsWith("assemble", ignoreCase = true) ||
+                                task.name.startsWith("bundle", ignoreCase = true) ||
+                                task.name.startsWith("package", ignoreCase = true))
+                    }.configureEach {
+                        onlyIf {
+                            val hasDevice = hasConnectedDevice
+                            if (!hasDevice) {
+                                logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+                            }
+                            hasDevice
+                        }
+                    }
+
+                    androidComponents.beforeVariants { variantBuilder ->
+                        val buildTypeName = variantBuilder.buildType ?: ""
+                        if (buildTypeName.contains("benchmark", ignoreCase = true) && !hasConnectedDevice) {
+                            variantBuilder.enableUnitTest = false
+                    }
                 }
             }
         }
     }
+}
+
+val connectedTestsConfigurationCacheReason =
+    "Connected Android tests query adb during configuration."
+
+tasks.matching { task ->
+    task.name.startsWith("connected", ignoreCase = true) && task.name.contains("AndroidTest")
+}.configureEach {
+    notCompatibleWithConfigurationCache(connectedTestsConfigurationCacheReason)
 }
 
 val requiredInstrumentationTests = listOf(
@@ -456,29 +467,25 @@ fun ensureInstrumentationReportsGenerated() {
     }
 }
 
-gradle.taskGraph.whenReady(object : Action<TaskExecutionGraph> {
-    override fun execute(taskGraph: TaskExecutionGraph) {
-        val connectedAndroidTestsRequested = taskGraph.allTasks.any { task ->
-            task.project == project &&
-                task.name.contains("AndroidTest", ignoreCase = true) &&
-                task.name.contains("connected", ignoreCase = true)
-        }
-
-        if (!connectedAndroidTestsRequested) {
-            return
-        }
-
-        gradle.buildFinished(object : Action<BuildResult> {
-            override fun execute(result: BuildResult) {
-                if (result.failure != null) {
-                    return
-                }
-
-                ensureInstrumentationReportsGenerated()
-            }
-        })
+fun StartParameter.requestsConnectedAndroidTests(): Boolean =
+    taskNames.any { taskPath ->
+        val taskName = taskPath.substringAfterLast(":")
+        taskName.contains("connected", ignoreCase = true) &&
+            (taskName.contains("AndroidTest", ignoreCase = true) ||
+                taskName.contains("Check", ignoreCase = true))
     }
-})
+
+if (gradle.startParameter.requestsConnectedAndroidTests()) {
+    gradle.buildFinished(object : Action<BuildResult> {
+        override fun execute(result: BuildResult) {
+            if (result.failure != null) {
+                return
+            }
+
+            ensureInstrumentationReportsGenerated()
+        }
+    })
+}
 
 tasks.register("synthesizeConnectedAndroidTestReports") {
     group = "verification"
