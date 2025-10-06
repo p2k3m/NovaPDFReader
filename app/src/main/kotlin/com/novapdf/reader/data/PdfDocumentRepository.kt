@@ -42,14 +42,18 @@ import android.print.PrintDocumentInfo
 import com.novapdf.reader.model.PdfOutlineNode
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
+import java.util.regex.Pattern
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.io.DEFAULT_BUFFER_SIZE
+import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import com.novapdf.reader.logging.CrashReporter
@@ -59,6 +63,9 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
+private const val PRE_REPAIR_MIN_SIZE_BYTES = 2L * 1024L * 1024L
+private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
+private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val TAG = "PdfDocumentRepository"
 
 class PdfOpenException(
@@ -155,14 +162,19 @@ class PdfDocumentRepository(
             if (!validateDocumentUri(uri)) {
                 throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
             }
+            val preparedFile = prepareLargeDocumentIfNeeded(uri)
+            if (preparedFile != null) {
+                repairedDocumentFile = preparedFile
+            }
+            val sourceUri = repairedDocumentFile?.toUri() ?: uri
             var activePfd = try {
-                contentResolver.openFileDescriptor(uri, "r")
+                openParcelFileDescriptor(sourceUri)
             } catch (security: SecurityException) {
                 reportNonFatal(
                     security,
                     mapOf(
                         "stage" to "openFileDescriptor",
-                        "uri" to uri.toString()
+                        "uri" to sourceUri.toString()
                     )
                 )
                 throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
@@ -179,7 +191,7 @@ class PdfDocumentRepository(
                     throwable,
                     mapOf(
                         "stage" to "pdfiumNewDocument",
-                        "uri" to uri.toString()
+                        "uri" to sourceUri.toString()
                     )
                 )
                 val repaired = attemptPdfRepair(uri)
@@ -209,6 +221,9 @@ class PdfDocumentRepository(
                     throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
                 }
 
+                if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
+                    cleanedUpRepairedFile(repairedDocumentFile!!)
+                }
                 repairedDocumentFile = repaired
                 activePfd = repairedPfd
                 repairedDocument
@@ -650,6 +665,102 @@ class PdfDocumentRepository(
         renderProgressState.value = progress
     }
 
+    private suspend fun prepareLargeDocumentIfNeeded(uri: Uri): File? {
+        if (uri.scheme == ContentResolver.SCHEME_FILE) {
+            val path = uri.path
+            if (path != null && path.contains("/pdf-repairs/")) {
+                return null
+            }
+        }
+
+        val size = resolveDocumentSize(uri)
+        if (size != null && size < PRE_REPAIR_MIN_SIZE_BYTES) {
+            return null
+        }
+
+        if (!detectOversizedPageTree(uri, size)) {
+            return null
+        }
+
+        Log.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
+        return attemptPdfRepair(uri)
+    }
+
+    private fun detectOversizedPageTree(uri: Uri, sizeHint: Long?): Boolean {
+        val buffer = readBytesForPageTreeInspection(uri, sizeHint) ?: return false
+        val contents = try {
+            String(buffer, Charsets.ISO_8859_1)
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to decode PDF for page tree inspection", error)
+            return false
+        }
+
+        val matcher = KIDS_ARRAY_PATTERN.matcher(contents)
+        while (matcher.find()) {
+            val section = matcher.group(1) ?: continue
+            val referenceMatcher = KID_REFERENCE_PATTERN.matcher(section)
+            var count = 0
+            while (referenceMatcher.find()) {
+                count++
+                if (count > PRE_REPAIR_MAX_KIDS_PER_ARRAY) {
+                    Log.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun readBytesForPageTreeInspection(uri: Uri, sizeHint: Long?): ByteArray? {
+        val limit = when {
+            sizeHint != null && sizeHint in 1L..PRE_REPAIR_SCAN_LIMIT_BYTES -> sizeHint.toInt()
+            else -> PRE_REPAIR_SCAN_LIMIT_BYTES.toInt()
+        }.coerceAtLeast(1)
+
+        return try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val output = ByteArrayOutputStream(limit)
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var remaining = limit
+                while (remaining > 0) {
+                    val read = stream.read(buffer, 0, min(buffer.size, remaining))
+                    if (read == -1) break
+                    output.write(buffer, 0, read)
+                    remaining -= read
+                }
+                if (output.size() == 0) {
+                    null
+                } else {
+                    output.toByteArray()
+                }
+            }
+        } catch (error: SecurityException) {
+            Log.w(TAG, "Unable to inspect PDF for page tree analysis", error)
+            null
+        } catch (error: IOException) {
+            Log.w(TAG, "I/O error while inspecting PDF for page tree analysis", error)
+            null
+        }
+    }
+
+    private fun openParcelFileDescriptor(uri: Uri): ParcelFileDescriptor? {
+        return when (uri.scheme?.lowercase(Locale.US)) {
+            ContentResolver.SCHEME_FILE -> {
+                val path = uri.path ?: return null
+                val file = File(path)
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            }
+
+            else -> contentResolver.openFileDescriptor(uri, "r")
+        }
+    }
+
+    private fun cleanedUpRepairedFile(file: File) {
+        if (file.exists() && !file.delete()) {
+            Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
+        }
+    }
+
     private suspend fun attemptPdfRepair(uri: Uri): File? {
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
             val path = uri.path
@@ -892,6 +1003,8 @@ class PdfDocumentRepository(
 
     companion object {
         private const val DEFAULT_PRINT_BUFFER_SIZE = 16 * 1024
+        private val KIDS_ARRAY_PATTERN: Pattern = Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
+        private val KID_REFERENCE_PATTERN: Pattern = Pattern.compile("\\d+\\s+\\d+\\s+R")
     }
 
     private abstract inner class BitmapCache {
