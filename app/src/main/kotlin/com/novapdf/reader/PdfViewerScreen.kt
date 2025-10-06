@@ -2113,11 +2113,10 @@ private fun ThumbnailItem(
 
     DisposableEffect(documentId, pageIndex) {
         onDispose {
-            thumbnail?.let { bitmap ->
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
-                }
-            }
+            // Avoid recycling thumbnails directly. Compose can issue a final draw after the
+            // composable leaves the composition, and calling Bitmap.recycle() here would crash
+            // with "Canvas: trying to use a recycled bitmap" on large documents. Clearing the
+            // reference allows the bitmap to be GC'd once it is no longer in use.
             thumbnail = null
         }
     }
