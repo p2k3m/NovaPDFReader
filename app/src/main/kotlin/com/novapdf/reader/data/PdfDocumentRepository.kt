@@ -365,26 +365,41 @@ class PdfDocumentRepository(
     }
 
     private fun resolveMimeType(uri: Uri): String? {
-        contentResolver.getType(uri)?.let { return it }
-        if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val extensionFromUrl = MimeTypeMap.getFileExtensionFromUrl(uri.toString())?.lowercase(Locale.US)
-            val extension = when {
-                !extensionFromUrl.isNullOrEmpty() -> extensionFromUrl
-                else -> uri.path?.substringAfterLast('.', missingDelimiterValue = "")?.lowercase(Locale.US)
-            }
-            if (!extension.isNullOrEmpty()) {
-                MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.let { return it }
-                if (extension == "pdf") {
-                    Log.i(TAG, "Falling back to manual PDF MIME type detection for $uri")
-                    return "application/pdf"
+        val reported = runCatching { contentResolver.getType(uri) }.getOrNull()
+        val extension = when (uri.scheme?.lowercase(Locale.US)) {
+            ContentResolver.SCHEME_FILE -> {
+                val extensionFromUrl = MimeTypeMap
+                    .getFileExtensionFromUrl(uri.toString())
+                    ?.lowercase(Locale.US)
+                when {
+                    !extensionFromUrl.isNullOrEmpty() -> extensionFromUrl
+                    else -> uri.path
+                        ?.substringAfterLast('.', missingDelimiterValue = "")
+                        ?.lowercase(Locale.US)
                 }
+            }
+            else -> null
+        }
+
+        val normalized = normalizedMimeType(reported, extension)
+
+        if (normalized == null && uri.scheme == ContentResolver.SCHEME_FILE) {
+            if (!extension.isNullOrEmpty()) {
                 Log.w(TAG, "Unknown MIME type for file extension .$extension from $uri")
             } else {
                 Log.w(TAG, "Unable to resolve file extension for $uri")
             }
+        } else if (
+            normalized == "application/pdf" &&
+            reported?.lowercase(Locale.US)?.contains("pdf") != true &&
+            extension == "pdf"
+        ) {
+            Log.i(TAG, "Falling back to manual PDF MIME type detection for $uri")
         }
-        return null
+
+        return normalized
     }
+
 
     private fun resolveDocumentSize(uri: Uri): Long? {
         return when (uri.scheme?.lowercase(Locale.US)) {
@@ -881,5 +896,38 @@ class PdfDocumentRepository(
         override fun cleanUpInternal() {
             // LruCache does not require explicit cleanup.
         }
+    }
+}
+
+@VisibleForTesting
+internal fun normalizedMimeType(
+    reportedMimeType: String?,
+    fileExtension: String?,
+): String? {
+    val reported = reportedMimeType?.lowercase(Locale.US)?.trim()
+    if (!reported.isNullOrEmpty()) {
+        if (reported.contains("pdf")) {
+            return "application/pdf"
+        }
+        if (reported != "application/octet-stream") {
+            return reported
+        }
+    }
+
+    val extension = fileExtension?.lowercase(Locale.US)?.trim()
+    if (!extension.isNullOrEmpty()) {
+        if (extension == "pdf") {
+            return "application/pdf"
+        }
+        MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(extension)
+            ?.lowercase(Locale.US)
+            ?.let { return it }
+    }
+
+    return if (reported == "application/octet-stream") {
+        null
+    } else {
+        reported
     }
 }
