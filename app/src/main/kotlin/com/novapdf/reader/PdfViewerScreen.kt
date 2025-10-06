@@ -1968,16 +1968,18 @@ private fun PdfPager(
             reverse = true
         )
 
-        ThumbnailStrip(
-            state = state,
-            lazyListState = lazyListState,
-            renderPage = latestRenderPage,
-            onToggleBookmark = latestBookmarkToggle,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 24.dp)
-        )
+        if (state.pageCount in 1..LARGE_DOCUMENT_PAGE_THRESHOLD) {
+            ThumbnailStrip(
+                state = state,
+                lazyListState = lazyListState,
+                renderPage = latestRenderPage,
+                onToggleBookmark = latestBookmarkToggle,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp)
+            )
+        }
     }
 }
 
