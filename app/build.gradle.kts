@@ -2,14 +2,22 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.Action
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.BuildResult
 import org.gradle.StartParameter
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
+import org.gradle.api.file.ArchiveOperations
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
 import org.gradle.api.tasks.TaskContainer
 import org.gradle.api.tasks.TaskProvider
+import org.gradle.api.tasks.Classpath
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
@@ -18,10 +26,12 @@ import java.io.File
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.format.DateTimeFormatter
+import java.util.LinkedHashSet
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import javax.inject.Inject
 
 fun Project.resolveSigningCredential(name: String, default: String? = null): String =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
@@ -53,6 +63,115 @@ inline fun <reified T : Task> TaskContainer.namedOrNull(name: String): TaskProvi
     } catch (_: UnknownTaskException) {
         null
     }
+
+abstract class VerifyPdfiumNativeLibrariesTask : DefaultTask() {
+
+    @get:Input
+    abstract val pdfiumCoordinate: Property<String>
+
+    @get:Input
+    abstract val configuredAbis: ListProperty<String>
+
+    @get:Classpath
+    abstract val pdfiumArtifact: ConfigurableFileCollection
+
+    @get:Inject
+    protected abstract val archiveOperations: ArchiveOperations
+
+    @TaskAction
+    fun verify() {
+        val coordinate = pdfiumCoordinate.get()
+        val artifactFiles = pdfiumArtifact.files
+        if (artifactFiles.size != 1) {
+            throw GradleException(
+                "Expected a single artifact for $coordinate but found ${artifactFiles.size}."
+            )
+        }
+
+        val artifact = artifactFiles.single()
+        val libsByAbi = mutableMapOf<String, MutableSet<String>>()
+        archiveOperations.zipTree(artifact).visit {
+            if (!isDirectory) {
+                val segments = path.split('/')
+                if (segments.size >= 3 && segments[0] == "jni" && segments.last().endsWith(".so")) {
+                    val abi = segments[1]
+                    libsByAbi.getOrPut(abi) { sortedSetOf() }.add(segments.last())
+                }
+            }
+        }
+
+        if (libsByAbi.isEmpty()) {
+            throw GradleException(
+                "Pdfium artifact $coordinate does not contain any native libraries under jni/."
+            )
+        }
+
+        val configuredAbisSet = LinkedHashSet(configuredAbis.getOrElse(emptyList()))
+        val effectiveAbis: Set<String> = if (configuredAbisSet.isEmpty()) {
+            libsByAbi.keys.toSortedSet()
+        } else {
+            configuredAbisSet
+        }
+
+        if (effectiveAbis.isEmpty()) {
+            throw GradleException(
+                "Unable to determine the set of ABIs to verify for $coordinate."
+            )
+        }
+
+        val missingAbis = effectiveAbis - libsByAbi.keys
+        if (missingAbis.isNotEmpty()) {
+            throw GradleException(
+                "Pdfium artifact $coordinate is missing native libraries for ABIs: " +
+                    missingAbis.sorted().joinToString(", ")
+            )
+        }
+
+        val orderedAbis = if (configuredAbisSet.isNotEmpty()) {
+            configuredAbisSet.toList()
+        } else {
+            effectiveAbis.toMutableList().sorted()
+        }
+
+        val referenceAbi = orderedAbis.first()
+        val expectedLibs = libsByAbi.getValue(referenceAbi)
+        val mismatches = orderedAbis.drop(1).mapNotNull { abi ->
+            val libs = libsByAbi.getValue(abi)
+            val missing = expectedLibs - libs
+            val extra = libs - expectedLibs
+            if (missing.isEmpty() && extra.isEmpty()) {
+                null
+            } else {
+                buildString {
+                    append(" - $abi: ")
+                    val parts = mutableListOf<String>()
+                    if (missing.isNotEmpty()) {
+                        parts += "missing ${missing.joinToString(", ")}"
+                    }
+                    if (extra.isNotEmpty()) {
+                        parts += "extra ${extra.joinToString(", ")}"
+                    }
+                    append(parts.joinToString("; "))
+                }
+            }
+        }
+
+        if (mismatches.isNotEmpty()) {
+            val message = buildString {
+                appendLine("Pdfium native library mismatch detected for $coordinate.")
+                appendLine("Expected libraries for $referenceAbi: ${expectedLibs.joinToString(", ")}")
+                mismatches.forEach { appendLine(it) }
+            }
+            throw GradleException(message.trim())
+        }
+
+        logger.info(
+            "Verified Pdfium native libraries for $coordinate across ABIs: " +
+                orderedAbis.joinToString(", ") +
+                " (libs: ${expectedLibs.joinToString(", ")})"
+        )
+    }
+}
 
 plugins {
     alias(libs.plugins.android.application)
@@ -225,6 +344,36 @@ val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 val androidComponents = extensions.getByType<ApplicationAndroidComponentsExtension>()
 
 val targetProject = project
+
+val configuredAbisSnapshot: LinkedHashSet<String> = run {
+    val explicitAbis = (findProperty("novapdf.nativeAbis") as? String)
+        ?.split(',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+
+    if (!explicitAbis.isNullOrEmpty()) {
+        return@run LinkedHashSet(explicitAbis)
+    }
+
+    val ndkFilters = androidExtension.defaultConfig.ndk.abiFilters
+    if (ndkFilters.isNotEmpty()) {
+        return@run LinkedHashSet(ndkFilters)
+    }
+
+    val splitFilters = runCatching {
+        val abiSplit = androidExtension.splits.abi
+        val method = abiSplit.javaClass.methods.firstOrNull {
+            it.name == "getApplicableFilters" && it.parameterCount == 0
+        }
+        @Suppress("UNCHECKED_CAST")
+        (method?.invoke(abiSplit) as? Collection<Any?>)
+            ?.mapNotNull { it?.toString() }
+    }.getOrNull()
+
+    LinkedHashSet(splitFilters ?: emptyList())
+}
+
+val pdfiumDependencyProvider = versionCatalog.findLibrary("pdfium.android").get()
 
 fun parseOptionalBoolean(raw: String?): Boolean? {
     val normalized = raw?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
@@ -683,6 +832,41 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     baselineProfileProject?.let { baselineProfile(it) }
+}
+
+val pdfiumDependency = pdfiumDependencyProvider.get()
+val pdfiumModule = pdfiumDependency.module
+val pdfiumVersion = pdfiumDependency.versionConstraint.requiredVersion
+val pdfiumCoordinateNotation = buildString {
+    append(pdfiumModule.group)
+    append(":")
+    append(pdfiumModule.name)
+    if (!pdfiumVersion.isNullOrBlank()) {
+        append(":")
+        append(pdfiumVersion)
+    }
+}
+
+val pdfiumVerificationConfiguration = configurations.detachedConfiguration(
+    dependencies.create(pdfiumCoordinateNotation)
+).apply {
+    isTransitive = false
+}
+
+val verifyPdfiumNativeLibraries = tasks.register<VerifyPdfiumNativeLibrariesTask>("verifyPdfiumNativeLibraries") {
+    group = "verification"
+    description = "Ensures Pdfium native libraries are packaged for all configured ABIs."
+    pdfiumCoordinate.set(pdfiumCoordinateNotation)
+    configuredAbis.set(configuredAbisSnapshot.toList())
+    pdfiumArtifact.setFrom(pdfiumVerificationConfiguration)
+}
+
+tasks.namedOrNull<Task>("preBuild")?.configure {
+    dependsOn(verifyPdfiumNativeLibraries)
+}
+
+tasks.namedOrNull<Task>("check")?.configure {
+    dependsOn(verifyPdfiumNativeLibraries)
 }
 
 kotlin {
