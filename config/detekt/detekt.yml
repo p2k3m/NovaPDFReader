@@ -1,0 +1,68 @@
+build:
+  maxIssues: 0
+
+config:
+  validation: true
+  warningsAsErrors: true
+
+complexity:
+  active: true
+  LongMethod:
+    active: false
+  LongParameterList:
+    active: false
+  NestedBlockDepth:
+    active: false
+  TooManyFunctions:
+    active: false
+  LargeClass:
+    active: false
+  CyclomaticComplexMethod:
+    active: false
+  CognitiveComplexMethod:
+    active: false
+  ComplexCondition:
+    active: false
+
+style:
+  active: true
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    active: false
+  WildcardImport:
+    active: false
+  ReturnCount:
+    active: false
+  ThrowsCount:
+    active: false
+  UseCheckOrError:
+    active: false
+  UnusedPrivateMember:
+    active: false
+  LoopWithTooManyJumpStatements:
+    active: false
+  UnusedParameter:
+    active: false
+  NewLineAtEndOfFile:
+    active: false
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: false
+  SwallowedException:
+    active: false
+  InstanceOfCheckForException:
+    active: false
+
+naming:
+  active: true
+  FunctionNaming:
+    active: false
+  TopLevelPropertyNaming:
+    active: false
+  InvalidPackageDeclaration:
+    active: false
+  MatchingDeclarationName:
+    active: false
