@@ -15,7 +15,9 @@ internal fun writableStorageCandidates(context: Context): List<File> {
         context.externalCacheDirs?.forEach { dir -> dir?.let(::add) }
         context.getExternalFilesDir(null)?.let(::add)
         context.getExternalFilesDirs(null)?.forEach { dir -> dir?.let(::add) }
-        context.externalMediaDirs?.forEach { dir -> dir?.let(::add) }
+        @Suppress("DEPRECATION")
+        val externalMediaDirectories = context.externalMediaDirs
+        externalMediaDirectories?.forEach { dir -> dir?.let(::add) }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             context.dataDir?.let(::add)
         }
