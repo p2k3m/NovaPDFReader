@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude caches and remote PDFs that can be re-downloaded. -->
+    <exclude domain="root" path="cache/" />
+    <exclude domain="file" path="remote_pdfs/" />
+</full-backup-content>
