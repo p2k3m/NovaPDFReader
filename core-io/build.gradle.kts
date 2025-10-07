@@ -1,3 +1,5 @@
+import kotlinx.kover.gradle.plugin.dsl.AggregationType
+import kotlinx.kover.gradle.plugin.dsl.MetricType
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.VersionCatalogsExtension
 
@@ -6,6 +8,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kover)
 }
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
@@ -49,4 +52,29 @@ dependencies {
 
 kotlin {
     jvmToolchain(17)
+}
+
+koverReport {
+    defaults {
+        verify {
+            rule("Core IO line coverage") {
+                bound {
+                    minValue = 75
+                    metric = MetricType.LINE
+                    aggregation = AggregationType.COVERED_PERCENTAGE
+                }
+            }
+            rule("Core IO branch coverage") {
+                bound {
+                    minValue = 55
+                    metric = MetricType.BRANCH
+                    aggregation = AggregationType.COVERED_PERCENTAGE
+                }
+            }
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(tasks.named("koverVerify"))
 }

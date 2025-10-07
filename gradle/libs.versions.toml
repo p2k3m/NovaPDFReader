@@ -29,6 +29,7 @@ junit4 = "4.13.2"
 junitJupiter = "5.10.3"
 kotlin = "1.9.24"
 ksp = "1.9.24-1.0.20"
+kover = "0.7.5"
 kotlinxCoroutines = "1.8.1"
 kotlinxSerializationJson = "1.6.3"
 lottieCompose = "6.4.0"
@@ -110,3 +111,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

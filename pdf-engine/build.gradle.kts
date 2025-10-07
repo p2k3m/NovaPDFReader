@@ -1,9 +1,12 @@
+import kotlinx.kover.gradle.plugin.dsl.AggregationType
+import kotlinx.kover.gradle.plugin.dsl.MetricType
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.VersionCatalogsExtension
 
 plugins {
     id("com.android.library")
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kover)
 }
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
@@ -46,4 +49,29 @@ dependencies {
 
 kotlin {
     jvmToolchain(17)
+}
+
+koverReport {
+    defaults {
+        verify {
+            rule("PDF engine line coverage") {
+                bound {
+                    minValue = 70
+                    metric = MetricType.LINE
+                    aggregation = AggregationType.COVERED_PERCENTAGE
+                }
+            }
+            rule("PDF engine branch coverage") {
+                bound {
+                    minValue = 50
+                    metric = MetricType.BRANCH
+                    aggregation = AggregationType.COVERED_PERCENTAGE
+                }
+            }
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(tasks.named("koverVerify"))
 }
