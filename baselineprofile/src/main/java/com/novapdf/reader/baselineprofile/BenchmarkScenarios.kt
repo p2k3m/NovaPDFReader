@@ -79,7 +79,7 @@ private fun waitForReaderActivity(instrumentation: Instrumentation): Activity {
     repeat(20) {
         val resumed = ActivityLifecycleMonitorRegistry.getInstance()
             .getActivitiesInStage(Stage.RESUMED)
-            .firstOrNull { readerActivityClass.isInstance(it) } as? Activity
+            .firstOrNull { readerActivityClass.isInstance(it) }
         if (resumed != null) {
             return resumed
         }
