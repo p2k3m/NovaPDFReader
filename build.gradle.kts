@@ -18,6 +18,7 @@ plugins {
     alias(libs.plugins.detekt) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.spotless) apply false
+    alias(libs.plugins.dependency.analysis)
 }
 
 val versionCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
