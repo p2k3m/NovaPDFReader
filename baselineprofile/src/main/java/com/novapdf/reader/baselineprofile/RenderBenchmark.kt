@@ -1,5 +1,6 @@
 package com.novapdf.reader.baselineprofile
 
+import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.TraceSectionMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
@@ -9,6 +10,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@OptIn(ExperimentalMetricApi::class)
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class RenderBenchmark {

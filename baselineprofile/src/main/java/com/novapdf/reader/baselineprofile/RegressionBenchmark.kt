@@ -1,6 +1,7 @@
 package com.novapdf.reader.baselineprofile
 
 import android.util.Log
+import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.TraceSectionMetric
@@ -17,6 +18,7 @@ private const val TAG = "RegressionBenchmark"
 private const val DOCUMENT_LOAD_BUDGET_MS = 6_000L
 private const val SCROLL_RENDER_BUDGET_MS = 1_500L
 
+@OptIn(ExperimentalMetricApi::class)
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class RegressionBenchmark {

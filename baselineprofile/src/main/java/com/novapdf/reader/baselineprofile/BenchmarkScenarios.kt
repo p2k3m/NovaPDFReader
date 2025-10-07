@@ -1,5 +1,6 @@
 package com.novapdf.reader.baselineprofile
 
+import android.app.Activity
 import android.app.Instrumentation
 import android.net.Uri
 import androidx.benchmark.macro.MacrobenchmarkScope
@@ -9,10 +10,10 @@ import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
-import com.novapdf.reader.ReaderActivity
 import kotlin.system.measureTimeMillis
 
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
+private const val READER_ACTIVITY_CLASS_NAME = "com.novapdf.reader.ReaderActivity"
 
 internal fun MacrobenchmarkScope.launchReaderAndAwait() {
     pressHome()
@@ -35,9 +36,12 @@ private fun MacrobenchmarkScope.openStressDocumentAndAwaitInternal(): Long {
     val documentUri = StressDocumentFixtures.ensureStressDocument(context)
 
     val activity = waitForReaderActivity(instrumentation)
+    val readerActivityClass = instrumentation.targetContext.classLoader.loadClass(
+        READER_ACTIVITY_CLASS_NAME
+    )
     return measureTimeMillis {
         instrumentation.runOnMainSync {
-            val method = ReaderActivity::class.java.getDeclaredMethod(
+            val method = readerActivityClass.getDeclaredMethod(
                 "openDocumentForTest",
                 Uri::class.java
             )
@@ -68,11 +72,14 @@ internal fun MacrobenchmarkScope.exerciseReaderContent() {
     device.waitForIdle()
 }
 
-private fun waitForReaderActivity(instrumentation: Instrumentation): ReaderActivity {
+private fun waitForReaderActivity(instrumentation: Instrumentation): Activity {
+    val readerActivityClass = instrumentation.targetContext.classLoader.loadClass(
+        READER_ACTIVITY_CLASS_NAME
+    )
     repeat(20) {
         val resumed = ActivityLifecycleMonitorRegistry.getInstance()
             .getActivitiesInStage(Stage.RESUMED)
-            .firstOrNull { it is ReaderActivity } as? ReaderActivity
+            .firstOrNull { readerActivityClass.isInstance(it) } as? Activity
         if (resumed != null) {
             return resumed
         }
