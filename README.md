@@ -43,6 +43,46 @@ the `platform-tools`, `build-tools`, and emulator components for API level 32.
 When no device is present, the build gracefully skips connected tests while still verifying
 that the project compiles.
 
+## Baseline profile generation and macrobenchmarks
+
+NovaPDF ships a baseline profile so cold starts and the initial render of large documents
+benefit from ahead-of-time compilation. The profile lives at
+`app/src/main/baseline-prof.txt` and is regenerated from the Macrobenchmark test suite in
+the `baselineprofile` module.
+
+1. Boot a physical device or emulator running API 32+ with hardware acceleration enabled.
+2. Install the debug build once so shared test fixtures are staged:
+
+   ```bash
+   ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+   ```
+
+3. Execute the macrobench regressions to enforce the current performance budgets:
+
+   ```bash
+   ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace
+   ```
+
+   The run fails if cold-start, frame pacing, or render times regress beyond the thresholds
+   encoded in `RegressionBenchmark`.
+
+4. Generate a fresh baseline profile and copy it into the application module:
+
+   ```bash
+   ./gradlew :app:generateReleaseBaselineProfile --stacktrace
+   cp app/build/outputs/baselineProfile/release/baseline-prof.txt app/src/main/baseline-prof.txt
+   ```
+
+5. Review the diff and commit the updated file together with any performance-sensitive
+   code changes:
+
+   ```bash
+   git diff -- app/src/main/baseline-prof.txt
+   ```
+
+The CI workflow repeats these steps on a matrix device and fails the build if the generated
+profile diverges from the committed snapshot, preventing stale artefacts from shipping.
+
 ## CI validation for heavy PDF workloads
 
 Continuous integration now provisions a synthetic stress PDF with 32 pages that mix large,
