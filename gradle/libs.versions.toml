@@ -27,6 +27,7 @@ errorproneAnnotations = "2.26.1"
 junit4 = "4.13.2"
 junitJupiter = "5.10.3"
 kotlin = "1.9.24"
+ksp = "1.9.24-1.0.20"
 kotlinxCoroutines = "1.8.1"
 kotlinxSerializationJson = "1.6.3"
 lottieCompose = "6.4.0"
@@ -104,3 +105,4 @@ androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "and
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
