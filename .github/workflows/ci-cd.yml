@@ -17,7 +17,7 @@ jobs:
     outputs:
       firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - api: 32

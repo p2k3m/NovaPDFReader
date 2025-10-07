@@ -61,6 +61,7 @@ class PdfDocumentRepositoryEdgeCaseTest {
             isAccessible = true
         }
         val callbacks = callbacksField.get(repository) as ComponentCallbacks2
+        @Suppress("DEPRECATION")
         callbacks.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
 
         advanceUntilIdle()
