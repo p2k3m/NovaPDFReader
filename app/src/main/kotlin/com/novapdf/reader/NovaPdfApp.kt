@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.app.Application
 import android.content.Context
+import android.os.StrictMode
 import android.util.Log
 import androidx.room.Room
 import com.novapdf.reader.data.AnnotationRepository
@@ -81,6 +82,23 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
         super.onCreate()
         // Install crash handling immediately so background initialisation can report failures.
         crashReporter
+
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectDiskReads()
+                    .detectDiskWrites()
+                    .detectNetwork()
+                    .penaltyDeath()
+                    .build()
+            )
+            StrictMode.setVmPolicy(
+                StrictMode.VmPolicy.Builder()
+                    .detectAll()
+                    .penaltyDeath()
+                    .build()
+            )
+        }
 
         // Schedule heavy singletons to initialise off the main thread.
         applicationScope.launch {
