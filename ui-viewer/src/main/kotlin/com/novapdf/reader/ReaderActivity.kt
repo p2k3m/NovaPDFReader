@@ -284,8 +284,8 @@ open class ReaderActivity : ComponentActivity() {
         }
     }
 
-    @VisibleForTesting
-    internal fun openDocumentForTest(uri: Uri) {
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun openDocumentForTest(uri: Uri) {
         if (!useComposeUi) {
             viewModel.openDocument(uri)
             return
@@ -298,8 +298,8 @@ open class ReaderActivity : ComponentActivity() {
         }
     }
 
-    @VisibleForTesting
-    internal fun currentDocumentStateForTest(): PdfViewerUiState {
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun currentDocumentStateForTest(): PdfViewerUiState {
         return viewModel.uiState.value
     }
 
