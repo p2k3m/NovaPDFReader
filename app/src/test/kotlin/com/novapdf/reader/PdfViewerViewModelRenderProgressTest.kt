@@ -9,6 +9,7 @@ import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow

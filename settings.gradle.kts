@@ -32,7 +32,18 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "NovaPDFReader"
-include(":app")
+include(
+    ":app",
+    ":core-model",
+    ":core-io",
+    ":pdf-engine",
+    ":search-index",
+    ":ui-viewer",
+    ":ui-compose",
+    ":features-annotations",
+    ":integration-aws",
+    ":test-harness"
+)
 
 if (System.getenv("CI") != null) {
     gradleEnterprise {

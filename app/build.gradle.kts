@@ -194,11 +194,6 @@ android {
         execution = "ANDROIDX_TEST_ORCHESTRATOR"
     }
 
-    sourceSets {
-        getByName("test").java.srcDir("src/sharedTest/kotlin")
-        getByName("androidTest").java.srcDir("src/sharedTest/kotlin")
-    }
-
     adbOptions {
         installOptions.add("-t")
 
@@ -600,6 +595,15 @@ if (needsReleaseSigning) {
 // (see docs/regressions/2024-09-pdfium-crash.md).
 
 dependencies {
+    implementation(project(":core-model"))
+    implementation(project(":core-io"))
+    implementation(project(":pdf-engine"))
+    implementation(project(":search-index"))
+    implementation(project(":ui-compose"))
+    implementation(project(":ui-viewer"))
+    implementation(project(":features-annotations"))
+    implementation(project(":integration-aws"))
+
     val composeBom = platform(versionCatalog.findLibrary("androidx-compose-bom").get())
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -649,6 +653,15 @@ dependencies {
         implementation(libs.okhttp)
     }
 
+    testImplementation(project(":core-model"))
+    testImplementation(project(":core-io"))
+    testImplementation(project(":pdf-engine"))
+    testImplementation(project(":search-index"))
+    testImplementation(project(":ui-compose"))
+    testImplementation(project(":ui-viewer"))
+    testImplementation(project(":features-annotations"))
+    testImplementation(project(":integration-aws"))
+    testImplementation(project(":test-harness"))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.mockito.kotlin)
     testImplementation(libs.mockito.inline)
@@ -660,6 +673,7 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.pdfbox)
 
+    androidTestImplementation(project(":test-harness"))
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.test.uiautomator)

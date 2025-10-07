@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import android.hardware.SensorEvent
 import android.hardware.SensorManager
+import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
