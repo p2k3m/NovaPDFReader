@@ -81,7 +81,7 @@ class LuceneSearchCoordinator(
     private val context: Context,
     private val pdfRepository: PdfDocumentRepository,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-) {
+) : DocumentSearchCoordinator {
     private val analyzer = StandardAnalyzer()
     private val indexLock = Mutex()
     private var directory: ByteBuffersDirectory? = null
@@ -97,7 +97,7 @@ class LuceneSearchCoordinator(
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
 
-    fun prepare(session: PdfDocumentSession) {
+    override fun prepare(session: PdfDocumentSession) {
         prepareJob?.cancel()
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
             Log.i(
@@ -119,7 +119,7 @@ class LuceneSearchCoordinator(
         }
     }
 
-    suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult> {
+    override suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult> {
         if (query.isBlank()) return emptyList()
         ensureIndexReady(session)
         val searcher = indexSearcher ?: return emptyList()
@@ -170,7 +170,7 @@ class LuceneSearchCoordinator(
             .map { (pageIndex, matches) -> SearchResult(pageIndex, matches) }
     }
 
-    fun dispose() {
+    override fun dispose() {
         prepareJob?.cancel()
         prepareJob = null
         scope.cancel()

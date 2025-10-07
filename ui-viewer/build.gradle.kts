@@ -37,8 +37,6 @@ android {
 dependencies {
     implementation(project(":core-model"))
     implementation(project(":core-io"))
-    implementation(project(":pdf-engine"))
-    implementation(project(":search-index"))
     implementation(project(":ui-compose"))
     implementation(project(":features-annotations"))
     implementation(project(":integration-aws"))

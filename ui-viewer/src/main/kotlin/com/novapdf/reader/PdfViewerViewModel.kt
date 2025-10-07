@@ -23,11 +23,11 @@ import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
-import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.data.remote.RemotePdfException
-import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.NovaPdfDependencies
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -102,7 +102,7 @@ open class PdfViewerViewModel(
     private val adaptiveFlowManager: AdaptiveFlowManager = dependencies.adaptiveFlowManager
     private val bookmarkManager: BookmarkManager = dependencies.bookmarkManager
     private val documentMaintenanceScheduler: DocumentMaintenanceScheduler = dependencies.documentMaintenanceScheduler
-    private val searchCoordinator: LuceneSearchCoordinator = dependencies.searchCoordinator
+    private val searchCoordinator: DocumentSearchCoordinator = dependencies.searchCoordinator
     private val downloadManager: PdfDownloadManager = dependencies.pdfDownloadManager
     private val crashReporter: CrashReporter = dependencies.crashReporter
 

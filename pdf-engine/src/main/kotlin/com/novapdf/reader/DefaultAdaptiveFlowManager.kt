@@ -8,12 +8,13 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.util.Log
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.Choreographer
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.FrameMetricsAggregator
+import com.novapdf.reader.engine.AdaptiveFlowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,7 +33,7 @@ private const val MAX_ACCELERATION = 12f
 private const val MAX_TRACKED_FRAMES = 90
 private const val DEFAULT_FRAME_INTERVAL_MS = 16.6f
 
-class AdaptiveFlowManager(
+class DefaultAdaptiveFlowManager(
     context: Context,
     private val wallClock: () -> Long = System::currentTimeMillis,
     private val coroutineScope: CoroutineScope = CoroutineScope(Job() + Dispatchers.Default),
@@ -43,7 +44,7 @@ class AdaptiveFlowManager(
             null
         }
     }
-) : SensorEventListener {
+) : AdaptiveFlowManager, SensorEventListener {
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val accelerometer: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private var choreographer: Choreographer? = null
@@ -63,19 +64,19 @@ class AdaptiveFlowManager(
 
     private val pageHistory = ArrayDeque<Pair<Int, Long>>()
     private val _swipeSensitivity = MutableStateFlow(1f)
-    val swipeSensitivity: StateFlow<Float> = _swipeSensitivity.asStateFlow()
+    override val swipeSensitivity: StateFlow<Float> = _swipeSensitivity.asStateFlow()
 
     private val _preloadTargets = MutableStateFlow(emptyList<Int>())
-    val preloadTargets: StateFlow<List<Int>> = _preloadTargets.asStateFlow()
+    override val preloadTargets: StateFlow<List<Int>> = _preloadTargets.asStateFlow()
 
     private val _uiUnderLoad = MutableStateFlow(false)
-    val uiUnderLoad: StateFlow<Boolean> = _uiUnderLoad.asStateFlow()
+    override val uiUnderLoad: StateFlow<Boolean> = _uiUnderLoad.asStateFlow()
 
     private val _readingSpeedPagesPerMinute = MutableStateFlow(30f)
-    val readingSpeedPagesPerMinute: StateFlow<Float> = _readingSpeedPagesPerMinute.asStateFlow()
+    override val readingSpeedPagesPerMinute: StateFlow<Float> = _readingSpeedPagesPerMinute.asStateFlow()
 
     private val _frameIntervalMillis = MutableStateFlow(DEFAULT_FRAME_INTERVAL_MS)
-    val frameIntervalMillis: StateFlow<Float> = _frameIntervalMillis.asStateFlow()
+    override val frameIntervalMillis: StateFlow<Float> = _frameIntervalMillis.asStateFlow()
 
     private var lastTiltMagnitude = 0f
     private var isRegistered = false
@@ -133,7 +134,7 @@ class AdaptiveFlowManager(
         )
     }
 
-    fun start() {
+    override fun start() {
         if (!isRegistered) {
             val manager = sensorManager
             val sensor = accelerometer
@@ -149,7 +150,7 @@ class AdaptiveFlowManager(
         startFrameMonitoring()
     }
 
-    fun stop() {
+    override fun stop() {
         if (isRegistered) {
             sensorManager?.unregisterListener(this)
             isRegistered = false
@@ -158,7 +159,7 @@ class AdaptiveFlowManager(
         stopFrameMonitoring()
     }
 
-    fun trackPageChange(pageIndex: Int, totalPages: Int) {
+    override fun trackPageChange(pageIndex: Int, totalPages: Int) {
         val now = wallClock()
         pageHistory.addLast(pageIndex to now)
         while (pageHistory.size > MAX_TRACKED_PAGES) {
@@ -168,7 +169,7 @@ class AdaptiveFlowManager(
         updatePreloadTargets(pageIndex, totalPages)
     }
 
-    fun isUiUnderLoad(): Boolean = uiUnderLoad.value
+    override fun isUiUnderLoad(): Boolean = uiUnderLoad.value
 
     private fun computeReadingSpeed() {
         if (pageHistory.size < 2) return
@@ -243,7 +244,7 @@ class AdaptiveFlowManager(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     @VisibleForTesting
-    internal fun overrideSensitivityForTesting(value: Float) {
+    override fun overrideSensitivityForTesting(value: Float) {
         _swipeSensitivity.value = value.coerceIn(0.6f, 2.5f)
     }
 

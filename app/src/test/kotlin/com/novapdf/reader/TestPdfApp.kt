@@ -1,13 +1,13 @@
 package com.novapdf.reader
 
 import androidx.test.core.app.ApplicationProvider
-import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.logging.CrashReporter
-import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 
 class TestPdfApp : NovaPdfApp() {
@@ -21,7 +21,7 @@ class TestPdfApp : NovaPdfApp() {
         adaptiveFlowManager: AdaptiveFlowManager,
         bookmarkManager: BookmarkManager,
         documentMaintenanceScheduler: DocumentMaintenanceScheduler,
-        searchCoordinator: LuceneSearchCoordinator,
+        searchCoordinator: DocumentSearchCoordinator,
         pdfDownloadManager: PdfDownloadManager,
         crashReporter: CrashReporter = object : CrashReporter {
             override fun install() = Unit
