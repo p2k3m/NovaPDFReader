@@ -1,9 +1,14 @@
 import com.android.build.api.dsl.TestExtension
 import com.android.build.api.variant.TestAndroidComponentsExtension
 import org.gradle.StartParameter
+import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.compile.JavaCompile
 import java.io.File
 import java.util.Properties
@@ -48,6 +53,72 @@ plugins {
     id("com.android.test")
     id("org.jetbrains.kotlin.android")
     id("androidx.baselineprofile")
+}
+
+abstract class VerifyEmulatorAccelerationTask : DefaultTask() {
+    @get:Input
+    var ciBuild: Boolean = false
+
+    @get:Internal
+    val sdkDirectory: DirectoryProperty = project.objects.directoryProperty()
+
+    @TaskAction
+    fun verify() {
+        if (ciBuild) {
+            logger.warn(
+                "Skipping emulator acceleration verification because the task is running " +
+                    "in a CI environment without hardware acceleration access."
+            )
+            return
+        }
+
+        val sdkDir = sdkDirectory.orNull?.asFile
+        if (sdkDir == null) {
+            logger.warn(
+                "Emulator acceleration verification skipped because the Android SDK directory could not be located."
+            )
+            return
+        }
+
+        val emulatorDirectory = File(sdkDir, "emulator")
+        val executableName = if (System.getProperty("os.name").startsWith("Windows")) {
+            "emulator-check.exe"
+        } else {
+            "emulator-check"
+        }
+        val emulatorCheckBinary = emulatorDirectory.resolve(executableName)
+
+        if (!emulatorCheckBinary.exists()) {
+            logger.warn(
+                "Emulator acceleration verification skipped because $executableName is " +
+                    "unavailable. Install the Android Emulator package to enable the check."
+            )
+            return
+        }
+
+        val process = ProcessBuilder(emulatorCheckBinary.absolutePath, "accel")
+            .redirectErrorStream(true)
+            .start()
+
+        val completed = process.waitFor(30, TimeUnit.SECONDS)
+        if (!completed) {
+            process.destroy()
+            throw GradleException(
+                "Android Emulator acceleration check timed out. " +
+                    "Run \"${emulatorCheckBinary.absolutePath} accel\" locally to inspect the host configuration."
+            )
+        }
+
+        if (process.exitValue() != 0) {
+            val output = process.inputStream.bufferedReader().use { reader -> reader.readText().trim() }
+            val details = if (output.isNotEmpty()) "\nCommand output:\n$output" else ""
+            throw GradleException(
+                "Android Emulator acceleration is unavailable. " +
+                    "Run \"${emulatorCheckBinary.absolutePath} accel\" locally to inspect the host configuration." +
+                    details
+            )
+        }
+    }
 }
 
 val isCiEnvironment = providers.environmentVariable("CI")
@@ -202,8 +273,6 @@ tasks.withType<JavaCompile>().configureEach {
     }
 }
 
-val hasConnectedDevice by lazy { hasConnectedDeviceProvider.get() }
-
 if (baselineTasksRequested) {
     if (skipConnectedTestsOnCi) {
         androidComponents.beforeVariants { variantBuilder ->
@@ -223,15 +292,12 @@ if (baselineTasksRequested) {
             }
         }
     } else {
-        androidComponents.beforeVariants { variantBuilder ->
-            if (!hasConnectedDevice) {
-                variantBuilder.enable = false
-            }
-        }
-
-        tasks.matching { task -> task.name.startsWith("checkTestedAppObfuscation") }.configureEach {
+        tasks.matching { task ->
+            (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
+                task.name.startsWith("checkTestedAppObfuscation")
+        }.configureEach {
             onlyIf {
-                val hasDevice = hasConnectedDevice
+                val hasDevice = hasConnectedDeviceProvider.get()
                 if (!hasDevice) {
                     logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
                 }
@@ -241,51 +307,11 @@ if (baselineTasksRequested) {
     }
 }
 
-val verifyEmulatorAcceleration = tasks.register("verifyEmulatorAcceleration") {
+val verifyEmulatorAcceleration = tasks.register<VerifyEmulatorAccelerationTask>("verifyEmulatorAcceleration") {
     group = "verification"
     description = "Fails fast when required emulator acceleration is unavailable."
-
-    val emulatorDirectoryProvider = androidComponents.sdkComponents.sdkDirectory.map { sdkDir ->
-        sdkDir.dir("emulator")
-    }
-
-    doLast {
-        if (isCiBuild) {
-            logger.warn(
-                "Skipping emulator acceleration verification because the task is running " +
-                    "in a CI environment without hardware acceleration access."
-            )
-            return@doLast
-        }
-
-        val emulatorDirectory = emulatorDirectoryProvider.get().asFile
-        val executableName = if (System.getProperty("os.name").startsWith("Windows")) {
-            "emulator-check.exe"
-        } else {
-            "emulator-check"
-        }
-        val emulatorCheckBinary = emulatorDirectory.resolve(executableName)
-
-        if (!emulatorCheckBinary.exists()) {
-            logger.warn(
-                "Emulator acceleration verification skipped because $executableName is " +
-                    "unavailable. Install the Android Emulator package to enable the check."
-            )
-            return@doLast
-        }
-
-        val result = project.exec {
-            commandLine(emulatorCheckBinary.absolutePath, "accel")
-            isIgnoreExitValue = true
-        }
-
-        if (result.exitValue != 0) {
-            throw GradleException(
-                "Android Emulator acceleration is unavailable. " +
-                    "Run \"${emulatorCheckBinary.absolutePath} accel\" locally to inspect the host configuration."
-            )
-        }
-    }
+    ciBuild = isCiBuild
+    sdkDirectory.set(androidComponents.sdkComponents.sdkDirectory)
 }
 
 tasks.configureEach {
