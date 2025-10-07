@@ -244,6 +244,61 @@ val hasConnectedDeviceProvider = providers.provider {
         return@provider false
     }
 
+    fun List<String>.extractEligibleSerials(): List<String> = drop(1)
+        .mapNotNull { rawLine ->
+            val trimmed = rawLine.trim()
+            if (trimmed.isEmpty()) {
+                return@mapNotNull null
+            }
+
+            val tabIndex = rawLine.indexOf('\t')
+            if (tabIndex <= 0) {
+                return@mapNotNull null
+            }
+
+            val serial = rawLine.substring(0, tabIndex).trim()
+            val status = rawLine.substring(tabIndex).trim()
+            if (serial.isEmpty() || status.endsWith("offline", ignoreCase = true)) {
+                null
+            } else {
+                serial
+            }
+        }
+
+    fun isDeviceApiLevelRecognized(serial: String): Boolean {
+        val sdkProcess = ProcessBuilder(
+            adbExecutable.absolutePath,
+            "-s",
+            serial,
+            "shell",
+            "getprop",
+            "ro.build.version.sdk"
+        )
+            .redirectErrorStream(true)
+            .start()
+
+        if (!sdkProcess.waitFor(10, TimeUnit.SECONDS)) {
+            sdkProcess.destroy()
+            logger.warn(
+                "Timed out while querying SDK level for connected device $serial. Skipping baseline profile connected checks."
+            )
+            return false
+        }
+
+        val sdkValue = sdkProcess.inputStream.bufferedReader().use { reader ->
+            reader.readText().trim()
+        }
+
+        val sdkLevel = sdkValue.toIntOrNull()
+        if (sdkLevel == null) {
+            logger.warn(
+                "Unable to determine SDK level for connected device $serial (value='$sdkValue'). " +
+                    "Skipping baseline profile connected checks."
+            )
+        }
+        return sdkLevel != null
+    }
+
     runCatching {
         val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
             .redirectErrorStream(true)
@@ -253,13 +308,9 @@ val hasConnectedDeviceProvider = providers.provider {
             logger.warn("Timed out while checking for connected Android devices. Skipping baseline profile connected checks.")
             false
         } else {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.drop(1).any { line ->
-                    val trimmed = line.trim()
-                    val isDeviceListing = '\t' in line
-                    isDeviceListing && trimmed.isNotEmpty() && !trimmed.endsWith("offline", ignoreCase = true)
-                }
-            }
+            val lines = process.inputStream.bufferedReader().useLines { it.toList() }
+            val eligibleSerials = lines.extractEligibleSerials()
+            eligibleSerials.any { serial -> isDeviceApiLevelRecognized(serial) }
         }
     }.getOrElse { error ->
         logger.warn("Unable to query connected Android devices via adb. Skipping baseline profile connected checks.", error)

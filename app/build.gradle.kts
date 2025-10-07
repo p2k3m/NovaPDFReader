@@ -654,6 +654,12 @@ val synthesizeConnectedAndroidTestReports = tasks.register("synthesizeConnectedA
     }
 }
 
+synthesizeConnectedAndroidTestReports.configure {
+    notCompatibleWithConfigurationCache(
+        "Synthesizing instrumentation XML depends on runtime file inspection."
+    )
+}
+
 if (connectedAndroidTestsRequested) {
     tasks.matching { task ->
         task.name.startsWith("connected", ignoreCase = true) && task.name.contains("AndroidTest")
