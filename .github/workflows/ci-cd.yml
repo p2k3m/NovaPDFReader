@@ -907,6 +907,33 @@ jobs:
 
           print("Logcat is free from ANR/crash signatures")
           PY
+      - name: Run macrobenchmark regression suite
+        if: matrix.device_label == 'pixel-7-pro'
+        run: |
+          set -euo pipefail
+          adb logcat -c || true
+          ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
+      - name: Generate release baseline profile
+        if: matrix.device_label == 'pixel-7-pro'
+        run: |
+          set -euo pipefail
+          adb logcat -c || true
+          ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
+      - name: Verify committed baseline profile is current
+        if: matrix.device_label == 'pixel-7-pro'
+        run: |
+          set -euo pipefail
+          generated=$(find app/build -path '*/baselineProfile/*/baseline-prof.txt' -type f -print -quit)
+          if [ -z "$generated" ]; then
+            echo "::error::Failed to locate generated baseline profile under app/build" >&2
+            find app/build -maxdepth 4 -type d -print >&2 || true
+            exit 1
+          fi
+          echo "Generated baseline profile located at $generated"
+          if ! diff -u app/src/main/baseline-prof.txt "$generated"; then
+            echo "::error::Generated baseline profile does not match the committed snapshot. Run ./gradlew :app:generateReleaseBaselineProfile and commit app/src/main/baseline-prof.txt" >&2
+            exit 1
+          fi
       - name: Install debug build for screenshots
         run: |
           set -euo pipefail
