@@ -136,6 +136,7 @@ class PdfDocumentRepository(
             scheduleCacheClear()
         }
 
+        @Suppress("DEPRECATION")
         override fun onTrimMemory(level: Int) {
             if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
                 scheduleCacheClear()
@@ -324,6 +325,7 @@ class PdfDocumentRepository(
         return object : PrintDocumentAdapter() {
             private var cancelled = false
 
+            @Suppress("OVERRIDE_DEPRECATION")
             override fun onLayout(
                 oldAttributes: PrintAttributes?,
                 newAttributes: PrintAttributes?,
@@ -343,6 +345,7 @@ class PdfDocumentRepository(
                 callback?.onLayoutFinished(docInfo, true)
             }
 
+            @Suppress("OVERRIDE_DEPRECATION")
             override fun onWrite(
                 pages: Array<PageRange>,
                 destination: ParcelFileDescriptor,
@@ -609,7 +612,7 @@ class PdfDocumentRepository(
                 throwable,
                 mapOf(
                     "stage" to "copyBitmap",
-                    "config" to (config?.name ?: "unknown")
+                    "config" to config.name
                 )
             )
             null
