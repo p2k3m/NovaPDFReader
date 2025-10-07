@@ -38,7 +38,7 @@ import org.apache.lucene.queryparser.classic.QueryParser
 import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.Query
 import org.apache.lucene.search.TermQuery
-import org.apache.lucene.store.RAMDirectory
+import org.apache.lucene.store.ByteBuffersDirectory
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
@@ -84,7 +84,7 @@ class LuceneSearchCoordinator(
 ) {
     private val analyzer = StandardAnalyzer()
     private val indexLock = Mutex()
-    private var directory: RAMDirectory? = null
+    private var directory: ByteBuffersDirectory? = null
     private var indexSearcher: IndexSearcher? = null
     private var indexReader: DirectoryReader? = null
     private var currentDocumentId: String? = null
@@ -217,12 +217,12 @@ class LuceneSearchCoordinator(
                 pageContents = emptyList()
                 return@withLock
             }
-            val ramDirectory = RAMDirectory()
-            directory = ramDirectory
+            val memoryDirectory = ByteBuffersDirectory()
+            directory = memoryDirectory
             val config = IndexWriterConfig(analyzer).apply {
                 openMode = IndexWriterConfig.OpenMode.CREATE
             }
-            IndexWriter(ramDirectory, config).use { writer ->
+            IndexWriter(memoryDirectory, config).use { writer ->
                 contents.forEachIndexed { index, content ->
                     val cleaned = content.text.trim()
                     val document = Document().apply {
@@ -233,7 +233,7 @@ class LuceneSearchCoordinator(
                 }
                 writer.commit()
             }
-            indexReader = DirectoryReader.open(ramDirectory)
+            indexReader = DirectoryReader.open(memoryDirectory)
             indexSearcher = indexReader?.let { IndexSearcher(it) }
             currentDocumentId = session.documentId
             pageContents = contents
@@ -413,7 +413,7 @@ class LuceneSearchCoordinator(
         recognizer.process(image)
             .addOnSuccessListener { result ->
                 if (!continuation.isActive) return@addOnSuccessListener
-                val text = result.text?.trim().orEmpty()
+                val text = result.text.trim()
                 val lines = mutableListOf<OcrLine>()
                 result.textBlocks.forEach { block ->
                     block.lines.forEach { line ->

@@ -60,6 +60,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Accessibility
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -69,10 +71,8 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -283,7 +283,7 @@ fun PdfViewerScreen(
         val onboardingPages = remember {
             listOf(
                 OnboardingPage(
-                    icon = Icons.Outlined.MenuBook,
+                    icon = Icons.AutoMirrored.Outlined.MenuBook,
                     titleRes = R.string.onboarding_page_library_title,
                     descriptionRes = R.string.onboarding_page_library_description
                 ),
@@ -306,7 +306,7 @@ fun PdfViewerScreen(
         val navigationItems = remember {
             listOf(
                 NavigationItem(MainDestination.Home, Icons.Outlined.Home, R.string.navigation_home),
-                NavigationItem(MainDestination.Reader, Icons.Outlined.MenuBook, R.string.navigation_reader),
+                NavigationItem(MainDestination.Reader, Icons.AutoMirrored.Outlined.MenuBook, R.string.navigation_reader),
                 NavigationItem(MainDestination.Annotations, Icons.Outlined.Edit, R.string.navigation_annotations),
                 NavigationItem(MainDestination.Settings, Icons.Outlined.Settings, R.string.navigation_settings)
             )
@@ -370,7 +370,7 @@ fun PdfViewerScreen(
                                     enabled = state.outline.isNotEmpty()
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Outlined.List,
+                                        imageVector = Icons.AutoMirrored.Outlined.List,
                                         contentDescription = stringResource(id = R.string.pdf_outline)
                                     )
                                 }
@@ -847,7 +847,7 @@ private fun LoadingOverlay(status: DocumentStatus.Loading) {
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 LinearProgressIndicator(
-                                    progress = progressValue,
+                                    progress = { progressValue },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 Text(
@@ -907,7 +907,7 @@ private fun RenderProgressIndicator(
                 textAlign = TextAlign.Center
             )
             LinearProgressIndicator(
-                progress = animatedProgress,
+                progress = { animatedProgress },
                 modifier = Modifier
                     .padding(top = 12.dp)
                     .fillMaxWidth()
@@ -1674,8 +1674,7 @@ private fun announceFontScale(
 
 private fun AccessibilityManager?.sendAnnouncement(message: String) {
     val manager = this ?: return
-    val event = AccessibilityEvent.obtain().apply {
-        eventType = AccessibilityEvent.TYPE_ANNOUNCEMENT
+    val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_ANNOUNCEMENT).apply {
         text.add(message)
     }
     manager.sendAccessibilityEvent(event)
