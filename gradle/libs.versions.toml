@@ -22,6 +22,7 @@ androidxTestExtJunit = "1.2.1"
 androidxTestOrchestrator = "1.4.2"
 androidxTestUiautomator = "2.3.0"
 androidxWork = "2.9.0"
+androidxStartup = "1.1.1"
 caffeine = "2.9.3"
 coil = "3.0.0"
 errorproneAnnotations = "2.26.1"
@@ -92,6 +93,7 @@ androidx-room-common = { module = "androidx.room:room-common", version.ref = "ro
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidxSecurityCrypto" }
+androidx-startup-runtime = { module = "androidx.startup:startup-runtime", version.ref = "androidxStartup" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 androidx-test-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "androidxTestEspresso" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
