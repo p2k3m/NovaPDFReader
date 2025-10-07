@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import android.hardware.SensorEvent
 import android.hardware.SensorManager
-import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.pdf.engine.DefaultAdaptiveFlowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,7 +29,7 @@ class AdaptiveFlowManagerTest {
     @Test
     fun readingSpeedRespondsToPageChanges() = runTest {
         var now = 0L
-        val manager = AdaptiveFlowManager(
+        val manager = DefaultAdaptiveFlowManager(
             context = context,
             wallClock = { now },
             coroutineScope = this
@@ -52,7 +52,7 @@ class AdaptiveFlowManagerTest {
     @Test
     fun frameMetricsReactToJank() = runTest {
         var now = 0L
-        val manager = AdaptiveFlowManager(
+        val manager = DefaultAdaptiveFlowManager(
             context = context,
             wallClock = { now },
             coroutineScope = this
@@ -78,7 +78,7 @@ class AdaptiveFlowManagerTest {
     @Test
     fun preloadingResumesAfterCooldown() = runTest {
         var now = 0L
-        val manager = AdaptiveFlowManager(
+        val manager = DefaultAdaptiveFlowManager(
             context = context,
             wallClock = { now },
             coroutineScope = this
@@ -108,7 +108,7 @@ class AdaptiveFlowManagerTest {
     @Test
     fun sensorTiltBoostsPreloadTargets() = runTest {
         var now = 0L
-        val manager = AdaptiveFlowManager(
+        val manager = DefaultAdaptiveFlowManager(
             context = context,
             wallClock = { now },
             coroutineScope = this
@@ -132,7 +132,7 @@ class AdaptiveFlowManagerTest {
 
     @Test
     fun frameMetricsIgnoreInvalidSamples() {
-        val manager = AdaptiveFlowManager(
+        val manager = DefaultAdaptiveFlowManager(
             context = context,
             wallClock = { 0L },
             coroutineScope = CoroutineScope(Job() + Dispatchers.Default)

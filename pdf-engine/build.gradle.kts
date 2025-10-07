@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core-model"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.annotation)
     implementation(libs.kotlinx.coroutines.android)

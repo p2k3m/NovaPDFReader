@@ -11,9 +11,11 @@ import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.FileCrashReporter
+import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
-import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.engine.AdaptiveFlowManager
+import com.novapdf.reader.pdf.engine.DefaultAdaptiveFlowManager
 import com.novapdf.reader.work.DocumentMaintenanceDependencies
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -40,10 +42,12 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
         PdfDocumentRepository(this, crashReporter = crashReporter)
     }
 
-    private val searchCoordinatorDelegate = lazy { LuceneSearchCoordinator(this, pdfDocumentRepository) }
-    override val searchCoordinator: LuceneSearchCoordinator by searchCoordinatorDelegate
+    private val searchCoordinatorDelegate = lazy<DocumentSearchCoordinator> {
+        LuceneSearchCoordinator(this, pdfDocumentRepository)
+    }
+    override val searchCoordinator: DocumentSearchCoordinator by searchCoordinatorDelegate
 
-    override val adaptiveFlowManager: AdaptiveFlowManager by lazy { AdaptiveFlowManager(this) }
+    override val adaptiveFlowManager: AdaptiveFlowManager by lazy { DefaultAdaptiveFlowManager(this) }
 
     override val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
 

@@ -7,9 +7,9 @@ import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.PdfOutlineNode
-import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
-import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.engine.AdaptiveFlowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,7 +53,7 @@ class PdfViewerViewModelRenderProgressTest {
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
-        val searchCoordinator = mock<LuceneSearchCoordinator>()
+        val searchCoordinator = mock<DocumentSearchCoordinator>()
         val downloadManager = mock<PdfDownloadManager>()
 
         val renderProgress = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
