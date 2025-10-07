@@ -41,10 +41,13 @@ android {
 }
 
 dependencies {
-    implementation(project(":core-model"))
-    implementation(libs.androidx.core.ktx)
+    api(project(":core-model"))
+    api(libs.androidx.core)
+    api(libs.kotlinx.coroutines.core)
+
     implementation(libs.androidx.annotation)
-    implementation(libs.kotlinx.coroutines.android)
+
+    runtimeOnly(libs.kotlinx.coroutines.android)
 }
 
 kotlin {

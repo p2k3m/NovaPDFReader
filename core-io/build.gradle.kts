@@ -32,20 +32,27 @@ android {
 }
 
 dependencies {
-    implementation(project(":core-model"))
+    api(project(":core-model"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.annotation)
-    implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.caffeine)
-    implementation(libs.pdfium.android)
     implementation(libs.pdfbox.android)
-    implementation(libs.pdfbox)
-    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.security.crypto)
-    implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+
+    api(libs.androidx.room.runtime)
+    api(libs.pdfium.android)
+    api(libs.kotlinx.coroutines.core)
+    api(libs.androidx.work.runtime)
+
+    implementation(libs.androidx.room.common)
+    implementation(libs.androidx.sqlite)
+    implementation(libs.kotlinx.serialization.core)
+    implementation(libs.checkerframework.qual)
+
+    runtimeOnly(libs.kotlinx.coroutines.android)
 
     ksp(libs.androidx.room.compiler)
 }

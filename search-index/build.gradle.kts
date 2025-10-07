@@ -27,17 +27,21 @@ android {
 }
 
 dependencies {
-    implementation(project(":core-model"))
-    implementation(project(":core-io"))
+    api(project(":core-model"))
+    api(project(":core-io"))
+    api(libs.kotlinx.coroutines.core)
 
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.annotation)
     implementation(libs.lucene.core)
-    implementation(libs.lucene.analyzers.common)
     implementation(libs.lucene.queryparser)
     implementation(libs.pdfbox.android)
-    implementation(libs.pdfbox)
-    implementation(libs.mlkit.text.recognition)
+    implementation(libs.play.services.mlkit.text.recognition)
+    implementation(libs.play.services.mlkit.text.recognition.common)
+    implementation(libs.play.services.tasks)
+    implementation(libs.mlkit.vision.common)
+
+    runtimeOnly(libs.kotlinx.coroutines.android)
+    runtimeOnly(libs.lucene.analyzers.common)
 }
 
 kotlin {
