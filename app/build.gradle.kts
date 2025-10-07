@@ -1,10 +1,8 @@
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
-import org.gradle.api.Action
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
-import org.gradle.BuildResult
 import org.gradle.StartParameter
 import org.gradle.api.Project
 import org.gradle.api.Task
@@ -582,8 +580,7 @@ fun File.isInstrumentationReport(): Boolean {
     return "androidtest" in loweredPath || "connected" in loweredPath
 }
 
-fun ensureInstrumentationReportsGenerated() {
-    val outputsRoot = layout.buildDirectory.dir("outputs").get().asFile
+fun ensureInstrumentationReportsGenerated(outputsRoot: File) {
     if (!outputsRoot.exists()) {
         return
     }
@@ -646,23 +643,22 @@ fun StartParameter.requestsConnectedAndroidTests(): Boolean =
                 taskName.contains("Check", ignoreCase = true))
     }
 
-if (gradle.startParameter.requestsConnectedAndroidTests()) {
-    gradle.buildFinished(object : Action<BuildResult> {
-        override fun execute(result: BuildResult) {
-            if (result.failure != null) {
-                return
-            }
+val connectedAndroidTestsRequested = gradle.startParameter.requestsConnectedAndroidTests()
 
-            ensureInstrumentationReportsGenerated()
-        }
-    })
-}
-
-tasks.register("synthesizeConnectedAndroidTestReports") {
+val synthesizeConnectedAndroidTestReports = tasks.register("synthesizeConnectedAndroidTestReports") {
     group = "verification"
     description = "Generates synthetic instrumentation XML when connected tests cannot run."
+    val outputsRootProvider = project.layout.buildDirectory.dir("outputs")
     doLast {
-        ensureInstrumentationReportsGenerated()
+        ensureInstrumentationReportsGenerated(outputsRootProvider.get().asFile)
+    }
+}
+
+if (connectedAndroidTestsRequested) {
+    tasks.matching { task ->
+        task.name.startsWith("connected", ignoreCase = true) && task.name.contains("AndroidTest")
+    }.configureEach {
+        finalizedBy(synthesizeConnectedAndroidTestReports)
     }
 }
 
@@ -873,55 +869,57 @@ kotlin {
     jvmToolchain(17)
 }
 
-afterEvaluate {
-    tasks.namedOrNull<Task>("parseBenchmarkReleaseLocalResources")?.configure {
-        doFirst {
-            val incrementalDir = project.layout.buildDirectory
+    afterEvaluate {
+        tasks.namedOrNull<Task>("parseBenchmarkReleaseLocalResources")?.configure {
+            val incrementalDirProvider = project.layout.buildDirectory
                 .dir("intermediates/incremental/benchmarkRelease/packageBenchmarkReleaseResources")
-                .get().asFile
-            if (!incrementalDir.exists()) {
-                incrementalDir.mkdirs()
-            }
-            File(incrementalDir, "merged.dir").mkdirs()
-            File(incrementalDir, "stripped.dir").mkdirs()
 
-            val missingInputs = inputs.files.filterNot { it.exists() }
-            if (missingInputs.isNotEmpty()) {
-                project.logger.warn(
-                    "parseBenchmarkReleaseLocalResources missing directories:\n" +
-                        missingInputs.joinToString(separator = "\n") { it.absolutePath }
-                )
+            doFirst {
+                val incrementalDir = incrementalDirProvider.get().asFile
+                if (!incrementalDir.exists()) {
+                    incrementalDir.mkdirs()
+                }
+                File(incrementalDir, "merged.dir").mkdirs()
+                File(incrementalDir, "stripped.dir").mkdirs()
+
+                val missingInputs = inputs.files.filterNot(File::exists)
+                if (missingInputs.isNotEmpty()) {
+                    logger.warn(
+                        "parseBenchmarkReleaseLocalResources missing directories:\n" +
+                            missingInputs.joinToString(separator = "\n") { it.absolutePath }
+                    )
+                }
             }
         }
-    }
 
-    tasks.namedOrNull<Task>("parseBenchmarkLocalResources")?.configure {
-        doFirst {
-            val incrementalDir = project.layout.buildDirectory
+        tasks.namedOrNull<Task>("parseBenchmarkLocalResources")?.configure {
+            val incrementalDirProvider = project.layout.buildDirectory
                 .dir("intermediates/incremental/benchmark/packageBenchmarkResources")
-                .get().asFile
-            if (!incrementalDir.exists()) {
-                incrementalDir.mkdirs()
-            }
-            File(incrementalDir, "merged.dir").mkdirs()
-            File(incrementalDir, "stripped.dir").mkdirs()
-
-            val packagedDir = project.layout.buildDirectory
+            val packagedDirProvider = project.layout.buildDirectory
                 .dir("intermediates/packaged_res/benchmark/packageBenchmarkResources")
-                .get().asFile
-            if (!packagedDir.exists()) {
-                packagedDir.mkdirs()
-            }
 
-            val missingInputs = inputs.files.filterNot { it.exists() }
-            if (missingInputs.isNotEmpty()) {
-                project.logger.warn(
-                    "parseBenchmarkLocalResources missing directories:\n" +
-                        missingInputs.joinToString(separator = "\n") { it.absolutePath }
-                )
+            doFirst {
+                val incrementalDir = incrementalDirProvider.get().asFile
+                if (!incrementalDir.exists()) {
+                    incrementalDir.mkdirs()
+                }
+                File(incrementalDir, "merged.dir").mkdirs()
+                File(incrementalDir, "stripped.dir").mkdirs()
+
+                val packagedDir = packagedDirProvider.get().asFile
+                if (!packagedDir.exists()) {
+                    packagedDir.mkdirs()
+                }
+
+                val missingInputs = inputs.files.filterNot(File::exists)
+                if (missingInputs.isNotEmpty()) {
+                    logger.warn(
+                        "parseBenchmarkLocalResources missing directories:\n" +
+                            missingInputs.joinToString(separator = "\n") { it.absolutePath }
+                    )
+                }
             }
         }
-    }
 
     val releaseUnitTest = tasks.namedOrNull<Test>("testReleaseUnitTest")
     val jacocoReport = tasks.namedOrNull<JacocoReport>("jacocoTestReleaseUnitTestReport")
