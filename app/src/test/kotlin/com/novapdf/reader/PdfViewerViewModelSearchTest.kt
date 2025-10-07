@@ -17,6 +17,7 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.shockwave.pdfium.PdfDocument
+import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow

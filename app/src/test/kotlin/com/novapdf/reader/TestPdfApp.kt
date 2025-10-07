@@ -1,7 +1,7 @@
 package com.novapdf.reader
 
 import androidx.test.core.app.ApplicationProvider
-import com.novapdf.reader.AdaptiveFlowManager
+import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository

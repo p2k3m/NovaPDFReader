@@ -13,6 +13,8 @@ import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.FileCrashReporter
 import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
+import com.novapdf.reader.pdf.engine.AdaptiveFlowManager
+import com.novapdf.reader.work.DocumentMaintenanceDependencies
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -22,28 +24,28 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-open class NovaPdfApp : Application() {
+open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfDependencies {
     private val scopeExceptionHandler = CoroutineExceptionHandler { _, error ->
         logDeferredInitializationFailure("uncaught", error)
     }
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + scopeExceptionHandler)
 
-    val crashReporter: CrashReporter by lazy {
+    override val crashReporter: CrashReporter by lazy {
         FileCrashReporter(this).also { it.install() }
     }
 
-    val annotationRepository: AnnotationRepository by lazy { AnnotationRepository(this) }
+    override val annotationRepository: AnnotationRepository by lazy { AnnotationRepository(this) }
 
-    val pdfDocumentRepository: PdfDocumentRepository by lazy {
+    override val pdfDocumentRepository: PdfDocumentRepository by lazy {
         PdfDocumentRepository(this, crashReporter = crashReporter)
     }
 
     private val searchCoordinatorDelegate = lazy { LuceneSearchCoordinator(this, pdfDocumentRepository) }
-    val searchCoordinator: LuceneSearchCoordinator by searchCoordinatorDelegate
+    override val searchCoordinator: LuceneSearchCoordinator by searchCoordinatorDelegate
 
-    val adaptiveFlowManager: AdaptiveFlowManager by lazy { AdaptiveFlowManager(this) }
+    override val adaptiveFlowManager: AdaptiveFlowManager by lazy { AdaptiveFlowManager(this) }
 
-    val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
+    override val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
 
     private val databaseDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         Room.databaseBuilder(
@@ -61,13 +63,15 @@ open class NovaPdfApp : Application() {
             getSharedPreferences(BookmarkManager.LEGACY_PREFERENCES_NAME, Context.MODE_PRIVATE)
         )
     }
-    val bookmarkManager: BookmarkManager
+    override val bookmarkManager: BookmarkManager
         get() = bookmarkManagerDelegate.value
 
     private val maintenanceSchedulerDelegate = lazy {
         DocumentMaintenanceScheduler(this).also { it.ensurePeriodicSync() }
     }
-    val documentMaintenanceScheduler: DocumentMaintenanceScheduler by maintenanceSchedulerDelegate
+    override val documentMaintenanceScheduler: DocumentMaintenanceScheduler by maintenanceSchedulerDelegate
+
+    override fun isUiUnderLoad(): Boolean = adaptiveFlowManager.isUiUnderLoad()
 
     override fun onCreate() {
         super.onCreate()
