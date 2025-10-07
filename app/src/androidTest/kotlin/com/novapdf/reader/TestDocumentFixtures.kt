@@ -491,7 +491,7 @@ internal object TestDocumentFixtures {
     private fun validatePageTree(candidate: File, contents: String): Boolean {
         val kidsMatcher = KIDS_ARRAY_PATTERN.matcher(contents)
         while (kidsMatcher.find()) {
-            val kidsSection = kidsMatcher.group(1)
+            val kidsSection = kidsMatcher.group(1) ?: continue
             val referenceMatcher = REFERENCE_PATTERN.matcher(kidsSection)
             var referenceCount = 0
             while (referenceMatcher.find()) {
