@@ -7,7 +7,6 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
-import androidx.core.net.toUri
 import java.io.File
 import java.io.IOException
 import kotlin.math.absoluteValue
@@ -24,7 +23,7 @@ internal object StressDocumentFixtures {
         if (!cacheFile.exists() || cacheFile.length() == 0L) {
             generateStressDocument(cacheFile)
         }
-        return cacheFile.toUri()
+        return Uri.fromFile(cacheFile)
     }
 
     private fun generateStressDocument(destination: File) {
