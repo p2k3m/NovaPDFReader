@@ -25,6 +25,10 @@
             android:name="androidx.profileinstaller.PROFILE_INSTALLER_ENABLED"
             android:value="false" />
 
+        <meta-data
+            android:name="com.novapdf.reader.startup.NovaPdfInitializer"
+            android:value="androidx.startup" />
+
         <activity
             android:name="com.novapdf.reader.ReaderActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"

@@ -26,12 +26,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfDependencies {
     private val scopeExceptionHandler = CoroutineExceptionHandler { _, error ->
         logDeferredInitializationFailure("uncaught", error)
     }
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + scopeExceptionHandler)
+    private val backgroundInitializationStarted = AtomicBoolean(false)
 
     override val crashReporter: CrashReporter by lazy {
         FileCrashReporter(this).also { it.install() }
@@ -100,14 +102,6 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
             )
         }
 
-        // Schedule heavy singletons to initialise off the main thread.
-        applicationScope.launch {
-            initializeDeferredComponents()
-        }
-
-        // Ensure periodic maintenance is configured.
-        runCatching { documentMaintenanceScheduler }
-            .onFailure { error -> logDeferredInitializationFailure("maintenance", error) }
     }
 
     override fun onTerminate() {
@@ -116,6 +110,18 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
         if (searchCoordinatorDelegate.isInitialized()) {
             searchCoordinator.dispose()
         }
+    }
+
+    internal fun beginStartupInitialization() {
+        if (!backgroundInitializationStarted.compareAndSet(false, true)) {
+            return
+        }
+
+        applicationScope.launch {
+            initializeDeferredComponents()
+        }
+
+        ensurePeriodicMaintenanceConfigured()
     }
 
     private suspend fun initializeDeferredComponents() {
@@ -139,6 +145,11 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
                 "PDFBox resources failed to initialise; search indexing will be disabled"
             )
         }
+    }
+
+    private fun ensurePeriodicMaintenanceConfigured() {
+        runCatching { documentMaintenanceScheduler }
+            .onFailure { error -> logDeferredInitializationFailure("maintenance", error) }
     }
 
     private fun logDeferredInitializationFailure(stage: String, error: Throwable) {

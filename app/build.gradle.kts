@@ -774,6 +774,7 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.startup.runtime)
     implementation(libs.pdfium.android) {
         exclude(group = "com.android.support", module = "support-compat")
     }
