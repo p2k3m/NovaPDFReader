@@ -101,7 +101,6 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
                     .build()
             )
         }
-
     }
 
     override fun onTerminate() {
