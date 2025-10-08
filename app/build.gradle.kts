@@ -394,7 +394,11 @@ val allowCiConnectedTests = parseOptionalBoolean(
     (findProperty("novapdf.allowCiConnectedTests") as? String)
         ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
         ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
-)
+) ?: if (isCiEnvironment) {
+    true
+} else {
+    null
+}
 
 fun locateAndroidSdkDir(): File? {
     val localProperties = rootProject.file("local.properties")
