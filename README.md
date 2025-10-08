@@ -43,6 +43,22 @@ the `platform-tools`, `build-tools`, and emulator components for API level 32.
 When no device is present, the build gracefully skips connected tests while still verifying
 that the project compiles.
 
+## Programmatic screenshot capture
+
+The screenshot harness can capture UI frames directly on the device when invoked with
+```
+adb shell am instrument -w -r \
+    -e runScreenshotHarness true \
+    -e captureProgrammaticScreenshots true \
+    -e class com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots \
+    com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+When the `captureProgrammaticScreenshots` argument is `true`, the harness saves a PNG in the
+instrumentation cache directory and temporarily adopts the
+`FOREGROUND_SERVICE_MEDIA_PROJECTION` permission so the process only opts into the
+`mediaProjection` foreground service type while the screenshot is recorded.
+
 ## Baseline profile generation and macrobenchmarks
 
 NovaPDF ships a baseline profile so cold starts and the initial render of large documents

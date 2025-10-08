@@ -1,7 +1,9 @@
 package com.novapdf.reader
 
+import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -17,6 +19,7 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -53,6 +56,7 @@ class ScreenshotHarnessTest {
     private lateinit var handshakeCacheDirs: List<File>
     private lateinit var handshakePackageName: String
     private var harnessEnabled: Boolean = false
+    private var programmaticScreenshotsEnabled: Boolean = false
 
     @Before
     fun setUp() = runBlocking {
@@ -70,6 +74,8 @@ class ScreenshotHarnessTest {
                 "for package $handshakePackageName"
         )
         harnessEnabled = true
+        programmaticScreenshotsEnabled = shouldCaptureProgrammaticScreenshots()
+        logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
         ensureWorkManagerInitialized(appContext)
         logHarnessInfo("Installing thousand-page stress document for screenshot harness")
         documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
@@ -112,6 +118,11 @@ class ScreenshotHarnessTest {
                     )
                 }
             }
+        }
+
+        if (programmaticScreenshotsEnabled) {
+            captureProgrammaticScreenshot(doneFlags)
+            return
         }
 
         readyFlags.forEach { flag ->
@@ -447,6 +458,12 @@ class ScreenshotHarnessTest {
         return argument?.lowercase(Locale.US) == "true"
     }
 
+    private fun shouldCaptureProgrammaticScreenshots(): Boolean {
+        val argument = InstrumentationRegistry.getArguments()
+            .getString(PROGRAMMATIC_SCREENSHOTS_ARGUMENT)
+        return argument?.lowercase(Locale.US) == "true"
+    }
+
     private fun openDocumentInViewer() {
         logHarnessInfo("Opening thousand-page document in viewer: $documentUri")
         activityRule.scenario.onActivity { activity ->
@@ -604,6 +621,92 @@ class ScreenshotHarnessTest {
         return output.lineSequence().any { it.trim() == "EXISTS" }
     }
 
+    private suspend fun captureProgrammaticScreenshot(doneFlags: List<File>) {
+        if (!::appContext.isInitialized) {
+            logHarnessWarn("Programmatic screenshot capture skipped; app context not initialised")
+            return
+        }
+
+        logHarnessInfo("Capturing programmatic screenshot via UiDevice")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val adoptedPermissions = mutableListOf<String>()
+        var screenshot: Bitmap? = null
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                adoptedPermissions += Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                adoptedPermissions += Manifest.permission.CAPTURE_VIDEO_OUTPUT
+            }
+            if (adoptedPermissions.isNotEmpty()) {
+                automation.adoptShellPermissionIdentity(*adoptedPermissions.toTypedArray())
+                logHarnessInfo(
+                    "Adopted shell permissions ${adoptedPermissions.joinToString()} for programmatic screenshot"
+                )
+            }
+
+            screenshot = device.takeScreenshot()
+            if (screenshot == null) {
+                logHarnessWarn("Programmatic screenshot capture returned null bitmap")
+                return
+            }
+
+            val screenshotDir = File(appContext.cacheDir, PROGRAMMATIC_SCREENSHOT_DIRECTORY).apply { mkdirs() }
+            val screenshotFile = File(screenshotDir, PROGRAMMATIC_SCREENSHOT_FILE)
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    FileOutputStream(screenshotFile).use { stream ->
+                        if (!screenshot!!.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                            throw IOException("Failed to compress programmatic screenshot")
+                        }
+                    }
+                }.onFailure { error ->
+                    logHarnessError(
+                        error.message ?: "Failed to persist programmatic screenshot",
+                        error
+                    )
+                    screenshotFile.delete()
+                    throw error
+                }
+            }
+            logHarnessInfo("Programmatic screenshot saved to ${screenshotFile.absolutePath}")
+
+            withContext(Dispatchers.IO) {
+                doneFlags.forEach { flag ->
+                    runCatching { writeHandshakeFlag(flag, screenshotFile.absolutePath) }
+                        .onFailure { error ->
+                            logHarnessWarn(
+                                "Unable to publish programmatic screenshot completion flag at ${flag.absolutePath}",
+                                error
+                            )
+                        }
+                }
+            }
+        } catch (error: SecurityException) {
+            logHarnessError(
+                error.message ?: "Security exception during programmatic screenshot capture",
+                error
+            )
+        } catch (error: IOException) {
+            logHarnessError(
+                error.message ?: "IO exception during programmatic screenshot capture",
+                error
+            )
+        } catch (error: RuntimeException) {
+            logHarnessError(
+                error.message ?: "Unexpected error during programmatic screenshot capture",
+                error
+            )
+        } finally {
+            screenshot?.recycle()
+            if (adoptedPermissions.isNotEmpty()) {
+                automation.dropShellPermissionIdentity()
+                logHarnessInfo("Dropped adopted shell permissions after programmatic screenshot")
+            }
+        }
+    }
+
     private fun directoryExistsWithRunAs(directory: File): Boolean {
         if (!canUseRunAs(directory)) {
             return false
@@ -642,6 +745,9 @@ class ScreenshotHarnessTest {
         private const val SCREENSHOT_READY_FLAG = "screenshot_ready.flag"
         private const val SCREENSHOT_DONE_FLAG = "screenshot_done.flag"
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
+        private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
+        private const val PROGRAMMATIC_SCREENSHOT_DIRECTORY = "instrumentation-screenshots"
+        private const val PROGRAMMATIC_SCREENSHOT_FILE = "programmatic_screenshot.png"
         // Opening a thousand-page stress document can take a while on CI devices, so give the
         // viewer ample time to finish rendering before failing the harness run.
         private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
