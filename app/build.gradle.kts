@@ -984,4 +984,33 @@ kotlin {
             shouldRunAfter("adaptiveFlowPerformance")
         }
     }
+
+    val releaseBaselineProfileSource = project.layout.buildDirectory
+        .file("intermediates/merged_art_profile/benchmarkRelease/mergeBenchmarkReleaseArtProfile/baseline-prof.txt")
+    val releaseBaselineProfileOutput = project.layout.buildDirectory
+        .file("outputs/baselineprofile/release/baseline-prof.txt")
+
+    val syncReleaseBaselineProfile = tasks.register("syncReleaseBaselineProfile") {
+        group = "build"
+        description = "Copies the generated release baseline profile to a stable output directory."
+
+        inputs.file(releaseBaselineProfileSource)
+        outputs.file(releaseBaselineProfileOutput)
+
+        doLast {
+            val sourceFile = releaseBaselineProfileSource.get().asFile
+            if (!sourceFile.exists()) {
+                logger.warn("Release baseline profile was not generated at ${'$'}{sourceFile.absolutePath}")
+                return@doLast
+            }
+
+            val outputFile = releaseBaselineProfileOutput.get().asFile
+            outputFile.parentFile.mkdirs()
+            sourceFile.copyTo(outputFile, overwrite = true)
+        }
+    }
+
+    tasks.namedOrNull<Task>("generateReleaseBaselineProfile")?.configure {
+        finalizedBy(syncReleaseBaselineProfile)
+    }
 }
