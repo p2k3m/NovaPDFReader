@@ -554,8 +554,12 @@ if (requireConnectedDevice != true) {
 
                     androidComponents.beforeVariants { variantBuilder ->
                         val buildTypeName = variantBuilder.buildType ?: ""
-                        if (buildTypeName.contains("benchmark", ignoreCase = true) && !hasConnectedDevice) {
+                        if (
+                            buildTypeName.contains("benchmark", ignoreCase = true) &&
+                                !gradle.startParameter.requestsConnectedAndroidTests()
+                        ) {
                             variantBuilder.enableUnitTest = false
+                        }
                     }
                 }
             }
