@@ -188,7 +188,11 @@ val allowCiConnectedTests = parseOptionalBoolean(
     (findProperty("novapdf.allowCiConnectedTests") as? String)
         ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
         ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
-)
+) ?: if (isCiBuild) {
+    true
+} else {
+    null
+}
 
 val skipConnectedTestsOnCi = isCiBuild && allowCiConnectedTests != true && requireConnectedDevice != true
 
