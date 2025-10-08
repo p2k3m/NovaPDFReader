@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Restrict cleartext traffic by default so production builds require HTTPS.
+     Local instrumentation and CI harnesses rely on HTTP endpoints for fixture
+     downloads and coordination, so explicitly opt the known hostnames back in.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android emulator loopback to the host machine. -->
+        <domain>10.0.2.2</domain>
+        <!-- Genymotion and some CI runners expose the host at 10.0.3.2. -->
+        <domain>10.0.3.2</domain>
+        <!-- Localhost aliases for Robolectric or forwarded ports. -->
+        <domain>127.0.0.1</domain>
+        <domain>localhost</domain>
+        <!-- Docker-based CI sometimes exposes services under this hostname. -->
+        <domain>host.docker.internal</domain>
+    </domain-config>
+</network-security-config>
