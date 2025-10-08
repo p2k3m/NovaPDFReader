@@ -324,36 +324,33 @@ tasks.withType<JavaCompile>().configureEach {
     }
 }
 
-if (baselineTasksRequested) {
-    if (skipConnectedTestsOnCi) {
-        androidComponents.beforeVariants { variantBuilder ->
-            variantBuilder.enable = false
-        }
+val connectedAndroidTestTasks = tasks.matching { task ->
+    (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
+        task.name.startsWith("checkTestedAppObfuscation")
+}
 
-        tasks.matching { task ->
-            (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
-                task.name.startsWith("checkTestedAppObfuscation")
-        }.configureEach {
-            onlyIf {
-                logger.warn(
-                    "Skipping task $name because connected Android tests are disabled on CI. " +
-                        "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
-                )
-                false
-            }
+if (skipConnectedTestsOnCi) {
+    androidComponents.beforeVariants { variantBuilder ->
+        variantBuilder.enable = false
+    }
+
+    connectedAndroidTestTasks.configureEach {
+        onlyIf {
+            logger.warn(
+                "Skipping task $name because connected Android tests are disabled on CI. " +
+                    "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
+            )
+            false
         }
-    } else {
-        tasks.matching { task ->
-            (task.name.startsWith("connected") && task.name.endsWith("AndroidTest")) ||
-                task.name.startsWith("checkTestedAppObfuscation")
-        }.configureEach {
-            onlyIf {
-                val hasDevice = hasConnectedDeviceProvider.get()
-                if (!hasDevice) {
-                    logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
-                }
-                hasDevice
+    }
+} else {
+    connectedAndroidTestTasks.configureEach {
+        onlyIf {
+            val hasDevice = hasConnectedDeviceProvider.get()
+            if (!hasDevice) {
+                logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
             }
+            hasDevice
         }
     }
 }
