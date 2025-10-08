@@ -4,12 +4,8 @@ Lcom/novapdf/reader/ReaderActivity;
 HSPLcom/novapdf/reader/ReaderActivity;->onCreate(Landroid/os/Bundle;)V
 HSPLcom/novapdf/reader/ReaderActivity;->onResume()V
 HSPLcom/novapdf/reader/ReaderActivity;->onPause()V
-HSPLcom/novapdf/reader/ReaderActivity;->requestStoragePermissionIfNeeded()V
 HSPLcom/novapdf/reader/ReaderActivity;->openRemoteDocument(Ljava/lang/String;)V
-HSPLcom/novapdf/reader/ReaderActivity;->handleReadStoragePermissionResult(Z)V
-HSPLcom/novapdf/reader/ReaderActivity;->handleManageAllFilesResult()V
 Lcom/novapdf/reader/MainActivity;
-HSPLcom/novapdf/reader/MainActivity;->onCreate(Landroid/os/Bundle;)V
 Lcom/novapdf/reader/PdfViewerViewModel;
 HSPLcom/novapdf/reader/PdfViewerViewModel;->openDocument(Landroid/net/Uri;)V
 HSPLcom/novapdf/reader/PdfViewerViewModel;->openRemoteDocument(Ljava/lang/String;)V
