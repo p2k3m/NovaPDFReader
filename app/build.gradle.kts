@@ -985,8 +985,17 @@ kotlin {
         }
     }
 
-    val releaseBaselineProfileSource = project.layout.buildDirectory
-        .file("intermediates/merged_art_profile/benchmarkRelease/mergeBenchmarkReleaseArtProfile/baseline-prof.txt")
+    val releaseBaselineProfileSourceCandidates = listOf(
+        project.layout.buildDirectory.file(
+            "intermediates/merged_art_profile/benchmarkRelease/mergeBenchmarkReleaseArtProfile/baseline-prof.txt"
+        ),
+        project.layout.buildDirectory.file(
+            "intermediates/merged_art_profile/nonMinifiedRelease/mergeNonMinifiedReleaseArtProfile/baseline-prof.txt"
+        ),
+        project.layout.buildDirectory.file(
+            "intermediates/baselineprofiles/release/merged/baseline-prof.txt"
+        ),
+    )
     val releaseBaselineProfileOutput = project.layout.buildDirectory
         .file("outputs/baselineprofile/release/baseline-prof.txt")
 
@@ -995,15 +1004,21 @@ kotlin {
         description = "Copies the generated release baseline profile to a stable output directory."
 
         inputs
-            .files(releaseBaselineProfileSource)
-            .withPropertyName("releaseBaselineProfileSource")
+            .files(project.files(releaseBaselineProfileSourceCandidates))
+            .withPropertyName("releaseBaselineProfileSources")
             .optional()
         outputs.file(releaseBaselineProfileOutput)
 
         doLast {
-            val sourceFile = releaseBaselineProfileSource.get().asFile
-            if (!sourceFile.exists()) {
-                logger.warn("Release baseline profile was not generated at ${'$'}{sourceFile.absolutePath}")
+            val sourceFile = releaseBaselineProfileSourceCandidates
+                .map { it.get().asFile }
+                .firstOrNull(File::exists)
+            if (sourceFile == null) {
+                val checkedLocations = releaseBaselineProfileSourceCandidates
+                    .joinToString(", ") { it.get().asFile.absolutePath }
+                logger.warn(
+                    "Release baseline profile was not generated. Checked locations: $checkedLocations"
+                )
                 return@doLast
             }
 
