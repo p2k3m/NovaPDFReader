@@ -18,11 +18,24 @@ plugins {
     alias(libs.plugins.detekt) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.spotless) apply false
-    alias(libs.plugins.dependency.analysis)
+    alias(libs.plugins.dependency.analysis) apply false
 }
 
 val versionCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val ktlintVersion = versionCatalog.findVersion("ktlint").get().requiredVersion
+
+val dependencyAnalysisRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("dependency", ignoreCase = true) ||
+        taskName.contains("buildHealth", ignoreCase = true)
+}
+
+val dependencyAnalysisEnabled = providers.gradleProperty("novapdf.enableDependencyAnalysis")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
+
+if (dependencyAnalysisRequested || dependencyAnalysisEnabled.get()) {
+    pluginManager.apply("com.autonomousapps.dependency-analysis")
+}
 
 subprojects {
     pluginManager.apply("org.jlleitschuh.gradle.ktlint")
