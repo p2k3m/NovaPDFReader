@@ -452,43 +452,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          apk_path="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$apk_path" ]; then
-            echo "Debug APK not found; assembling it now"
-            ./gradlew :app:assembleDebug --stacktrace --no-build-cache
-          fi
-
-          echo "Waiting for emulator to report as online"
-          adb wait-for-device
-
-          boot_deadline=$((5 * 60))
-          boot_elapsed=0
-          until adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
-            sleep 5
-            boot_elapsed=$((boot_elapsed + 5))
-            if [ $boot_elapsed -ge $boot_deadline ]; then
-              echo "Emulator failed to report boot completion within $((boot_deadline / 60)) minutes" >&2
-              exit 1
-            fi
-          done
-
-          echo "Waiting for package manager service to become available"
-          pm_deadline=$((5 * 60))
-          pm_elapsed=0
-          until adb shell cmd package list packages >/dev/null 2>&1; do
-            sleep 5
-            pm_elapsed=$((pm_elapsed + 5))
-            if [ $pm_elapsed -ge $pm_deadline ]; then
-              echo "Package manager service did not become available within $((pm_deadline / 60)) minutes" >&2
-              exit 1
-            fi
-          done
-
-          echo "Installing $apk_path onto the emulator"
-          install_attempt=1
-          install_attempts_max=3
-
           wait_for_property() {
             local property="$1"
             local expected="$2"
@@ -588,6 +551,64 @@ jobs:
             done
           }
 
+          wait_for_service_registration() {
+            local label="$1"
+            local deadline="$2"
+            local interval=5
+            local elapsed=0
+            local status=""
+
+            while true; do
+              if status=$(adb shell service check package 2>/dev/null); then
+                status=$(printf '%s' "$status" | tr -d '\r' | tr -d '\n')
+                if printf '%s' "$status" | grep -qE ': found$'; then
+                  return 0
+                fi
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "${label} service binder did not become available within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
+          apk_path="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$apk_path" ]; then
+            echo "Debug APK not found; assembling it now"
+            ./gradlew :app:assembleDebug --stacktrace --no-build-cache
+          fi
+
+          echo "Waiting for emulator to report as online"
+          adb wait-for-device
+
+          boot_deadline=$((5 * 60))
+          boot_elapsed=0
+          until adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
+            sleep 5
+            boot_elapsed=$((boot_elapsed + 5))
+            if [ $boot_elapsed -ge $boot_deadline ]; then
+              echo "Emulator failed to report boot completion within $((boot_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
+          echo "Waiting for package manager command interface to become available"
+          pm_deadline=$((5 * 60))
+          pm_elapsed=0
+          until adb shell cmd package list packages >/dev/null 2>&1; do
+            sleep 5
+            pm_elapsed=$((pm_elapsed + 5))
+            if [ $pm_elapsed -ge $pm_deadline ]; then
+              echo "Package manager service did not become available within $((pm_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+          done
+
           echo "Waiting for credential encrypted storage to become available"
           wait_for_property "sys.user.0.ce_available" "1|true" "Credential encrypted storage" $((5 * 60))
 
@@ -595,8 +616,15 @@ jobs:
           wait_for_settings_value global device_provisioned "1|true" "device provisioning" $((5 * 60))
           wait_for_settings_value secure user_setup_complete "1|true" "user setup" $((5 * 60))
 
+          echo "Waiting for package manager binder registration"
+          wait_for_service_registration "Package manager" $((5 * 60))
+
           echo "Waiting for StorageManager service availability"
           wait_for_service "mount" "StorageManager" $((5 * 60))
+
+          echo "Installing $apk_path onto the emulator"
+          install_attempt=1
+          install_attempts_max=3
 
           while true; do
             if adb install --no-streaming -r "$apk_path"; then
@@ -613,6 +641,8 @@ jobs:
 
             retry_deadline=$((2 * 60))
             retry_elapsed=0
+            wait_for_service_registration "Package manager" $((2 * 60))
+
             until adb shell cmd package list packages >/dev/null 2>&1; do
               sleep 5
               retry_elapsed=$((retry_elapsed + 5))
@@ -961,7 +991,7 @@ jobs:
             fi
           done
 
-          echo "Waiting for package manager service to become available"
+          echo "Waiting for package manager command interface to become available"
           pm_deadline=$((5 * 60))
           pm_elapsed=0
           until adb shell cmd package list packages >/dev/null 2>&1; do
@@ -971,6 +1001,26 @@ jobs:
               echo "Package manager service did not become available within $((pm_deadline / 60)) minutes" >&2
               exit 1
             fi
+          done
+
+          echo "Confirming package manager binder registration"
+          pm_service_deadline=$((5 * 60))
+          pm_service_elapsed=0
+          while true; do
+            if pm_status=$(adb shell service check package 2>/dev/null); then
+              pm_status=$(printf '%s' "$pm_status" | tr -d '\r' | tr -d '\n')
+              if printf '%s' "$pm_status" | grep -qE ': found$'; then
+                break
+              fi
+            fi
+
+            if [ $pm_service_elapsed -ge $pm_service_deadline ]; then
+              echo "Package manager service binder did not become available within $((pm_service_deadline / 60)) minutes" >&2
+              exit 1
+            fi
+
+            sleep 5
+            pm_service_elapsed=$((pm_service_elapsed + 5))
           done
 
           echo "Installing $apk_path onto the emulator"
@@ -991,6 +1041,24 @@ jobs:
 
             retry_deadline=$((2 * 60))
             retry_elapsed=0
+            pm_service_deadline=$((2 * 60))
+            pm_service_elapsed=0
+            while true; do
+              if pm_status=$(adb shell service check package 2>/dev/null); then
+                pm_status=$(printf '%s' "$pm_status" | tr -d '\r' | tr -d '\n')
+                if printf '%s' "$pm_status" | grep -qE ': found$'; then
+                  break
+                fi
+              fi
+
+              if [ $pm_service_elapsed -ge $pm_service_deadline ]; then
+                echo "Package manager service binder did not recover within $((pm_service_deadline / 60)) minutes after failed install" >&2
+                exit 1
+              fi
+
+              sleep 5
+              pm_service_elapsed=$((pm_service_elapsed + 5))
+            done
             until adb shell cmd package list packages >/dev/null 2>&1; do
               sleep 5
               retry_elapsed=$((retry_elapsed + 5))
@@ -1032,6 +1100,24 @@ jobs:
 
             retry_deadline=$((2 * 60))
             retry_elapsed=0
+            pm_service_deadline=$((2 * 60))
+            pm_service_elapsed=0
+            while true; do
+              if pm_status=$(adb shell service check package 2>/dev/null); then
+                pm_status=$(printf '%s' "$pm_status" | tr -d '\r' | tr -d '\n')
+                if printf '%s' "$pm_status" | grep -qE ': found$'; then
+                  break
+                fi
+              fi
+
+              if [ $pm_service_elapsed -ge $pm_service_deadline ]; then
+                echo "Package manager service binder did not recover within $((pm_service_deadline / 60)) minutes after failed install" >&2
+                exit 1
+              fi
+
+              sleep 5
+              pm_service_elapsed=$((pm_service_elapsed + 5))
+            done
             until adb shell cmd package list packages >/dev/null 2>&1; do
               sleep 5
               retry_elapsed=$((retry_elapsed + 5))
