@@ -4,11 +4,13 @@ import org.gradle.StartParameter
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
+import org.gradle.api.UnknownTaskException
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.TaskContainer
 import org.gradle.api.tasks.compile.JavaCompile
 import java.io.File
 import java.util.Properties
@@ -368,37 +370,81 @@ tasks.configureEach {
     }
 }
 
-tasks.register("frameRateBenchmark") {
+fun TaskContainer.namedOrNull(name: String) =
+    try {
+        named(name)
+    } catch (_: UnknownTaskException) {
+        null
+    }
+
+val frameRateBenchmarkTask = tasks.register("frameRateBenchmark") {
     group = "performance"
     description = "Collects frame rate metrics using Macrobenchmark instrumentation."
-    dependsOn("connectedBenchmarkAndroidTest")
 }
 
-tasks.register("memoryBenchmark") {
+val memoryBenchmarkTask = tasks.register("memoryBenchmark") {
     group = "performance"
     description = "Collects memory usage metrics using Macrobenchmark instrumentation."
-    dependsOn("connectedBenchmarkAndroidTest")
 }
 
-tasks.register("startupBenchmark") {
+val startupBenchmarkTask = tasks.register("startupBenchmark") {
     group = "performance"
     description = "Measures cold startup timing using Macrobenchmark instrumentation."
-    dependsOn("connectedBenchmarkAndroidTest")
 }
 
-tasks.register("renderBenchmark") {
+val renderBenchmarkTask = tasks.register("renderBenchmark") {
     group = "performance"
     description = "Captures first-page rendering trace metrics using Macrobenchmark instrumentation."
-    dependsOn("connectedBenchmarkAndroidTest")
+}
+
+val performanceBenchmarkTasks = listOf(
+    frameRateBenchmarkTask,
+    memoryBenchmarkTask,
+    startupBenchmarkTask,
+    renderBenchmarkTask
+)
+
+val configurationCacheIncompatibleReason =
+    "Baseline Profile connected checks invoke adb during configuration."
+
+afterEvaluate {
+    val candidateBenchmarkTasks = listOfNotNull(
+        tasks.namedOrNull("connectedBenchmarkAndroidTest"),
+        tasks.namedOrNull("connectedNonMinifiedReleaseAndroidTest"),
+        tasks.namedOrNull("connectedNonMinifiedBenchmarkAndroidTest"),
+        tasks.namedOrNull("connectedBenchmarkReleaseAndroidTest"),
+        tasks.namedOrNull("connectedBenchmarkBenchmarkAndroidTest"),
+        tasks.namedOrNull("connectedAndroidTest")
+    )
+
+    val primaryBenchmarkTask = candidateBenchmarkTasks.firstOrNull()
+        ?: throw GradleException(
+            "Unable to locate a connected Android benchmark task. Check your Android Gradle Plugin setup."
+        )
+
+    val connectedBenchmarkTask = if (primaryBenchmarkTask.name == "connectedBenchmarkAndroidTest") {
+        primaryBenchmarkTask
+    } else {
+        tasks.namedOrNull("connectedBenchmarkAndroidTest")
+            ?: tasks.register("connectedBenchmarkAndroidTest") {
+                group = "verification"
+                description = "Compatibility alias for the connected benchmark Android test task."
+                notCompatibleWithConfigurationCache(configurationCacheIncompatibleReason)
+                dependsOn(primaryBenchmarkTask)
+            }
+    }
+
+    performanceBenchmarkTasks.forEach { taskProvider ->
+        taskProvider.configure {
+            dependsOn(connectedBenchmarkTask)
+        }
+    }
 }
 
 fun StartParameter.requestsTask(taskName: String): Boolean =
     taskNames.any { requested ->
         requested == taskName || requested.substringAfterLast(":") == taskName
     }
-
-val configurationCacheIncompatibleReason =
-    "Baseline Profile connected checks invoke adb during configuration."
 
 tasks.matching { task -> task.name.startsWith("connected") }.configureEach {
     notCompatibleWithConfigurationCache(configurationCacheIncompatibleReason)
