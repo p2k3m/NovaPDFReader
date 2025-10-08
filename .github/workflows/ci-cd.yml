@@ -955,7 +955,21 @@ jobs:
         if: matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
-          generated=$(find app/build -type f -iname 'baseline-prof.txt' -path '*/release/*' -print -quit)
+          patterns=(
+            '*/release/*'
+            '*/benchmarkRelease/*'
+            '*/benchmark/*'
+          )
+
+          generated=""
+          for pattern in "${patterns[@]}"; do
+            candidate=$(find app/build -type f -iname 'baseline-prof.txt' -path "$pattern" -print -quit)
+            if [ -n "$candidate" ]; then
+              generated="$candidate"
+              break
+            fi
+          done
+
           if [ -z "$generated" ]; then
             echo "::error::Failed to locate generated baseline profile under app/build" >&2
             find app/build -maxdepth 4 -type d -print >&2 || true
