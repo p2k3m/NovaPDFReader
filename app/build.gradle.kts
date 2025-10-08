@@ -994,7 +994,10 @@ kotlin {
         group = "build"
         description = "Copies the generated release baseline profile to a stable output directory."
 
-        inputs.file(releaseBaselineProfileSource)
+        inputs
+            .files(releaseBaselineProfileSource)
+            .withPropertyName("releaseBaselineProfileSource")
+            .optional()
         outputs.file(releaseBaselineProfileOutput)
 
         doLast {
