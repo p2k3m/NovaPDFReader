@@ -1,27 +1,19 @@
 package com.novapdf.reader
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
 import android.view.View
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
-import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -42,7 +34,6 @@ import kotlinx.coroutines.launch
 open class ReaderActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
-    private val preferences by lazy { getSharedPreferences(PERMISSION_PREFS, MODE_PRIVATE) }
     private var useComposeUi = true
 
     private var legacyAdapter: LegacyPdfPageAdapter? = null
@@ -70,21 +61,6 @@ open class ReaderActivity : ComponentActivity() {
                 contentResolver.takePersistableUriPermission(uri, takeFlags)
             }
             viewModel.openDocument(uri)
-        }
-
-    private val manageAllFilesPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            handleManageAllFilesResult()
-        }
-
-    private val appSettingsLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            requestStoragePermissionIfNeeded()
-        }
-
-    private val readStoragePermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            handleReadStoragePermissionResult(granted)
         }
 
     private val dependencies: NovaPdfDependencies
@@ -120,7 +96,6 @@ open class ReaderActivity : ComponentActivity() {
             setContentView(R.layout.activity_main)
             setupLegacyUi()
         }
-        requestStoragePermissionIfNeeded()
     }
 
     override fun onResume() {
@@ -136,82 +111,6 @@ open class ReaderActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         legacyAdapter?.dispose()
-    }
-
-    protected open fun requestStoragePermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
-        val manageStorage = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-        val currentlyGranted = if (manageStorage) {
-            Environment.isExternalStorageManager()
-        } else {
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_EXTERNAL_STORAGE
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-
-        cachePermissionGrantState(currentlyGranted)
-        if (currentlyGranted) return
-
-        if (manageStorage) {
-            val alreadyPrompted = preferences.getBoolean(KEY_MANAGE_PROMPTED, false)
-            if (!alreadyPrompted) {
-                preferences.edit().putBoolean(KEY_MANAGE_PROMPTED, true).apply()
-            }
-            val messageRes = if (alreadyPrompted) {
-                R.string.storage_permission_denied
-            } else {
-                R.string.storage_permission_manage_explanation
-            }
-            showStorageSnackbar(
-                messageRes = messageRes,
-                actionRes = R.string.storage_permission_open_settings,
-                onAction = { launchManageAllFilesSettings() }
-            )
-        } else {
-            val permission = Manifest.permission.READ_EXTERNAL_STORAGE
-            val alreadyPrompted = preferences.getBoolean(KEY_READ_PROMPTED, false)
-            val shouldRequest = !alreadyPrompted || shouldShowRequestPermissionRationale(permission)
-            if (shouldRequest) {
-                preferences.edit().putBoolean(KEY_READ_PROMPTED, true).apply()
-                showStorageSnackbar(R.string.storage_permission_read_explanation)
-                readStoragePermissionLauncher.launch(permission)
-            } else {
-                showStorageSnackbar(
-                    messageRes = R.string.storage_permission_denied,
-                    actionRes = R.string.storage_permission_open_settings,
-                    onAction = { openAppSettings() }
-                )
-            }
-        }
-    }
-
-    private fun handleManageAllFilesResult() {
-        val granted = Environment.isExternalStorageManager()
-        cachePermissionGrantState(granted)
-        showStorageSnackbar(
-            if (granted) R.string.storage_permission_granted else R.string.storage_permission_denied
-        )
-    }
-
-    private fun handleReadStoragePermissionResult(granted: Boolean) {
-        cachePermissionGrantState(granted)
-        showStorageSnackbar(
-            if (granted) R.string.storage_permission_granted else R.string.storage_permission_denied
-        )
-    }
-
-    private fun launchManageAllFilesSettings() {
-        val packageUri = Uri.fromParts("package", packageName, null)
-        val appIntent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-            data = packageUri
-        }
-        val intent = if (packageManager.resolveActivity(appIntent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
-            appIntent
-        } else {
-            Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-        }
-        manageAllFilesPermissionLauncher.launch(intent)
     }
 
     private fun launchCloudDocumentPicker() {
@@ -259,31 +158,6 @@ open class ReaderActivity : ComponentActivity() {
         }
     }
 
-    private fun showStorageSnackbar(
-        @StringRes messageRes: Int,
-        @StringRes actionRes: Int? = null,
-        onAction: (() -> Unit)? = null
-    ) {
-        if (useComposeUi) {
-            lifecycleScope.launch {
-                val result = snackbarHost.showSnackbar(
-                    message = getString(messageRes),
-                    actionLabel = actionRes?.let(::getString)
-                )
-                if (result == SnackbarResult.ActionPerformed) {
-                    onAction?.invoke()
-                }
-            }
-        } else {
-            val root = legacyRoot ?: return
-            val snackbar = Snackbar.make(root, getString(messageRes), Snackbar.LENGTH_LONG)
-            if (actionRes != null && onAction != null) {
-                snackbar.setAction(actionRes) { onAction() }
-            }
-            snackbar.show()
-        }
-    }
-
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun openDocumentForTest(uri: Uri) {
         if (!useComposeUi) {
@@ -324,7 +198,7 @@ open class ReaderActivity : ComponentActivity() {
                 R.id.action_export -> {
                     val exported = viewModel.exportDocument(this)
                     if (!exported) {
-                        showStorageSnackbar(R.string.export_failed)
+                        showUserSnackbar(getString(R.string.export_failed))
                     }
                     true
                 }
@@ -448,29 +322,5 @@ open class ReaderActivity : ComponentActivity() {
             manager.scrollToPositionWithOffset(state.currentPage, 0)
             legacyLastFocusedPage = state.currentPage
         }
-    }
-
-    private fun cachePermissionGrantState(granted: Boolean) {
-        preferences.edit().apply {
-            putBoolean(KEY_STORAGE_GRANTED, granted)
-            if (granted) {
-                putBoolean(KEY_MANAGE_PROMPTED, false)
-                putBoolean(KEY_READ_PROMPTED, false)
-            }
-        }.apply()
-    }
-
-    private fun openAppSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", packageName, null)
-        }
-        appSettingsLauncher.launch(intent)
-    }
-
-    companion object {
-        private const val PERMISSION_PREFS = "novapdf_permissions"
-        private const val KEY_STORAGE_GRANTED = "storage_granted"
-        private const val KEY_MANAGE_PROMPTED = "manage_permission_prompted"
-        private const val KEY_READ_PROMPTED = "read_permission_prompted"
     }
 }
