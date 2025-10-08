@@ -70,7 +70,8 @@ the `baselineprofile` module.
 
    ```bash
    ./gradlew :app:generateReleaseBaselineProfile --stacktrace
-   cp app/build/outputs/baselineProfile/release/baseline-prof.txt app/src/main/baseline-prof.txt
+   cp "$(find app/build -type f -iname 'baseline-prof.txt' -path '*/release/*' -print -quit)" \
+     app/src/main/baseline-prof.txt
    ```
 
 5. Review the diff and commit the updated file together with any performance-sensitive
