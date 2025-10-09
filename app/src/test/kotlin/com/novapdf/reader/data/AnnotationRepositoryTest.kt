@@ -3,10 +3,12 @@ package com.novapdf.reader.data
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
 import com.novapdf.reader.model.RectSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,7 +29,7 @@ class AnnotationRepositoryTest {
     @Test
     fun addAndPersistAnnotations() = runTest {
         AnnotationRepository.preferenceFile(context).delete()
-        val repository = AnnotationRepository(context)
+        val repository = AnnotationRepository(context, dispatchers = testDispatchers())
         val documentId = "test-doc"
         val stroke = AnnotationCommand.Stroke(
             pageIndex = 1,
@@ -60,7 +62,8 @@ class AnnotationRepositoryTest {
             fallbackPreferencesProvider = { appContext ->
                 fallbackInvoked = true
                 appContext.getSharedPreferences(AnnotationRepository.PREFERENCES_FILE_NAME, Context.MODE_PRIVATE)
-            }
+            },
+            dispatchers = testDispatchers()
         )
 
         val annotation = AnnotationCommand.Highlight(
@@ -79,4 +82,14 @@ class AnnotationRepositoryTest {
             AnnotationRepository.preferenceFile(context).exists()
         )
     }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun kotlinx.coroutines.test.TestScope.testDispatchers(): TestCoroutineDispatchers {
+    val dispatcher = StandardTestDispatcher(testScheduler)
+    return TestCoroutineDispatchers(
+        io = dispatcher,
+        default = dispatcher,
+        main = dispatcher
+    )
 }
