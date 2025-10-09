@@ -176,6 +176,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt.android)
     alias(libs.plugins.androidx.baselineprofile)
     id("jacoco")
 }
@@ -755,6 +756,8 @@ if (needsReleaseSigning) {
 // (see docs/regressions/2024-09-pdfium-crash.md).
 
 dependencies {
+    implementation(libs.hilt.android)
+    implementation(libs.androidx.hilt.work)
     implementation(project(":domain:model"))
     implementation(project(":domain:usecases"))
     implementation(project(":data:repositories"))
@@ -807,6 +810,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    ksp(libs.hilt.compiler)
+    ksp(libs.androidx.hilt.compiler)
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

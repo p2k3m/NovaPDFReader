@@ -21,6 +21,12 @@ plugins {
     alias(libs.plugins.dependency.analysis) apply false
 }
 
+buildscript {
+    dependencies {
+        classpath("com.squareup:javapoet:1.13.0")
+    }
+}
+
 val versionCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val ktlintVersion = versionCatalog.findVersion("ktlint").get().requiredVersion
 
@@ -38,6 +44,12 @@ if (dependencyAnalysisRequested || dependencyAnalysisEnabled.get()) {
 }
 
 subprojects {
+    configurations.all {
+        resolutionStrategy {
+            force("com.squareup:javapoet:1.13.0")
+        }
+    }
+
     pluginManager.apply("org.jlleitschuh.gradle.ktlint")
     pluginManager.apply("com.diffplug.spotless")
     pluginManager.apply("io.gitlab.arturbosch.detekt")

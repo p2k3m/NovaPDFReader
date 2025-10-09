@@ -3,21 +3,33 @@ package com.novapdf.reader
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
+import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
+import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
+import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
+import com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase
+import com.novapdf.reader.domain.usecase.DefaultDocumentMaintenanceUseCase
+import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
+import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
+import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
+import com.novapdf.reader.download.S3RemotePdfDownloader
+import com.novapdf.reader.engine.AdaptiveFlowManager
+import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
+import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
-import com.novapdf.reader.data.remote.PdfDownloadManager
-import com.novapdf.reader.data.remote.RemotePdfException
-import com.novapdf.reader.engine.AdaptiveFlowManager
-import com.novapdf.reader.presentation.viewer.R
 import com.shockwave.pdfium.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -64,10 +76,41 @@ class PdfViewerViewModelSearchTest {
         Dispatchers.resetMain()
     }
 
+    private fun createViewModel(
+        annotationRepository: AnnotationRepository,
+        pdfRepository: PdfDocumentRepository,
+        adaptiveFlowManager: AdaptiveFlowManager,
+        bookmarkManager: BookmarkManager,
+        maintenanceScheduler: DocumentMaintenanceScheduler,
+        searchCoordinator: DocumentSearchCoordinator,
+        downloadManager: PdfDownloadManager,
+        crashReporter: CrashReporter = object : CrashReporter {
+            override fun install() = Unit
+            override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) = Unit
+            override fun logBreadcrumb(message: String) = Unit
+        },
+    ): PdfViewerViewModel {
+        val useCases = DefaultPdfViewerUseCases(
+            document = DefaultPdfDocumentUseCase(pdfRepository),
+            annotations = DefaultAnnotationUseCase(annotationRepository),
+            bookmarks = DefaultBookmarkUseCase(bookmarkManager),
+            search = DefaultDocumentSearchUseCase(searchCoordinator),
+            remoteDocuments = DefaultRemoteDocumentUseCase(S3RemotePdfDownloader(downloadManager)),
+            maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
+            crashReporting = DefaultCrashReportingUseCase(crashReporter),
+            adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
+        )
+        val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
+        return PdfViewerViewModel(app, useCases)
+    }
+
+    private fun getString(resId: Int): String {
+        return ApplicationProvider.getApplicationContext<TestPdfApp>().getString(resId)
+    }
+
     @Test
     @Config(application = TestPdfApp::class)
     fun `search delegates to Lucene coordinator`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -99,7 +142,7 @@ class PdfViewerViewModelSearchTest {
         )
         whenever(searchCoordinator.search(eq(session), eq("galaxy"))).thenReturn(searchResults)
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -108,8 +151,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         viewModel.search("galaxy")
         advanceUntilIdle()
@@ -121,7 +162,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `blank query clears previous results`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -154,7 +194,7 @@ class PdfViewerViewModelSearchTest {
             )
         )
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -163,8 +203,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         viewModel.search("history")
         advanceUntilIdle()
@@ -178,7 +216,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `openDocument warms up index`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -206,7 +243,7 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
         whenever(pdfRepository.renderPage(eq(0), any())).thenReturn(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -215,8 +252,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         val uri = Uri.parse("file://doc")
         viewModel.openDocument(uri)
@@ -228,7 +263,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument downloads then opens PDF`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -258,7 +292,7 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
         whenever(pdfRepository.renderPage(eq(0), any())).thenReturn(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -267,8 +301,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         viewModel.openRemoteDocument(downloadUri.toString())
         advanceUntilIdle()
@@ -283,7 +315,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument surfaces download failure`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -304,7 +335,7 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad")))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -314,21 +345,18 @@ class PdfViewerViewModelSearchTest {
             downloadManager
         )
 
-        val viewModel = PdfViewerViewModel(app)
-
         viewModel.openRemoteDocument(failingUrl)
         advanceUntilIdle()
 
         verify(downloadManager).download(eq(failingUrl))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
-        assertEquals(app.getString(R.string.error_remote_open_failed), (status as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_remote_open_failed), (status as DocumentStatus.Error).message)
     }
 
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument surfaces corrupt download failure`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -353,7 +381,7 @@ class PdfViewerViewModelSearchTest {
         )
         whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(corruptFailure))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -363,21 +391,18 @@ class PdfViewerViewModelSearchTest {
             downloadManager
         )
 
-        val viewModel = PdfViewerViewModel(app)
-
         viewModel.openRemoteDocument(failingUrl)
         advanceUntilIdle()
 
         verify(downloadManager).download(eq(failingUrl))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
-        assertEquals(app.getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
     }
 
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument recovers from thrown download exception`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -398,7 +423,7 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         whenever(downloadManager.download(eq(failingUrl))).thenThrow(IllegalStateException("broken"))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -408,8 +433,6 @@ class PdfViewerViewModelSearchTest {
             downloadManager
         )
 
-        val viewModel = PdfViewerViewModel(app)
-
         viewModel.openRemoteDocument(failingUrl)
         advanceUntilIdle()
 
@@ -417,7 +440,7 @@ class PdfViewerViewModelSearchTest {
         val uiState = viewModel.uiState.value
         assertTrue(uiState.documentStatus is DocumentStatus.Error)
         assertEquals(
-            app.getString(R.string.error_remote_open_failed),
+            getString(R.string.error_remote_open_failed),
             (uiState.documentStatus as DocumentStatus.Error).message
         )
     }
@@ -425,7 +448,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument failure clears loading status before surfacing error`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -446,7 +468,7 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad")))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -455,8 +477,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         val statuses = mutableListOf<DocumentStatus>()
         val job = launch {
@@ -475,13 +495,12 @@ class PdfViewerViewModelSearchTest {
         assertEquals(DocumentStatus.Idle, statuses[2])
         val errorStatus = statuses[3]
         assertTrue(errorStatus is DocumentStatus.Error)
-        assertEquals(app.getString(R.string.error_remote_open_failed), (errorStatus as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_remote_open_failed), (errorStatus as DocumentStatus.Error).message)
     }
 
     @Test
     @Config(application = TestPdfApp::class)
     fun `openDocument failure clears loading status before surfacing error`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -501,7 +520,7 @@ class PdfViewerViewModelSearchTest {
 
         whenever(pdfRepository.open(any())).thenThrow(PdfOpenException(PdfOpenException.Reason.CORRUPTED))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -510,8 +529,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         val statuses = mutableListOf<DocumentStatus>()
         val job = launch {
@@ -531,13 +548,12 @@ class PdfViewerViewModelSearchTest {
         assertEquals(DocumentStatus.Idle, statuses[2])
         val errorStatus = statuses[3]
         assertTrue(errorStatus is DocumentStatus.Error)
-        assertEquals(app.getString(R.string.error_pdf_corrupted), (errorStatus as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_pdf_corrupted), (errorStatus as DocumentStatus.Error).message)
     }
 
     @Test
     @Config(application = TestPdfApp::class)
     fun `openRemoteDocument ignores cancellation without surfacing error`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -558,7 +574,7 @@ class PdfViewerViewModelSearchTest {
         val url = "https://example.com/cancel.pdf"
         whenever(downloadManager.download(eq(url))).thenThrow(CancellationException("cancelled"))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -567,8 +583,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         viewModel.openRemoteDocument(url)
         advanceUntilIdle()
@@ -580,7 +594,6 @@ class PdfViewerViewModelSearchTest {
     @Test
     @Config(application = TestPdfApp::class)
     fun `prefetch is skipped for very large documents`() = runTest {
-        val app = TestPdfApp.getInstance()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -607,7 +620,7 @@ class PdfViewerViewModelSearchTest {
         )
         whenever(pdfRepository.session).thenReturn(MutableStateFlow(session))
 
-        app.installDependencies(
+        val viewModel = createViewModel(
             annotationRepository,
             pdfRepository,
             adaptiveFlowManager,
@@ -616,8 +629,6 @@ class PdfViewerViewModelSearchTest {
             searchCoordinator,
             downloadManager
         )
-
-        val viewModel = PdfViewerViewModel(app)
 
         advanceUntilIdle()
 

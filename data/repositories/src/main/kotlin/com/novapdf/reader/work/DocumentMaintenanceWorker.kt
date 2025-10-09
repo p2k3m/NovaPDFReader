@@ -4,27 +4,33 @@ import android.content.Context
 import android.util.Base64
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import androidx.hilt.work.HiltWorker
+import com.novapdf.reader.data.AnnotationRepository
+import com.novapdf.reader.data.BookmarkManager
+import com.novapdf.reader.engine.AdaptiveFlowManager
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 
-class DocumentMaintenanceWorker(
-    appContext: Context,
-    workerParams: WorkerParameters
+@HiltWorker
+class DocumentMaintenanceWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val annotationRepository: AnnotationRepository,
+    private val bookmarkManager: BookmarkManager,
+    private val adaptiveFlowManager: AdaptiveFlowManager,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val json = Json { prettyPrint = true }
 
     override suspend fun doWork(): Result {
-        val dependencies = applicationContext as? DocumentMaintenanceDependencies
-            ?: return Result.failure()
-        if (dependencies.isUiUnderLoad()) {
+        if (adaptiveFlowManager.isUiUnderLoad()) {
             return Result.retry()
         }
-        val annotationRepository = dependencies.annotationRepository
-        val bookmarkManager = dependencies.bookmarkManager
 
         val explicitTargets = inputData.getStringArray(KEY_DOCUMENT_IDS)
             ?.mapNotNull { it.takeIf(String::isNotBlank) }
@@ -54,9 +60,7 @@ class DocumentMaintenanceWorker(
                 needsRetry = true
             }
 
-            val bookmarksResult = runCatching {
-                bookmarkManager.bookmarks(documentId)
-            }
+            val bookmarksResult = runCatching { bookmarkManager.bookmarks(documentId) }
 
             val bookmarks = bookmarksResult.getOrElse {
                 needsRetry = true

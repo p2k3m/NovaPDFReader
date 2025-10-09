@@ -1,15 +1,27 @@
 package com.novapdf.reader
 
+import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.remote.PdfDownloadManager
-import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
+import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
+import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
+import com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase
+import com.novapdf.reader.domain.usecase.DefaultDocumentMaintenanceUseCase
+import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
+import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
+import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
+import com.novapdf.reader.download.S3RemotePdfDownloader
+import com.novapdf.reader.engine.AdaptiveFlowManager
+import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfOutlineNode
+import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
-import com.novapdf.reader.engine.AdaptiveFlowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,18 +80,25 @@ class PdfViewerViewModelRenderProgressTest {
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
         whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
 
-        val app = TestPdfApp.getInstance()
-        app.installDependencies(
-            annotationRepository,
-            pdfRepository,
-            adaptiveFlowManager,
-            bookmarkManager,
-            maintenanceScheduler,
-            searchCoordinator,
-            downloadManager
+        val crashReporter = object : CrashReporter {
+            override fun install() = Unit
+            override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) = Unit
+            override fun logBreadcrumb(message: String) = Unit
+        }
+
+        val useCases = DefaultPdfViewerUseCases(
+            document = DefaultPdfDocumentUseCase(pdfRepository),
+            annotations = DefaultAnnotationUseCase(annotationRepository),
+            bookmarks = DefaultBookmarkUseCase(bookmarkManager),
+            search = DefaultDocumentSearchUseCase(searchCoordinator),
+            remoteDocuments = DefaultRemoteDocumentUseCase(S3RemotePdfDownloader(downloadManager)),
+            maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
+            crashReporting = DefaultCrashReportingUseCase(crashReporter),
+            adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
         )
 
-        val viewModel = PdfViewerViewModel(app)
+        val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
+        val viewModel = PdfViewerViewModel(app, useCases)
 
         renderProgress.value = PdfRenderProgress.Rendering(pageIndex = 2, progress = 0.4f)
         advanceUntilIdle()

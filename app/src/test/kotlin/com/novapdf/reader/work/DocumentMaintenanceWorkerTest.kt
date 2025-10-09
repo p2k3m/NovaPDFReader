@@ -1,14 +1,19 @@
 package com.novapdf.reader.work
 
+import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.ListenableWorker
+import androidx.work.WorkerFactory
+import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
-import com.novapdf.reader.NovaPdfApp
+import com.novapdf.reader.TestPdfApp
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
+import com.novapdf.reader.engine.AdaptiveFlowManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -20,14 +25,16 @@ import java.io.File
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, application = NovaPdfApp::class)
+@Config(manifest = Config.NONE, application = TestPdfApp::class)
 class DocumentMaintenanceWorkerTest {
 
-    private lateinit var app: NovaPdfApp
+    private lateinit var app: Context
+    private lateinit var annotationRepository: AnnotationRepository
 
     @Before
     fun setUp() {
         app = ApplicationProvider.getApplicationContext()
+        annotationRepository = AnnotationRepository(app)
         AnnotationRepository.preferenceFile(app).let { prefsFile ->
             prefsFile.delete()
             prefsFile.parentFile?.let { parent ->
@@ -35,6 +42,11 @@ class DocumentMaintenanceWorkerTest {
             }
         }
         File(app.filesDir, "exports").deleteRecursively()
+    }
+
+    @After
+    fun tearDown() {
+        annotationRepository.trackedDocumentIds().forEach { annotationRepository.clearInMemory(it) }
     }
 
     @Test
@@ -46,10 +58,33 @@ class DocumentMaintenanceWorkerTest {
             color = 0xFF00FF00L,
             strokeWidth = 4f
         )
-        app.annotationRepository.addAnnotation(documentId, stroke)
-        app.bookmarkManager.toggleBookmark(documentId, 3)
+        annotationRepository.addAnnotation(documentId, stroke)
+
+        val bookmarkManager = org.mockito.kotlin.mock<com.novapdf.reader.data.BookmarkManager>()
+        org.mockito.kotlin.whenever(bookmarkManager.bookmarkedDocumentIds()).thenReturn(listOf(documentId))
+        org.mockito.kotlin.whenever(bookmarkManager.bookmarks(documentId)).thenReturn(listOf(3))
+
+        val adaptiveFlowManager = org.mockito.kotlin.mock<AdaptiveFlowManager>()
+        org.mockito.kotlin.whenever(adaptiveFlowManager.isUiUnderLoad()).thenReturn(false)
+
+        val workerFactory = object : WorkerFactory() {
+            override fun createWorker(
+                appContext: Context,
+                workerClassName: String,
+                workerParameters: WorkerParameters,
+            ): ListenableWorker? {
+                return DocumentMaintenanceWorker(
+                    appContext,
+                    workerParameters,
+                    annotationRepository,
+                    bookmarkManager,
+                    adaptiveFlowManager,
+                )
+            }
+        }
 
         val worker = TestListenableWorkerBuilder<DocumentMaintenanceWorker>(app)
+            .setWorkerFactory(workerFactory)
             .build()
         val result = worker.doWork()
 

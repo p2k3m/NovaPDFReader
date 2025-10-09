@@ -3,6 +3,7 @@ package com.novapdf.reader.download
 import android.net.Uri
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.RemotePdfException
+import javax.inject.Inject
 
 /**
  * Higher level entry point for downloading remote PDF documents. This adapter separates
@@ -19,8 +20,8 @@ interface RemotePdfDownloader {
 /**
  * Default [RemotePdfDownloader] that delegates to [PdfDownloadManager].
  */
-class S3RemotePdfDownloader(
-    private val downloadManager: PdfDownloadManager
+class S3RemotePdfDownloader @Inject constructor(
+    private val downloadManager: PdfDownloadManager,
 ) : RemotePdfDownloader {
 
     override suspend fun download(url: String): Result<Uri> {

@@ -4,6 +4,8 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 plugins {
     id("com.android.library")
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt.android)
 }
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
@@ -42,6 +44,9 @@ dependencies {
 
     runtimeOnly(libs.kotlinx.coroutines.android)
     runtimeOnly(libs.lucene.analyzers.common)
+
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
 }
 
 kotlin {

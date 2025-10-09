@@ -6,6 +6,8 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 plugins {
     id("com.android.library")
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt.android)
     alias(libs.plugins.kover)
 }
 
@@ -48,6 +50,9 @@ dependencies {
     implementation(libs.androidx.annotation)
 
     runtimeOnly(libs.kotlinx.coroutines.android)
+
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
 }
 
 kotlin {
