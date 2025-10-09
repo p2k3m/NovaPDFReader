@@ -97,7 +97,7 @@ class LuceneSearchCoordinator(
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
 
-    override fun prepare(session: PdfDocumentSession) {
+    override fun prepare(session: PdfDocumentSession): Job? {
         prepareJob?.cancel()
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
             Log.i(
@@ -111,12 +111,13 @@ class LuceneSearchCoordinator(
             indexReader = null
             pageContents = emptyList()
             prepareJob = null
-            return
+            return null
         }
         prepareJob = scope.launch {
             runCatching { rebuildIndex(session) }
                 .onFailure { Log.w(TAG, "Failed to pre-build index", it) }
         }
+        return prepareJob
     }
 
     override suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult> {
