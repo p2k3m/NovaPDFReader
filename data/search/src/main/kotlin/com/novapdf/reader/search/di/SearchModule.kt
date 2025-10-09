@@ -1,6 +1,7 @@
 package com.novapdf.reader.search.di
 
 import android.content.Context
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.LuceneSearchCoordinator
@@ -20,5 +21,6 @@ object SearchModule {
     fun provideDocumentSearchCoordinator(
         @ApplicationContext context: Context,
         repository: PdfDocumentRepository,
-    ): DocumentSearchCoordinator = LuceneSearchCoordinator(context, repository)
+        dispatchers: CoroutineDispatchers,
+    ): DocumentSearchCoordinator = LuceneSearchCoordinator(context, repository, dispatchers)
 }

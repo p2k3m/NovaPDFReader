@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
@@ -115,7 +116,7 @@ class PdfViewerViewModelSearchTest {
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
         )
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
-        return PdfViewerViewModel(app, useCases)
+        return PdfViewerViewModel(app, useCases, TestCoroutineDispatchers(dispatcher, dispatcher, dispatcher))
     }
 
     private fun getString(resId: Int): String {

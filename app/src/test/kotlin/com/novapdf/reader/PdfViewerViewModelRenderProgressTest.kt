@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
@@ -26,7 +27,6 @@ import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -111,7 +111,7 @@ class PdfViewerViewModelRenderProgressTest {
         )
 
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
-        val viewModel = PdfViewerViewModel(app, useCases)
+        val viewModel = PdfViewerViewModel(app, useCases, TestCoroutineDispatchers(dispatcher, dispatcher, dispatcher))
 
         renderProgress.value = PdfRenderProgress.Rendering(pageIndex = 2, progress = 0.4f)
         advanceUntilIdle()

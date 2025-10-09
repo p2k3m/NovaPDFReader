@@ -16,9 +16,9 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import javax.inject.Provider
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -52,10 +52,15 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     @Inject
     lateinit var databaseProvider: Provider<NovaPdfDatabase>
 
+    @Inject
+    lateinit var dispatchers: CoroutineDispatchers
+
     private val scopeExceptionHandler = CoroutineExceptionHandler { _, error ->
         logDeferredInitializationFailure("uncaught", error)
     }
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + scopeExceptionHandler)
+    private val applicationScope by lazy {
+        CoroutineScope(SupervisorJob() + dispatchers.default + scopeExceptionHandler)
+    }
     private val backgroundInitializationStarted = AtomicBoolean(false)
 
     private var searchCoordinatorInstance: DocumentSearchCoordinator? = null
@@ -124,13 +129,13 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private suspend fun initializeDeferredComponents() {
-        val databaseReady = withContext(Dispatchers.IO) {
+        val databaseReady = withContext(dispatchers.io) {
             runCatching { databaseProvider.get() }
                 .onFailure { error -> logDeferredInitializationFailure("database", error) }
                 .isSuccess
         }
         if (databaseReady) {
-            withContext(Dispatchers.IO) {
+            withContext(dispatchers.io) {
                 runCatching { bookmarkManager() }
                     .onFailure { error -> logDeferredInitializationFailure("bookmarks", error) }
             }

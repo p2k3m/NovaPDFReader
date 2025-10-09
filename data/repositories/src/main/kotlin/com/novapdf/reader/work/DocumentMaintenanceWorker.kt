@@ -8,9 +8,9 @@ import androidx.hilt.work.HiltWorker
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.engine.AdaptiveFlowManager
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -23,6 +23,7 @@ class DocumentMaintenanceWorker @AssistedInject constructor(
     private val annotationRepository: AnnotationRepository,
     private val bookmarkManager: BookmarkManager,
     private val adaptiveFlowManager: AdaptiveFlowManager,
+    private val dispatchers: CoroutineDispatchers,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val json = Json { prettyPrint = true }
@@ -81,7 +82,7 @@ class DocumentMaintenanceWorker @AssistedInject constructor(
     }
 
     private suspend fun exportBookmarks(documentId: String, bookmarks: List<Int>) {
-        withContext(Dispatchers.IO) {
+        withContext(dispatchers.io) {
             val encodedId = encodeDocumentId(documentId)
             val exportDir = File(applicationContext.filesDir, EXPORT_DIR_NAME).apply { mkdirs() }
             val exportFile = File(exportDir, "$encodedId$BOOKMARK_SUFFIX")

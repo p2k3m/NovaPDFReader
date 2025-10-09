@@ -7,8 +7,8 @@ import android.util.Log
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -18,6 +18,7 @@ class AnnotationRepository(
     context: Context,
     private val securePreferencesProvider: (Context) -> SharedPreferences = Companion::createEncryptedPreferences,
     private val fallbackPreferencesProvider: (Context) -> SharedPreferences = Companion::createUnencryptedPreferences,
+    private val dispatchers: CoroutineDispatchers,
 ) {
     private val appContext = context.applicationContext
     private val json = Json { prettyPrint = true }
@@ -53,7 +54,7 @@ class AnnotationRepository(
         }
     }
 
-    suspend fun saveAnnotations(documentId: String): File? = withContext(Dispatchers.IO) {
+    suspend fun saveAnnotations(documentId: String): File? = withContext(dispatchers.io) {
         val annotations = synchronized(lock) {
             inMemoryAnnotations[documentId]?.toList()
         } ?: return@withContext null
