@@ -26,23 +26,34 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import javax.inject.Inject
 
 @RunWith(AndroidJUnit4::class)
+@HiltAndroidTest
 class PdfViewerUiAutomatorTest {
 
-    @get:Rule
+    @get:Rule(order = 0)
+    val hiltRule = HiltAndroidRule(this)
+
+    @get:Rule(order = 1)
     val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
 
+    @Inject
+    lateinit var testDocumentFixtures: TestDocumentFixtures
+
     @Before
     fun setUp() = runBlocking {
+        hiltRule.inject()
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
         ensureWorkManagerInitialized(appContext)
-        documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
+        documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
         withContext(Dispatchers.IO) {
             WorkManager.getInstance(appContext).cancelAllWork().result.get(5, TimeUnit.SECONDS)
         }
@@ -68,8 +79,7 @@ class PdfViewerUiAutomatorTest {
         device.swipe(startX, centerY, endX, centerY, 40)
         device.waitForIdle()
 
-        val app = ApplicationProvider.getApplicationContext<NovaPdfApp>()
-        app.adaptiveFlowManager.overrideSensitivityForTesting(1.6f)
+        adaptiveFlowManager(appContext).overrideSensitivityForTesting(1.6f)
 
         val adaptiveFlowActive = device.wait(
             Until.hasObject(By.textContains("Adaptive Flow Active")),

@@ -37,18 +37,28 @@ import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
 import kotlin.text.Charsets
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import javax.inject.Inject
 
 @RunWith(AndroidJUnit4::class)
+@HiltAndroidTest
 class ScreenshotHarnessTest {
 
-    @get:Rule
+    @get:Rule(order = 0)
+    val hiltRule = HiltAndroidRule(this)
+
+    @get:Rule(order = 1)
     val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
-    @get:Rule
+    @get:Rule(order = 2)
     val harnessLoggerRule = HarnessTestWatcher(
         onEvent = { message -> logHarnessInfo(message) },
         onFailure = { message, error -> logHarnessError(message, error) }
     )
+
+    @Inject
+    lateinit var testDocumentFixtures: TestDocumentFixtures
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
@@ -60,6 +70,7 @@ class ScreenshotHarnessTest {
 
     @Before
     fun setUp() = runBlocking {
+        hiltRule.inject()
         val harnessRequested = shouldRunHarness()
         logHarnessInfo("Screenshot harness requested=$harnessRequested")
         assumeTrue("Screenshot harness disabled", harnessRequested)
@@ -78,7 +89,7 @@ class ScreenshotHarnessTest {
         logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
         ensureWorkManagerInitialized(appContext)
         logHarnessInfo("Installing thousand-page stress document for screenshot harness")
-        documentUri = TestDocumentFixtures.installThousandPageDocument(appContext)
+        documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
         logHarnessInfo("Thousand-page document installed at $documentUri")
         cancelWorkManagerJobs()
     }

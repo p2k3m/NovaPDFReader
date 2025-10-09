@@ -7,9 +7,11 @@ import java.io.IOException
 import java.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-internal object SampleDocument {
-    private const val CACHE_FILE_NAME = "sample.pdf"
+@Singleton
+class SampleDocument @Inject constructor() {
 
     suspend fun installIntoCache(context: Context): android.net.Uri = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
@@ -55,12 +57,15 @@ internal object SampleDocument {
         }
     }
 
-    private val SAMPLE_PDF_BYTES: ByteArray by lazy {
-        val normalized = SAMPLE_PDF_BASE64.filterNot(Char::isWhitespace)
-        Base64.getDecoder().decode(normalized)
-    }
+    private companion object {
+        private const val CACHE_FILE_NAME = "sample.pdf"
 
-    private const val SAMPLE_PDF_BASE64 = """
+        private val SAMPLE_PDF_BYTES: ByteArray by lazy {
+            val normalized = SAMPLE_PDF_BASE64.filterNot(Char::isWhitespace)
+            Base64.getDecoder().decode(normalized)
+        }
+
+        private const val SAMPLE_PDF_BASE64 = """
 JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgaHR0cDovL3d3
 dy5yZXBvcnRsYWIuY29tCjEgMCBvYmoKPDwKL0YxIDIgMCBSIC9GMiAzIDAgUgo+PgplbmRvYmoK
 MiAwIG9iago8PAovQmFzZUZvbnQgL0hlbHZldGljYSAvRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGlu
@@ -91,4 +96,5 @@ Cjw8Ci9JRCAKWzw5ODI4NGY0ZWRkNDQ5MTM2MWYyY2Q1ZDViOGNkYjU4ZD48OTgyODRmNGVkZDQ0
 OTEzNjFmMmNkNWQ1YjhjZGI1OGQ+XQolIFJlcG9ydExhYiBnZW5lcmF0ZWQgUERGIGRvY3VtZW50
 IC0tIGRpZ2VzdCAoaHR0cDovL3d3dy5yZXBvcnRsYWIuY29tKQoKL0luZm8gNiAwIFIKL1Jvb3Qg
 NSAwIFIKL1NpemUgOQo+PgpzdGFydHhyZWYKMTI4NgolJUVPRgo="""
+    }
 }
