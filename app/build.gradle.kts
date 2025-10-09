@@ -343,6 +343,7 @@ jacoco {
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 val androidComponents = extensions.getByType<ApplicationAndroidComponentsExtension>()
+val minimumSupportedApiLevel: Int? = runCatching { androidExtension.defaultConfig.minSdk }.getOrNull()
 
 val targetProject = project
 
@@ -484,6 +485,43 @@ if (requireConnectedDevice != true) {
                 fun hasConnectedDevice(): Boolean {
                     cachedHasConnectedDevice?.let { return it }
 
+                    fun queryDeviceApiLevel(serial: String): Int? {
+                        if (adbExecutable == null) {
+                            return null
+                        }
+
+                        return try {
+                            val process = ProcessBuilder(
+                                adbExecutable.absolutePath,
+                                "-s",
+                                serial,
+                                "shell",
+                                "getprop",
+                                "ro.build.version.sdk"
+                            )
+                                .redirectErrorStream(true)
+                                .start()
+
+                            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                                process.destroy()
+                                logger.warn(
+                                    "Timed out while querying API level for connected Android device $serial. Skipping."
+                                )
+                                null
+                            } else {
+                                process.inputStream.bufferedReader().use { reader ->
+                                    reader.readText().trim().toIntOrNull()
+                                }
+                            }
+                        } catch (error: Exception) {
+                            logger.warn(
+                                "Unable to determine API level for connected Android device $serial. Skipping.",
+                                error
+                            )
+                            null
+                        }
+                    }
+
                     val result = when {
                         adbExecutable == null -> {
                             logger.warn("ADB executable not found. Skipping connected Android tests.")
@@ -508,13 +546,48 @@ if (requireConnectedDevice != true) {
                                     false
                                 } else {
                                     process.inputStream.bufferedReader().useLines { lines ->
-                                        lines.drop(1).any { line ->
-                                            val trimmed = line.trim()
-                                            val isDeviceListing = '\t' in line
-                                            isDeviceListing &&
-                                                trimmed.isNotEmpty() &&
-                                                !trimmed.endsWith("offline", ignoreCase = true)
-                                        }
+                                        val readyDevices = lines
+                                            .drop(1)
+                                            .mapNotNull { line ->
+                                                val trimmed = line.trim()
+                                                if (trimmed.isEmpty()) {
+                                                    return@mapNotNull null
+                                                }
+
+                                                val tokens = trimmed.split(Regex("\\s+"))
+                                                val serial = tokens.firstOrNull() ?: return@mapNotNull null
+                                                val state = tokens.getOrNull(1)?.lowercase()
+
+                                                if (state != null && state != "device") {
+                                                    if (state != "offline") {
+                                                        logger.info(
+                                                            "Skipping connected Android device $serial with state $state."
+                                                        )
+                                                    }
+                                                    return@mapNotNull null
+                                                }
+
+                                                val apiLevel = queryDeviceApiLevel(serial)
+                                                if (apiLevel == null) {
+                                                    logger.warn(
+                                                        "Connected Android device $serial did not report an API level. Skipping."
+                                                    )
+                                                    return@mapNotNull null
+                                                }
+
+                                                val minimumApi = minimumSupportedApiLevel ?: 1
+                                                if (apiLevel < minimumApi) {
+                                                    logger.warn(
+                                                        "Connected Android device $serial is API level $apiLevel which is below the minimum supported API level $minimumApi. Skipping."
+                                                    )
+                                                    return@mapNotNull null
+                                                }
+
+                                                serial
+                                            }
+                                            .toList()
+
+                                        readyDevices.isNotEmpty()
                                     }
                                 }
                             }.getOrElse { error ->
