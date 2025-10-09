@@ -71,10 +71,13 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.PauseCircle
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -1073,6 +1076,25 @@ private fun AdaptiveFlowStatusRow(
         )
         Spacer(modifier = Modifier.height(8.dp))
         val isActive = state.readingSpeed > 0f
+        val statusText = if (isActive) {
+            stringResource(id = R.string.adaptive_flow_on)
+        } else {
+            stringResource(id = R.string.adaptive_flow_off)
+        }
+        val statusIcon = if (isActive) Icons.Outlined.AutoAwesome else Icons.Outlined.PauseCircle
+        AssistChip(
+            onClick = {},
+            enabled = false,
+            label = { Text(text = statusText) },
+            leadingIcon = {
+                Icon(
+                    imageVector = statusIcon,
+                    contentDescription = null,
+                )
+            },
+            modifier = Modifier.semantics { contentDescription = statusText }
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         val description = if (isActive) {
             stringResource(
                 id = R.string.adaptive_flow_summary_description,
