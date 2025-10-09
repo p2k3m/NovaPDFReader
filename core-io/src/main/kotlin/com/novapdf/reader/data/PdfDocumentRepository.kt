@@ -47,6 +47,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.regex.Pattern
 import kotlin.math.max
@@ -120,6 +121,7 @@ class PdfDocumentRepository(
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
     private val bitmapCache = createBitmapCache()
+    private val bitmapPool = BitmapPool(maxCacheBytes / 2)
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
@@ -576,7 +578,7 @@ class PdfDocumentRepository(
                 if (!session.document.hasPage(pageIndex)) {
                     pdfiumCore.openPage(session.document, pageIndex)
                 }
-                val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                val bitmap = obtainBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
@@ -843,8 +845,12 @@ class PdfDocumentRepository(
         0
     }
 
+    private fun obtainBitmap(width: Int, height: Int, config: Bitmap.Config): Bitmap {
+        return bitmapPool.acquire(width, height, config) ?: Bitmap.createBitmap(width, height, config)
+    }
+
     private fun recycleBitmap(bitmap: Bitmap) {
-        if (!bitmap.isRecycled) {
+        if (!bitmap.isRecycled && !bitmapPool.release(bitmap)) {
             bitmap.recycle()
         }
     }
@@ -887,9 +893,11 @@ class PdfDocumentRepository(
     }
 
     private fun clearBitmapCacheLocked() {
-        bitmapCache.values().forEach(::recycleBitmap)
+        val bitmaps = bitmapCache.values().toList()
         bitmapCache.clearAll()
         bitmapCache.cleanUp()
+        bitmaps.forEach(::recycleBitmap)
+        bitmapPool.clear()
     }
 
     private fun scheduleCacheClear() {
@@ -1058,6 +1066,83 @@ class PdfDocumentRepository(
         protected abstract fun valuesInternal(): Collection<Bitmap>
         protected abstract fun clearInternal()
         protected abstract fun cleanUpInternal()
+    }
+
+    private inner class BitmapPool(maxBytes: Long) {
+        private val maxPoolBytes = maxBytes.coerceAtLeast(0L)
+        private val lock = Any()
+        private val pool = ArrayDeque<Bitmap>()
+        private val identities = IdentityHashMap<Bitmap, Bitmap>()
+        private var totalBytes: Long = 0
+
+        fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap? {
+            if (maxPoolBytes <= 0L) {
+                return null
+            }
+            synchronized(lock) {
+                val iterator = pool.iterator()
+                while (iterator.hasNext()) {
+                    val candidate = iterator.next()
+                    val reclaimedBytes = safeByteCount(candidate).takeIf { it > 0 }?.toLong() ?: 0L
+                    if (candidate.isRecycled) {
+                        iterator.remove()
+                        identities.remove(candidate)
+                        totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
+                        continue
+                    }
+                    if (!candidate.isMutable || candidate.config != config) {
+                        continue
+                    }
+                    if (candidate.width == width && candidate.height == height) {
+                        iterator.remove()
+                        identities.remove(candidate)
+                        totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
+                        return candidate
+                    }
+                }
+            }
+            return null
+        }
+
+        fun release(bitmap: Bitmap): Boolean {
+            if (maxPoolBytes <= 0L) {
+                return false
+            }
+            if (bitmap.isRecycled || !bitmap.isMutable || bitmap.config != Bitmap.Config.ARGB_8888) {
+                return false
+            }
+            val bytes = safeByteCount(bitmap).takeIf { it > 0 }?.toLong() ?: return false
+            synchronized(lock) {
+                if (identities.containsKey(bitmap)) {
+                    return true
+                }
+                if (totalBytes + bytes > maxPoolBytes) {
+                    return false
+                }
+                pool.addLast(bitmap)
+                identities[bitmap] = bitmap
+                totalBytes += bytes
+                return true
+            }
+        }
+
+        fun clear() {
+            val drained = mutableListOf<Bitmap>()
+            synchronized(lock) {
+                if (pool.isEmpty()) {
+                    return
+                }
+                drained.addAll(pool)
+                pool.clear()
+                identities.clear()
+                totalBytes = 0
+            }
+            drained.forEach { bitmap ->
+                if (!bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+        }
     }
 
     private inner class CaffeineBitmapCache(maxCacheBytes: Long) : BitmapCache() {
