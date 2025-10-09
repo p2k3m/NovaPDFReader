@@ -637,7 +637,7 @@ class ScreenshotHarnessTest {
                 adoptedPermissions += Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                adoptedPermissions += Manifest.permission.CAPTURE_VIDEO_OUTPUT
+                adoptedPermissions += CAPTURE_VIDEO_OUTPUT_PERMISSION
             }
             if (adoptedPermissions.isNotEmpty()) {
                 automation.adoptShellPermissionIdentity(*adoptedPermissions.toTypedArray())
@@ -646,8 +646,10 @@ class ScreenshotHarnessTest {
                 )
             }
 
-            screenshot = device.takeScreenshot()
-            if (screenshot == null) {
+            @Suppress("DEPRECATION")
+            val capturedScreenshot = automation.takeScreenshot()
+            screenshot = capturedScreenshot
+            if (capturedScreenshot == null) {
                 logHarnessWarn("Programmatic screenshot capture returned null bitmap")
                 return
             }
@@ -657,7 +659,7 @@ class ScreenshotHarnessTest {
             withContext(Dispatchers.IO) {
                 runCatching {
                     FileOutputStream(screenshotFile).use { stream ->
-                        if (!screenshot!!.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                        if (!capturedScreenshot.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
                             throw IOException("Failed to compress programmatic screenshot")
                         }
                     }
@@ -748,6 +750,7 @@ class ScreenshotHarnessTest {
         private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
         private const val PROGRAMMATIC_SCREENSHOT_DIRECTORY = "instrumentation-screenshots"
         private const val PROGRAMMATIC_SCREENSHOT_FILE = "programmatic_screenshot.png"
+        private const val CAPTURE_VIDEO_OUTPUT_PERMISSION = "android.permission.CAPTURE_VIDEO_OUTPUT"
         // Opening a thousand-page stress document can take a while on CI devices, so give the
         // viewer ample time to finish rendering before failing the harness run.
         private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
