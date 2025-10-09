@@ -18,11 +18,14 @@ import javax.inject.Inject
 import javax.inject.Provider
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import java.util.HashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 @HiltAndroidApp
@@ -55,8 +58,8 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     @Inject
     lateinit var dispatchers: CoroutineDispatchers
 
-    private val scopeExceptionHandler = CoroutineExceptionHandler { _, error ->
-        logDeferredInitializationFailure("uncaught", error)
+    private val scopeExceptionHandler = CoroutineExceptionHandler { context, error ->
+        logUnhandledCoroutineException(context, error)
     }
     private val applicationScope by lazy {
         CoroutineScope(SupervisorJob() + dispatchers.default + scopeExceptionHandler)
@@ -156,14 +159,40 @@ open class NovaPdfApp : Application(), Configuration.Provider {
             .onFailure { error -> logDeferredInitializationFailure("maintenance", error) }
     }
 
-    private fun logDeferredInitializationFailure(stage: String, error: Throwable) {
+    private fun logDeferredInitializationFailure(
+        stage: String,
+        error: Throwable,
+        metadata: Map<String, String> = emptyMap(),
+    ) {
         Log.w(TAG, "Deferred initialisation failed for $stage", error)
-        crashReporter.recordNonFatal(error, mapOf("stage" to stage))
+        val crashMetadata = HashMap<String, String>(metadata.size + 1)
+        crashMetadata["stage"] = stage
+        crashMetadata.putAll(metadata)
+        crashReporter.recordNonFatal(error, crashMetadata)
     }
 
     private fun logDeferredInitializationWarning(stage: String, message: String) {
         Log.w(TAG, message)
         crashReporter.logBreadcrumb("$stage: $message")
+    }
+
+    private fun logUnhandledCoroutineException(
+        context: CoroutineContext,
+        error: Throwable,
+    ) {
+        val threadName = Thread.currentThread().name
+        val metadata = HashMap<String, String>()
+        metadata["thread"] = threadName
+        context[CoroutineName]?.name?.let { coroutineName ->
+            metadata["coroutine"] = coroutineName
+        }
+        Log.e(
+            TAG,
+            "Unhandled coroutine exception on thread $threadName" +
+                (metadata["coroutine"]?.let { " (coroutine=$it)" } ?: ""),
+            error,
+        )
+        logDeferredInitializationFailure("uncaught", error, metadata)
     }
 
     companion object {
