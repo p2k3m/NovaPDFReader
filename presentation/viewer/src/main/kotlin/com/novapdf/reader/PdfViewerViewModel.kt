@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import android.util.Size
 import android.os.Build
+import android.os.CancellationSignal
 import android.print.PrintAttributes
 import android.print.PrintManager
 import androidx.annotation.StringRes
@@ -16,7 +17,11 @@ import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.domain.usecase.BuildSearchIndexRequest
+import com.novapdf.reader.domain.usecase.OpenDocumentRequest
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
+import com.novapdf.reader.domain.usecase.RenderPageRequest
+import com.novapdf.reader.domain.usecase.RenderTileRequest
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
@@ -92,9 +97,13 @@ open class PdfViewerViewModel @Inject constructor(
 ) : AndroidViewModel(application) {
     private val app: Application = application
     private val documentUseCase = useCases.document
+    private val openDocumentUseCase = useCases.openDocument
+    private val renderPageUseCase = useCases.renderPage
+    private val renderTileUseCase = useCases.renderTile
     private val annotationUseCase = useCases.annotations
     private val bookmarkUseCase = useCases.bookmarks
     private val searchUseCase = useCases.search
+    private val buildSearchIndexUseCase = useCases.buildSearchIndex
     private val remoteDocumentUseCase = useCases.remoteDocuments
     private val maintenanceUseCase = useCases.maintenance
     private val crashReportingUseCase = useCases.crashReporting
@@ -111,6 +120,7 @@ open class PdfViewerViewModel @Inject constructor(
     val messageEvents: SharedFlow<UiMessage> = _messageEvents.asSharedFlow()
 
     private var searchJob: Job? = null
+    private var indexingJob: Job? = null
     private var remoteDownloadJob: Job? = null
     private var viewportWidthPx: Int = 1080
     private var prefetchEnabled: Boolean = true
@@ -269,7 +279,10 @@ open class PdfViewerViewModel @Inject constructor(
             resetError = resetError
         )
         val session = runCatching {
-            withContext(Dispatchers.IO) { documentUseCase.open(uri) }
+            withContext(Dispatchers.IO) {
+                val signal = CancellationSignal()
+                openDocumentUseCase(OpenDocumentRequest(uri), signal).session
+            }
         }
             .getOrElse { throwable ->
                 handleDocumentError(throwable)
@@ -285,7 +298,7 @@ open class PdfViewerViewModel @Inject constructor(
             adaptiveFlowUseCase.start()
         }
         adaptiveFlowUseCase.trackPageChange(0, session.pageCount)
-        preloadInitialPage(session)
+        preloadInitialPage()
         setLoadingState(
             isLoading = true,
             progress = 0.85f,
@@ -304,10 +317,16 @@ open class PdfViewerViewModel @Inject constructor(
                 searchResults = emptyList()
             )
         }
-        searchUseCase.prepare(session)
+        indexingJob?.cancel()
+        val indexingSignal = CancellationSignal()
+        val indexResult = buildSearchIndexUseCase(
+            BuildSearchIndexRequest(session),
+            indexingSignal,
+        )
+        indexingJob = indexResult.job
     }
 
-    private suspend fun preloadInitialPage(session: PdfDocumentSession) {
+    private suspend fun preloadInitialPage() {
         setLoadingState(
             isLoading = true,
             progress = 0.55f,
@@ -315,7 +334,10 @@ open class PdfViewerViewModel @Inject constructor(
         )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
         withContext(Dispatchers.IO) {
-            runCatching { documentUseCase.renderPage(0, targetWidth) }
+            runCatching {
+                val signal = CancellationSignal()
+                renderPageUseCase(RenderPageRequest(pageIndex = 0, targetWidth = targetWidth), signal)
+            }
         }
         setLoadingState(
             isLoading = true,
@@ -409,13 +431,15 @@ open class PdfViewerViewModel @Inject constructor(
 
     suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
         return withContext(Dispatchers.IO) {
-            documentUseCase.renderPage(index, targetWidth)
+            val signal = CancellationSignal()
+            renderPageUseCase(RenderPageRequest(index, targetWidth), signal).bitmap
         }
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
         return withContext(Dispatchers.IO) {
-            documentUseCase.renderTile(index, rect, scale)
+            val signal = CancellationSignal()
+            renderTileUseCase(RenderTileRequest(index, rect, scale), signal).bitmap
         }
     }
 
@@ -534,6 +558,7 @@ open class PdfViewerViewModel @Inject constructor(
         super.onCleared()
         adaptiveFlowUseCase.stop()
         documentUseCase.dispose()
+        indexingJob?.cancel()
         remoteDownloadJob?.cancel()
     }
 

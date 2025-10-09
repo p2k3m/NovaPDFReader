@@ -10,14 +10,22 @@ import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
 import com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentMaintenanceUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.DefaultBuildSearchIndexUseCase
+import com.novapdf.reader.domain.usecase.DefaultOpenDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
+import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
+import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
 import com.novapdf.reader.domain.usecase.DocumentMaintenanceUseCase
 import com.novapdf.reader.domain.usecase.DocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.OpenDocumentUseCase
+import com.novapdf.reader.domain.usecase.BuildSearchIndexUseCase
 import com.novapdf.reader.domain.usecase.PdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
+import com.novapdf.reader.domain.usecase.RenderPageUseCase
+import com.novapdf.reader.domain.usecase.RenderTileUseCase
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -35,6 +43,24 @@ abstract class DomainUseCaseModule {
     @Binds
     @Singleton
     abstract fun bindPdfDocumentUseCase(impl: DefaultPdfDocumentUseCase): PdfDocumentUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindOpenDocumentUseCase(impl: DefaultOpenDocumentUseCase): OpenDocumentUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindRenderPageUseCase(impl: DefaultRenderPageUseCase): RenderPageUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindRenderTileUseCase(impl: DefaultRenderTileUseCase): RenderTileUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindBuildSearchIndexUseCase(
+        impl: DefaultBuildSearchIndexUseCase,
+    ): BuildSearchIndexUseCase
 
     @Binds
     @Singleton

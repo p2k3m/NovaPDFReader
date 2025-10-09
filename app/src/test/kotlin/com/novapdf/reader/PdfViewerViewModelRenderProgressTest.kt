@@ -12,9 +12,13 @@ import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
 import com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentMaintenanceUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.DefaultBuildSearchIndexUseCase
+import com.novapdf.reader.domain.usecase.DefaultOpenDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
+import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
+import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
 import com.novapdf.reader.download.S3RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
@@ -86,11 +90,20 @@ class PdfViewerViewModelRenderProgressTest {
             override fun logBreadcrumb(message: String) = Unit
         }
 
+        val openDocumentUseCase = DefaultOpenDocumentUseCase(pdfRepository)
+        val renderPageUseCase = DefaultRenderPageUseCase(pdfRepository)
+        val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)
+        val buildIndexUseCase = DefaultBuildSearchIndexUseCase(searchCoordinator)
+
         val useCases = DefaultPdfViewerUseCases(
             document = DefaultPdfDocumentUseCase(pdfRepository),
+            openDocument = openDocumentUseCase,
+            renderPage = renderPageUseCase,
+            renderTile = renderTileUseCase,
             annotations = DefaultAnnotationUseCase(annotationRepository),
             bookmarks = DefaultBookmarkUseCase(bookmarkManager),
             search = DefaultDocumentSearchUseCase(searchCoordinator),
+            buildSearchIndex = buildIndexUseCase,
             remoteDocuments = DefaultRemoteDocumentUseCase(S3RemotePdfDownloader(downloadManager)),
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
             crashReporting = DefaultCrashReportingUseCase(crashReporter),

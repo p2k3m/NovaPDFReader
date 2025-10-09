@@ -3,6 +3,7 @@ package com.novapdf.reader.domain.usecase
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.CancellationSignal
 import android.net.Uri
 import android.print.PrintDocumentAdapter
 import android.util.Size
@@ -22,16 +23,25 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.DisposableHandle
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.job
 
 /**
  * Domain-level contract that aggregates the use cases the presentation layer needs.
  */
 interface PdfViewerUseCases {
     val document: PdfDocumentUseCase
+    val openDocument: OpenDocumentUseCase
+    val renderPage: RenderPageUseCase
+    val renderTile: RenderTileUseCase
     val annotations: AnnotationUseCase
     val bookmarks: BookmarkUseCase
     val search: DocumentSearchUseCase
+    val buildSearchIndex: BuildSearchIndexUseCase
     val remoteDocuments: RemoteDocumentUseCase
     val maintenance: DocumentMaintenanceUseCase
     val crashReporting: CrashReportingUseCase
@@ -41,9 +51,13 @@ interface PdfViewerUseCases {
 @Singleton
 class DefaultPdfViewerUseCases @Inject constructor(
     override val document: PdfDocumentUseCase,
+    override val openDocument: OpenDocumentUseCase,
+    override val renderPage: RenderPageUseCase,
+    override val renderTile: RenderTileUseCase,
     override val annotations: AnnotationUseCase,
     override val bookmarks: BookmarkUseCase,
     override val search: DocumentSearchUseCase,
+    override val buildSearchIndex: BuildSearchIndexUseCase,
     override val remoteDocuments: RemoteDocumentUseCase,
     override val maintenance: DocumentMaintenanceUseCase,
     override val crashReporting: CrashReportingUseCase,
@@ -55,10 +69,7 @@ interface PdfDocumentUseCase {
     val outline: StateFlow<List<PdfOutlineNode>>
     val renderProgress: StateFlow<PdfRenderProgress>
 
-    suspend fun open(uri: Uri): PdfDocumentSession
     fun prefetchPages(indices: List<Int>, targetWidth: Int)
-    suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap?
-    suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap?
     suspend fun getPageSize(pageIndex: Int): Size?
     fun createPrintAdapter(context: Context): PrintDocumentAdapter?
     fun dispose()
@@ -75,17 +86,9 @@ class DefaultPdfDocumentUseCase @Inject constructor(
     override val renderProgress: StateFlow<PdfRenderProgress>
         get() = repository.renderProgress
 
-    override suspend fun open(uri: Uri): PdfDocumentSession = repository.open(uri)
-
     override fun prefetchPages(indices: List<Int>, targetWidth: Int) {
         repository.prefetchPages(indices, targetWidth)
     }
-
-    override suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? =
-        repository.renderPage(pageIndex, targetWidth)
-
-    override suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? =
-        repository.renderTile(pageIndex, tileRect, scale)
 
     override suspend fun getPageSize(pageIndex: Int): Size? = repository.getPageSize(pageIndex)
 
@@ -94,6 +97,147 @@ class DefaultPdfDocumentUseCase @Inject constructor(
 
     override fun dispose() {
         repository.dispose()
+    }
+}
+
+data class OpenDocumentRequest(val uri: Uri)
+
+data class OpenDocumentResult(val session: PdfDocumentSession)
+
+interface OpenDocumentUseCase {
+    suspend operator fun invoke(
+        request: OpenDocumentRequest,
+        cancellationSignal: CancellationSignal? = null,
+    ): OpenDocumentResult
+}
+
+@Singleton
+class DefaultOpenDocumentUseCase @Inject constructor(
+    private val repository: PdfDocumentRepository,
+) : OpenDocumentUseCase {
+    override suspend fun invoke(
+        request: OpenDocumentRequest,
+        cancellationSignal: CancellationSignal?,
+    ): OpenDocumentResult = withLinkedCancellation(cancellationSignal) { signal ->
+        val session = repository.open(request.uri, signal)
+        OpenDocumentResult(session)
+    }
+}
+
+data class RenderPageRequest(val pageIndex: Int, val targetWidth: Int)
+
+data class RenderPageResult(val bitmap: Bitmap?)
+
+interface RenderPageUseCase {
+    suspend operator fun invoke(
+        request: RenderPageRequest,
+        cancellationSignal: CancellationSignal? = null,
+    ): RenderPageResult
+}
+
+@Singleton
+class DefaultRenderPageUseCase @Inject constructor(
+    private val repository: PdfDocumentRepository,
+) : RenderPageUseCase {
+    override suspend fun invoke(
+        request: RenderPageRequest,
+        cancellationSignal: CancellationSignal?,
+    ): RenderPageResult = withLinkedCancellation(cancellationSignal) { signal ->
+        val bitmap = repository.renderPage(request.pageIndex, request.targetWidth, signal)
+        RenderPageResult(bitmap)
+    }
+}
+
+data class RenderTileRequest(val pageIndex: Int, val tileRect: Rect, val scale: Float)
+
+data class RenderTileResult(val bitmap: Bitmap?)
+
+interface RenderTileUseCase {
+    suspend operator fun invoke(
+        request: RenderTileRequest,
+        cancellationSignal: CancellationSignal? = null,
+    ): RenderTileResult
+}
+
+@Singleton
+class DefaultRenderTileUseCase @Inject constructor(
+    private val repository: PdfDocumentRepository,
+) : RenderTileUseCase {
+    override suspend fun invoke(
+        request: RenderTileRequest,
+        cancellationSignal: CancellationSignal?,
+    ): RenderTileResult = withLinkedCancellation(cancellationSignal) { signal ->
+        val bitmap = repository.renderTile(request.pageIndex, request.tileRect, request.scale, signal)
+        RenderTileResult(bitmap)
+    }
+}
+
+data class BuildSearchIndexRequest(val session: PdfDocumentSession)
+
+data class BuildSearchIndexResult(val job: Job?)
+
+interface BuildSearchIndexUseCase {
+    suspend operator fun invoke(
+        request: BuildSearchIndexRequest,
+        cancellationSignal: CancellationSignal? = null,
+    ): BuildSearchIndexResult
+}
+
+@Singleton
+class DefaultBuildSearchIndexUseCase @Inject constructor(
+    private val coordinator: DocumentSearchCoordinator,
+) : BuildSearchIndexUseCase {
+    override suspend fun invoke(
+        request: BuildSearchIndexRequest,
+        cancellationSignal: CancellationSignal?,
+    ): BuildSearchIndexResult {
+        val job = coordinator.prepare(request.session)
+        if (job == null) {
+            return BuildSearchIndexResult(job = null)
+        }
+        val cancelException = CancellationException("Search indexing cancelled")
+        cancellationSignal?.let { signal ->
+            if (signal.isCanceled) {
+                job.cancel(cancelException)
+            } else {
+                signal.setOnCancelListener {
+                    job.cancel(cancelException)
+                }
+                job.invokeOnCompletion { signal.setOnCancelListener(null) }
+            }
+        }
+        return BuildSearchIndexResult(job = job)
+    }
+}
+
+private suspend fun <T> withLinkedCancellation(
+    signal: CancellationSignal?,
+    onCancel: (() -> Unit)? = null,
+    block: suspend (CancellationSignal?) -> T,
+): T {
+    if (signal == null) {
+        return block(null)
+    }
+    if (signal.isCanceled) {
+        throw CancellationException("Operation cancelled")
+    }
+    val job = coroutineContext.job
+    val listener = CancellationSignal.OnCancelListener {
+        onCancel?.invoke()
+        job.cancel(CancellationException("Operation cancelled by caller"))
+    }
+    signal.setOnCancelListener(listener)
+    val detachHandle: DisposableHandle = job.invokeOnCompletion { cause ->
+        signal.setOnCancelListener(null)
+        if (cause is CancellationException && !signal.isCanceled) {
+            signal.cancel()
+        }
+    }
+    return try {
+        block(signal)
+    } finally {
+        detachHandle.dispose()
+        signal.setOnCancelListener(null)
     }
 }
 

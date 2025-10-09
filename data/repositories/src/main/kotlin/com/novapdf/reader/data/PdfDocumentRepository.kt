@@ -28,6 +28,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -91,7 +93,8 @@ data class PdfDocumentSession(
 data class PageTileRequest(
     val pageIndex: Int,
     val tileRect: Rect,
-    val scale: Float
+    val scale: Float,
+    val cancellationSignal: CancellationSignal? = null,
 )
 
 private data class PageBitmapKey(
@@ -106,6 +109,7 @@ class PdfDocumentRepository(
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
+    @OptIn(ExperimentalCoroutinesApi::class)
     private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val repairedDocumentDir by lazy {
@@ -134,6 +138,7 @@ class PdfDocumentRepository(
     private val componentCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
+        @Suppress("OVERRIDE_DEPRECATION")
         override fun onLowMemory() {
             scheduleCacheClear()
         }
@@ -153,8 +158,9 @@ class PdfDocumentRepository(
     }
 
     @WorkerThread
-    suspend fun open(uri: Uri): PdfDocumentSession {
+    suspend fun open(uri: Uri, cancellationSignal: CancellationSignal? = null): PdfDocumentSession {
         return withContextGuard {
+            cancellationSignal.throwIfCanceled()
             closeSessionInternal()
             repairedDocumentFile?.let { file ->
                 if (file.exists() && !file.delete()) {
@@ -162,16 +168,17 @@ class PdfDocumentRepository(
                 }
             }
             repairedDocumentFile = null
+            cancellationSignal.throwIfCanceled()
             if (!validateDocumentUri(uri)) {
                 throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
             }
-            val preparedFile = prepareLargeDocumentIfNeeded(uri)
+            val preparedFile = prepareLargeDocumentIfNeeded(uri, cancellationSignal)
             if (preparedFile != null) {
                 repairedDocumentFile = preparedFile
             }
             val sourceUri = repairedDocumentFile?.toUri() ?: uri
             var activePfd = try {
-                openParcelFileDescriptor(sourceUri)
+                openParcelFileDescriptor(sourceUri, cancellationSignal)
             } catch (security: SecurityException) {
                 reportNonFatal(
                     security,
@@ -182,6 +189,7 @@ class PdfDocumentRepository(
                 )
                 throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
             } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
+            cancellationSignal.throwIfCanceled()
             val document: PdfDocument = try {
                 pdfiumCore.newDocument(activePfd)
             } catch (throwable: Throwable) {
@@ -262,29 +270,50 @@ class PdfDocumentRepository(
     }
 
     @WorkerThread
-    suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? = withContextGuard {
+    suspend fun renderPage(
+        pageIndex: Int,
+        targetWidth: Int,
+        cancellationSignal: CancellationSignal? = null,
+    ): Bitmap? = withContextGuard {
+        cancellationSignal.throwIfCanceled()
         if (targetWidth <= 0) return@withContextGuard null
-        val bitmap = ensurePageBitmap(pageIndex, targetWidth) ?: return@withContextGuard null
+        val bitmap = ensurePageBitmap(
+            pageIndex,
+            targetWidth,
+            cancellationSignal = cancellationSignal,
+        ) ?: return@withContextGuard null
+        cancellationSignal.throwIfCanceled()
         copyBitmap(bitmap)
     }
 
     @WorkerThread
-    suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? {
-        return renderTile(PageTileRequest(pageIndex, tileRect, scale))
+    suspend fun renderTile(
+        pageIndex: Int,
+        tileRect: Rect,
+        scale: Float,
+        cancellationSignal: CancellationSignal? = null,
+    ): Bitmap? {
+        return renderTile(PageTileRequest(pageIndex, tileRect, scale, cancellationSignal))
     }
 
     @WorkerThread
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
+        request.cancellationSignal.throwIfCanceled()
         if (openSession.value == null) return@withContextGuard null
         val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
         val targetWidth = max(1, (pageSize.width * request.scale).roundToInt())
-        val baseBitmap = ensurePageBitmap(request.pageIndex, targetWidth) ?: return@withContextGuard null
+        val baseBitmap = ensurePageBitmap(
+            request.pageIndex,
+            targetWidth,
+            cancellationSignal = request.cancellationSignal,
+        ) ?: return@withContextGuard null
         val scaledLeft = (request.tileRect.left * request.scale).roundToInt().coerceIn(0, baseBitmap.width - 1)
         val scaledTop = (request.tileRect.top * request.scale).roundToInt().coerceIn(0, baseBitmap.height - 1)
         val scaledRight = (request.tileRect.right * request.scale).roundToInt().coerceIn(scaledLeft + 1, baseBitmap.width)
         val scaledBottom = (request.tileRect.bottom * request.scale).roundToInt().coerceIn(scaledTop + 1, baseBitmap.height)
         val width = (scaledRight - scaledLeft).coerceAtLeast(1)
         val height = (scaledBottom - scaledTop).coerceAtLeast(1)
+        request.cancellationSignal.throwIfCanceled()
         val tile = Bitmap.createBitmap(baseBitmap, scaledLeft, scaledTop, width, height)
         if (tile.config != Bitmap.Config.ARGB_8888 && tile.config != Bitmap.Config.RGBA_F16) {
             copyBitmap(tile)
@@ -532,13 +561,16 @@ class PdfDocumentRepository(
     }
 
     @WorkerThread
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun ensurePageBitmap(
         pageIndex: Int,
         targetWidth: Int,
         allowSkippingIfBusy: Boolean = false,
+        cancellationSignal: CancellationSignal? = null,
     ): Bitmap? {
         // When prefetching we avoid waiting on the render mutex so interactive draws remain responsive.
         ensureWorkerThread()
+        cancellationSignal.throwIfCanceled()
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
         val key = PageBitmapKey(pageIndex, targetWidth)
@@ -555,6 +587,7 @@ class PdfDocumentRepository(
             renderMutex.lock(lockOwner)
             true
         }
+        cancellationSignal.throwIfCanceled()
         if (!lockAcquired) {
             return null
         }
@@ -565,6 +598,7 @@ class PdfDocumentRepository(
                     return cached
                 }
             }
+            cancellationSignal.throwIfCanceled()
             val pageSize = getPageSizeInternal(pageIndex) ?: return null
             if (pageSize.width <= 0 || pageSize.height <= 0) {
                 return null
@@ -575,11 +609,13 @@ class PdfDocumentRepository(
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.2f))
+                cancellationSignal.throwIfCanceled()
                 if (!session.document.hasPage(pageIndex)) {
                     pdfiumCore.openPage(session.document, pageIndex)
                 }
                 val bitmap = obtainBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
+                cancellationSignal.throwIfCanceled()
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
                 bitmapCache.put(key, bitmap)
@@ -670,7 +706,11 @@ class PdfDocumentRepository(
         renderProgressState.value = progress
     }
 
-    private suspend fun prepareLargeDocumentIfNeeded(uri: Uri): File? {
+    private suspend fun prepareLargeDocumentIfNeeded(
+        uri: Uri,
+        cancellationSignal: CancellationSignal? = null,
+    ): File? {
+        cancellationSignal.throwIfCanceled()
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
             val path = uri.path
             if (path != null && path.contains("/pdf-repairs/")) {
@@ -683,16 +723,22 @@ class PdfDocumentRepository(
             return null
         }
 
-        if (!detectOversizedPageTree(uri, size)) {
+        cancellationSignal.throwIfCanceled()
+        if (!detectOversizedPageTree(uri, size, cancellationSignal)) {
             return null
         }
 
         Log.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
-        return attemptPdfRepair(uri)
+        cancellationSignal.throwIfCanceled()
+        return attemptPdfRepair(uri, cancellationSignal)
     }
 
-    private fun detectOversizedPageTree(uri: Uri, sizeHint: Long?): Boolean {
-        val buffer = readBytesForPageTreeInspection(uri, sizeHint) ?: return false
+    private fun detectOversizedPageTree(
+        uri: Uri,
+        sizeHint: Long?,
+        cancellationSignal: CancellationSignal? = null,
+    ): Boolean {
+        val buffer = readBytesForPageTreeInspection(uri, sizeHint, cancellationSignal) ?: return false
         val contents = try {
             String(buffer, Charsets.ISO_8859_1)
         } catch (error: Exception) {
@@ -702,10 +748,12 @@ class PdfDocumentRepository(
 
         val matcher = KIDS_ARRAY_PATTERN.matcher(contents)
         while (matcher.find()) {
+            cancellationSignal.throwIfCanceled()
             val section = matcher.group(1) ?: continue
             val referenceMatcher = KID_REFERENCE_PATTERN.matcher(section)
             var count = 0
             while (referenceMatcher.find()) {
+                cancellationSignal.throwIfCanceled()
                 count++
                 if (count > PRE_REPAIR_MAX_KIDS_PER_ARRAY) {
                     Log.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
@@ -716,7 +764,11 @@ class PdfDocumentRepository(
         return false
     }
 
-    private fun readBytesForPageTreeInspection(uri: Uri, sizeHint: Long?): ByteArray? {
+    private fun readBytesForPageTreeInspection(
+        uri: Uri,
+        sizeHint: Long?,
+        cancellationSignal: CancellationSignal? = null,
+    ): ByteArray? {
         val limit = when {
             sizeHint != null && sizeHint in 1L..PRE_REPAIR_SCAN_LIMIT_BYTES -> sizeHint.toInt()
             else -> PRE_REPAIR_SCAN_LIMIT_BYTES.toInt()
@@ -728,6 +780,7 @@ class PdfDocumentRepository(
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 var remaining = limit
                 while (remaining > 0) {
+                    cancellationSignal.throwIfCanceled()
                     val read = stream.read(buffer, 0, min(buffer.size, remaining))
                     if (read == -1) break
                     output.write(buffer, 0, read)
@@ -748,7 +801,10 @@ class PdfDocumentRepository(
         }
     }
 
-    private fun openParcelFileDescriptor(uri: Uri): ParcelFileDescriptor? {
+    private fun openParcelFileDescriptor(
+        uri: Uri,
+        cancellationSignal: CancellationSignal? = null,
+    ): ParcelFileDescriptor? {
         return when (uri.scheme?.lowercase(Locale.US)) {
             ContentResolver.SCHEME_FILE -> {
                 val path = uri.path ?: return null
@@ -756,7 +812,7 @@ class PdfDocumentRepository(
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             }
 
-            else -> contentResolver.openFileDescriptor(uri, "r")
+            else -> contentResolver.openFileDescriptor(uri, "r", cancellationSignal)
         }
     }
 
@@ -766,7 +822,10 @@ class PdfDocumentRepository(
         }
     }
 
-    private suspend fun attemptPdfRepair(uri: Uri): File? {
+    private suspend fun attemptPdfRepair(
+        uri: Uri,
+        cancellationSignal: CancellationSignal? = null,
+    ): File? {
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
             val path = uri.path
             if (path != null && path.contains("/pdf-repairs/")) {
@@ -774,6 +833,7 @@ class PdfDocumentRepository(
             }
         }
 
+        cancellationSignal.throwIfCanceled()
         val pdfBoxReady = try {
             PdfBoxInitializer.ensureInitialized(appContext)
         } catch (error: Throwable) {
@@ -813,6 +873,7 @@ class PdfDocumentRepository(
 
         return input.use { stream ->
             try {
+                cancellationSignal.throwIfCanceled()
                 PDDocument.load(stream).use { document ->
                     document.save(repairedFile)
                 }
@@ -1213,6 +1274,12 @@ class PdfDocumentRepository(
 
         override fun cleanUpInternal() {
             // LruCache does not require explicit cleanup.
+        }
+    }
+
+    private fun CancellationSignal?.throwIfCanceled() {
+        if (this?.isCanceled == true) {
+            throw CancellationException("PDF operation cancelled")
         }
     }
 }
