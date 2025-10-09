@@ -392,12 +392,13 @@ val requireConnectedDevice = parseOptionalBoolean(
         ?: System.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
 )
 
+// Default to skipping connected tests on CI to avoid build failures when no stable emulator is available.
 val allowCiConnectedTests = parseOptionalBoolean(
     (findProperty("novapdf.allowCiConnectedTests") as? String)
         ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
         ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
 ) ?: if (isCiEnvironment) {
-    true
+    false
 } else {
     null
 }
