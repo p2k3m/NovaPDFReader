@@ -1,5 +1,6 @@
 package com.novapdf.reader
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
@@ -12,16 +13,33 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import javax.inject.Inject
+import org.junit.Before
+import org.junit.Rule
 
 @RunWith(AndroidJUnit4::class)
+@HiltAndroidTest
 class SamplePdfInstrumentedTest {
+
+    @get:Rule
+    val hiltRule = HiltAndroidRule(this)
+
+    @Inject
+    lateinit var sampleDocument: SampleDocument
+
+    @Before
+    fun setUp() {
+        hiltRule.inject()
+    }
 
     @Test
     fun openSampleDocumentAndCaptureScreenshot() = runBlocking {
-        val context = ApplicationProvider.getApplicationContext<NovaPdfApp>()
+        val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = PdfDocumentRepository(context)
         try {
-            val sampleUri = SampleDocument.installIntoCache(context)
+            val sampleUri = sampleDocument.installIntoCache(context)
             val session = repository.open(sampleUri)
             assertNotNull("Sample PDF should open successfully", session)
             val nonNullSession = requireNotNull(session)

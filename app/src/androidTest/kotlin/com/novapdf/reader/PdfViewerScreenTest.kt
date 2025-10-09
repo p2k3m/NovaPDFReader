@@ -5,7 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.novapdf.reader.R
+import com.novapdf.reader.presentation.viewer.R as ViewerR
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.ui.theme.NovaPdfTheme
@@ -53,7 +53,7 @@ class PdfViewerScreenTest {
         }
 
         composeRule.onNodeWithText("Open a PDF to begin").assertIsDisplayed()
-        val accessibilityTrigger = composeRule.activity.getString(R.string.accessibility_open_options)
+        val accessibilityTrigger = composeRule.activity.getString(ViewerR.string.accessibility_open_options)
         composeRule.onNodeWithText(accessibilityTrigger).assertIsDisplayed()
     }
 }

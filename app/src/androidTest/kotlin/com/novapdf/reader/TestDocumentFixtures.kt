@@ -18,14 +18,12 @@ import java.util.Locale
 import java.util.regex.Pattern
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-internal object TestDocumentFixtures {
-    private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
-    private const val HARNESS_CACHE_DIRECTORY = "screenshot-harness"
-    private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
-    private const val THOUSAND_PAGE_COUNT = 1_000
-    private const val THOUSAND_PAGE_ASSET_BASE64 = "thousand_page_fixture.base64"
-    private val DEFAULT_THOUSAND_PAGE_URL = BuildConfig.THOUSAND_PAGE_FIXTURE_URL
+@Singleton
+class TestDocumentFixtures @Inject constructor() {
+    private val defaultThousandPageUrl = BuildConfig.THOUSAND_PAGE_FIXTURE_URL
         .takeIf { it.isNotBlank() }
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
@@ -325,7 +323,7 @@ internal object TestDocumentFixtures {
     private fun tryDownloadThousandPagePdf(destination: File): Boolean {
         val url = InstrumentationRegistry.getArguments().getString(THOUSAND_PAGE_URL_ARG)
             ?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_THOUSAND_PAGE_URL
+            ?: defaultThousandPageUrl
             ?: run {
                 Log.i(TAG, "No thousand-page PDF download URL supplied; skipping network fetch")
                 return false
@@ -532,14 +530,22 @@ internal object TestDocumentFixtures {
             throw IOException("Failed to generate thousand-page PDF; destination is empty")
         }
     }
-    private const val TAG = "TestDocumentFixtures"
-    private const val EXPECTED_THOUSAND_PAGE_DIGEST =
-        "7d6484d4a4a768062325fc6d0f51ad19f2c2da17b9dc1bcfb80740239db89089"
-    private val KIDS_ARRAY_PATTERN: Pattern =
-        Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
-    private val REFERENCE_PATTERN: Pattern =
-        Pattern.compile("\\d+\\s+\\d+\\s+R")
-    private const val MAX_KIDS_PER_ARRAY = 4
+
+    private companion object {
+        private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
+        private const val HARNESS_CACHE_DIRECTORY = "screenshot-harness"
+        private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
+        private const val THOUSAND_PAGE_COUNT = 1_000
+        private const val THOUSAND_PAGE_ASSET_BASE64 = "thousand_page_fixture.base64"
+        private const val TAG = "TestDocumentFixtures"
+        private const val EXPECTED_THOUSAND_PAGE_DIGEST =
+            "7d6484d4a4a768062325fc6d0f51ad19f2c2da17b9dc1bcfb80740239db89089"
+        private val KIDS_ARRAY_PATTERN: Pattern =
+            Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
+        private val REFERENCE_PATTERN: Pattern =
+            Pattern.compile("\\d+\\s+\\d+\\s+R")
+        private const val MAX_KIDS_PER_ARRAY = 4
+    }
 
     private fun ByteArray.toHexString(): String {
         return joinToString(separator = "") { byte ->

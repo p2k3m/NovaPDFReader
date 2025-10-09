@@ -1,5 +1,6 @@
 package com.novapdf.reader
 
+import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.novapdf.reader.data.PdfDocumentRepository
@@ -11,16 +12,33 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import javax.inject.Inject
+import org.junit.Before
+import org.junit.Rule
 
 @RunWith(AndroidJUnit4::class)
+@HiltAndroidTest
 class LargePdfInstrumentedTest {
+
+    @get:Rule
+    val hiltRule = HiltAndroidRule(this)
+
+    @Inject
+    lateinit var stressDocumentFactory: StressDocumentFactory
+
+    @Before
+    fun setUp() {
+        hiltRule.inject()
+    }
 
     @Test
     fun openLargeAndUnusualDocumentWithoutAnrOrCrash() = runBlocking {
-        val context = ApplicationProvider.getApplicationContext<NovaPdfApp>()
+        val context = ApplicationProvider.getApplicationContext<Context>()
         val repository = PdfDocumentRepository(context)
         try {
-            val stressUri = StressDocumentFactory.installStressDocument(context)
+            val stressUri = stressDocumentFactory.installStressDocument(context)
             val session = withTimeout(60_000) { repository.open(stressUri) }
             assertNotNull("Stress PDF should open successfully", session)
             val pdfSession = requireNotNull(session)

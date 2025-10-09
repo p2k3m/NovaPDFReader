@@ -14,10 +14,11 @@ import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 import kotlin.math.max
 import kotlin.math.min
+import javax.inject.Inject
+import javax.inject.Singleton
 
-internal object StressDocumentFactory {
-    private const val LARGE_CACHE_FILE_NAME = "stress-large.pdf"
-    private const val PAGE_COUNT = 32
+@Singleton
+class StressDocumentFactory @Inject constructor() {
 
     suspend fun installStressDocument(context: Context) = withContext(Dispatchers.IO) {
         val candidateDirectories = writableStorageCandidates(context)
@@ -191,5 +192,10 @@ internal object StressDocumentFactory {
             canvas.drawText(line, margin, textY, paint)
             textY -= paint.textSize * 1.4f
         }
+    }
+
+    private companion object {
+        private const val LARGE_CACHE_FILE_NAME = "stress-large.pdf"
+        private const val PAGE_COUNT = 32
     }
 }
