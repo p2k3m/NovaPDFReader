@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import android.hardware.SensorEvent
 import android.hardware.SensorManager
+import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.pdf.engine.DefaultAdaptiveFlowManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -29,10 +31,12 @@ class AdaptiveFlowManagerTest {
     @Test
     fun readingSpeedRespondsToPageChanges() = runTest {
         var now = 0L
+        val dispatchers = testDispatchers()
         val manager = DefaultAdaptiveFlowManager(
             context = context,
+            dispatchers = dispatchers,
             wallClock = { now },
-            coroutineScope = this
+            coroutineScopeProvider = { this }
         )
         manager.trackPageChange(0, 10)
         now += 2_000
@@ -52,10 +56,12 @@ class AdaptiveFlowManagerTest {
     @Test
     fun frameMetricsReactToJank() = runTest {
         var now = 0L
+        val dispatchers = testDispatchers()
         val manager = DefaultAdaptiveFlowManager(
             context = context,
+            dispatchers = dispatchers,
             wallClock = { now },
-            coroutineScope = this
+            coroutineScopeProvider = { this }
         )
         repeat(5) { manager.updateFrameMetrics(16f) }
 
@@ -78,10 +84,12 @@ class AdaptiveFlowManagerTest {
     @Test
     fun preloadingResumesAfterCooldown() = runTest {
         var now = 0L
+        val dispatchers = testDispatchers()
         val manager = DefaultAdaptiveFlowManager(
             context = context,
+            dispatchers = dispatchers,
             wallClock = { now },
-            coroutineScope = this
+            coroutineScopeProvider = { this }
         )
 
         manager.trackPageChange(0, 10)
@@ -108,10 +116,12 @@ class AdaptiveFlowManagerTest {
     @Test
     fun sensorTiltBoostsPreloadTargets() = runTest {
         var now = 0L
+        val dispatchers = testDispatchers()
         val manager = DefaultAdaptiveFlowManager(
             context = context,
+            dispatchers = dispatchers,
             wallClock = { now },
-            coroutineScope = this
+            coroutineScopeProvider = { this }
         )
 
         manager.trackPageChange(0, 12)
@@ -132,10 +142,16 @@ class AdaptiveFlowManagerTest {
 
     @Test
     fun frameMetricsIgnoreInvalidSamples() {
+        val dispatchers = TestCoroutineDispatchers(
+            io = Dispatchers.Default,
+            default = Dispatchers.Default,
+            main = StandardTestDispatcher()
+        )
         val manager = DefaultAdaptiveFlowManager(
             context = context,
+            dispatchers = dispatchers,
             wallClock = { 0L },
-            coroutineScope = CoroutineScope(Job() + Dispatchers.Default)
+            coroutineScopeProvider = { CoroutineScope(Job() + Dispatchers.Default) }
         )
 
         repeat(5) { manager.updateFrameMetrics(16f) }
@@ -158,4 +174,14 @@ class AdaptiveFlowManagerTest {
         values[2] = z
         return event
     }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private fun kotlinx.coroutines.test.TestScope.testDispatchers(): TestCoroutineDispatchers {
+    val dispatcher = kotlinx.coroutines.test.StandardTestDispatcher(testScheduler)
+    return TestCoroutineDispatchers(
+        io = dispatcher,
+        default = dispatcher,
+        main = dispatcher
+    )
 }

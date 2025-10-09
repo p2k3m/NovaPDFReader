@@ -14,9 +14,10 @@ import android.util.Log
 import android.view.Choreographer
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.FrameMetricsAggregator
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.engine.AdaptiveFlowManager
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,8 +36,11 @@ private const val DEFAULT_FRAME_INTERVAL_MS = 16.6f
 
 class DefaultAdaptiveFlowManager(
     context: Context,
+    private val dispatchers: CoroutineDispatchers,
     private val wallClock: () -> Long = System::currentTimeMillis,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Job() + Dispatchers.Default),
+    coroutineScopeProvider: (kotlinx.coroutines.CoroutineDispatcher) -> CoroutineScope = { dispatcher ->
+        CoroutineScope(Job() + dispatcher)
+    },
     private val frameMetricsAggregatorProvider: () -> FrameMetricsAggregator? = {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             FrameMetricsAggregator(FrameMetricsAggregator.TOTAL_DURATION)
@@ -45,6 +49,7 @@ class DefaultAdaptiveFlowManager(
         }
     }
 ) : AdaptiveFlowManager, SensorEventListener {
+    private val coroutineScope = coroutineScopeProvider(dispatchers.default)
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val accelerometer: Sensor? = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private var choreographer: Choreographer? = null

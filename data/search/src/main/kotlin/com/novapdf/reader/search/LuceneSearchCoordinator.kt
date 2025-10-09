@@ -9,13 +9,14 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -80,8 +81,12 @@ private data class OcrPageResult(
 class LuceneSearchCoordinator(
     private val context: Context,
     private val pdfRepository: PdfDocumentRepository,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val dispatchers: CoroutineDispatchers,
+    scopeProvider: (CoroutineDispatcher) -> CoroutineScope = { dispatcher ->
+        CoroutineScope(SupervisorJob() + dispatcher)
+    }
 ) : DocumentSearchCoordinator {
+    private val scope = scopeProvider(dispatchers.io)
     private val analyzer = StandardAnalyzer()
     private val indexLock = Mutex()
     private var directory: ByteBuffersDirectory? = null

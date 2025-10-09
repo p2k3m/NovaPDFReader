@@ -2,6 +2,7 @@ package com.novapdf.reader.data.di
 
 import android.content.Context
 import androidx.room.Room
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
@@ -23,15 +24,18 @@ object RepositoryModule {
     @Singleton
     fun provideAnnotationRepository(
         @ApplicationContext context: Context,
-    ): AnnotationRepository = AnnotationRepository(context)
+        dispatchers: CoroutineDispatchers,
+    ): AnnotationRepository = AnnotationRepository(context, dispatchers = dispatchers)
 
     @Provides
     @Singleton
     fun providePdfDocumentRepository(
         @ApplicationContext context: Context,
         crashReporter: CrashReporter,
+        dispatchers: CoroutineDispatchers,
     ): PdfDocumentRepository = PdfDocumentRepository(
         context,
+        ioDispatcher = dispatchers.io,
         crashReporter = crashReporter,
     )
 
@@ -50,12 +54,14 @@ object RepositoryModule {
     fun provideBookmarkManager(
         database: NovaPdfDatabase,
         @ApplicationContext context: Context,
+        dispatchers: CoroutineDispatchers,
     ): BookmarkManager = BookmarkManager(
         database.bookmarkDao(),
         context.getSharedPreferences(
             BookmarkManager.LEGACY_PREFERENCES_NAME,
             Context.MODE_PRIVATE,
         ),
+        dispatcher = dispatchers.io,
     )
 
     @Provides

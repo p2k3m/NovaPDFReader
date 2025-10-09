@@ -8,10 +8,12 @@ import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import com.novapdf.reader.TestPdfApp
 import com.novapdf.reader.data.AnnotationRepository
+import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertFalse
@@ -30,11 +32,18 @@ class DocumentMaintenanceWorkerTest {
 
     private lateinit var app: Context
     private lateinit var annotationRepository: AnnotationRepository
+    private lateinit var dispatchers: TestCoroutineDispatchers
 
     @Before
     fun setUp() {
         app = ApplicationProvider.getApplicationContext()
-        annotationRepository = AnnotationRepository(app)
+        val dispatcher = StandardTestDispatcher()
+        dispatchers = TestCoroutineDispatchers(
+            io = dispatcher,
+            default = dispatcher,
+            main = dispatcher
+        )
+        annotationRepository = AnnotationRepository(app, dispatchers = dispatchers)
         AnnotationRepository.preferenceFile(app).let { prefsFile ->
             prefsFile.delete()
             prefsFile.parentFile?.let { parent ->
@@ -79,6 +88,7 @@ class DocumentMaintenanceWorkerTest {
                     annotationRepository,
                     bookmarkManager,
                     adaptiveFlowManager,
+                    dispatchers,
                 )
             }
         }
