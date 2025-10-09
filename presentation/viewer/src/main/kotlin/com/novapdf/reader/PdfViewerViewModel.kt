@@ -6,23 +6,23 @@ import android.graphics.Rect
 import android.net.Uri
 import android.util.Log
 import android.util.Size
-import android.content.res.Configuration
 import android.os.Build
 import android.print.PrintAttributes
 import android.print.PrintManager
 import androidx.annotation.StringRes
+import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
-import com.novapdf.reader.presentation.viewer.R
+import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
-import com.novapdf.reader.data.remote.RemotePdfException
-import com.novapdf.reader.NovaPdfDependencies
-import com.novapdf.reader.domain.usecase.PdfViewerUseCases
+import com.novapdf.reader.presentation.viewer.R
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
@@ -84,13 +85,12 @@ private data class DocumentContext(
     val renderProgress: PdfRenderProgress
 )
 
-open class PdfViewerViewModel(
-    application: Application
+@HiltViewModel
+open class PdfViewerViewModel @Inject constructor(
+    application: Application,
+    private val useCases: PdfViewerUseCases,
 ) : AndroidViewModel(application) {
     private val app: Application = application
-    private val dependencies = application as? NovaPdfDependencies
-        ?: throw IllegalStateException("Application must implement NovaPdfDependencies")
-    private val useCases: PdfViewerUseCases = dependencies.pdfViewerUseCases
     private val documentUseCase = useCases.document
     private val annotationUseCase = useCases.annotations
     private val bookmarkUseCase = useCases.bookmarks

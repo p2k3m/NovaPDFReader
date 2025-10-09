@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.hilt.android)
     alias(libs.plugins.kover)
 }
 
@@ -55,7 +56,12 @@ dependencies {
 
     runtimeOnly(libs.kotlinx.coroutines.android)
 
+    implementation(libs.hilt.android)
+    implementation(libs.androidx.hilt.work)
+
     ksp(libs.androidx.room.compiler)
+    ksp(libs.hilt.compiler)
+    ksp(libs.androidx.hilt.compiler)
 }
 
 kotlin {

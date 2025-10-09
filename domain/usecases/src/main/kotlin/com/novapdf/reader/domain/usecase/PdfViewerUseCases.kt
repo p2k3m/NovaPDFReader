@@ -20,141 +20,231 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import java.io.File
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Aggregates the core domain operations required by the presentation layer when rendering
- * and interacting with documents. Each nested use case isolates a particular set of
- * responsibilities so ViewModels can depend on a cohesive API surface.
+ * Domain-level contract that aggregates the use cases the presentation layer needs.
  */
-data class PdfViewerUseCases(
-    val document: PdfDocumentUseCase,
-    val annotations: AnnotationUseCase,
-    val bookmarks: BookmarkUseCase,
-    val search: DocumentSearchUseCase,
-    val remoteDocuments: RemoteDocumentUseCase,
-    val maintenance: DocumentMaintenanceUseCase,
-    val crashReporting: CrashReportingUseCase,
+interface PdfViewerUseCases {
+    val document: PdfDocumentUseCase
+    val annotations: AnnotationUseCase
+    val bookmarks: BookmarkUseCase
+    val search: DocumentSearchUseCase
+    val remoteDocuments: RemoteDocumentUseCase
+    val maintenance: DocumentMaintenanceUseCase
+    val crashReporting: CrashReportingUseCase
     val adaptiveFlow: AdaptiveFlowUseCase
-)
+}
 
-class PdfDocumentUseCase(
-    private val repository: PdfDocumentRepository
-) {
-    val session: StateFlow<PdfDocumentSession?> get() = repository.session
-    val outline: StateFlow<List<PdfOutlineNode>> get() = repository.outline
-    val renderProgress: StateFlow<PdfRenderProgress> get() = repository.renderProgress
+@Singleton
+class DefaultPdfViewerUseCases @Inject constructor(
+    override val document: PdfDocumentUseCase,
+    override val annotations: AnnotationUseCase,
+    override val bookmarks: BookmarkUseCase,
+    override val search: DocumentSearchUseCase,
+    override val remoteDocuments: RemoteDocumentUseCase,
+    override val maintenance: DocumentMaintenanceUseCase,
+    override val crashReporting: CrashReportingUseCase,
+    override val adaptiveFlow: AdaptiveFlowUseCase,
+) : PdfViewerUseCases
 
-    suspend fun open(uri: Uri): PdfDocumentSession = repository.open(uri)
+interface PdfDocumentUseCase {
+    val session: StateFlow<PdfDocumentSession?>
+    val outline: StateFlow<List<PdfOutlineNode>>
+    val renderProgress: StateFlow<PdfRenderProgress>
 
-    fun prefetchPages(indices: List<Int>, targetWidth: Int) {
+    suspend fun open(uri: Uri): PdfDocumentSession
+    fun prefetchPages(indices: List<Int>, targetWidth: Int)
+    suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap?
+    suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap?
+    suspend fun getPageSize(pageIndex: Int): Size?
+    fun createPrintAdapter(context: Context): PrintDocumentAdapter?
+    fun dispose()
+}
+
+@Singleton
+class DefaultPdfDocumentUseCase @Inject constructor(
+    private val repository: PdfDocumentRepository,
+) : PdfDocumentUseCase {
+    override val session: StateFlow<PdfDocumentSession?>
+        get() = repository.session
+    override val outline: StateFlow<List<PdfOutlineNode>>
+        get() = repository.outline
+    override val renderProgress: StateFlow<PdfRenderProgress>
+        get() = repository.renderProgress
+
+    override suspend fun open(uri: Uri): PdfDocumentSession = repository.open(uri)
+
+    override fun prefetchPages(indices: List<Int>, targetWidth: Int) {
         repository.prefetchPages(indices, targetWidth)
     }
 
-    suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? =
+    override suspend fun renderPage(pageIndex: Int, targetWidth: Int): Bitmap? =
         repository.renderPage(pageIndex, targetWidth)
 
-    suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? =
+    override suspend fun renderTile(pageIndex: Int, tileRect: Rect, scale: Float): Bitmap? =
         repository.renderTile(pageIndex, tileRect, scale)
 
-    suspend fun getPageSize(pageIndex: Int): Size? = repository.getPageSize(pageIndex)
+    override suspend fun getPageSize(pageIndex: Int): Size? = repository.getPageSize(pageIndex)
 
-    fun createPrintAdapter(context: Context): PrintDocumentAdapter? =
+    override fun createPrintAdapter(context: Context): PrintDocumentAdapter? =
         repository.createPrintAdapter(context)
 
-    fun dispose() {
+    override fun dispose() {
         repository.dispose()
     }
 }
 
-class AnnotationUseCase(
-    private val repository: AnnotationRepository
-) {
-    fun annotationsFor(documentId: String): List<AnnotationCommand> =
+interface AnnotationUseCase {
+    fun annotationsFor(documentId: String): List<AnnotationCommand>
+    fun addAnnotation(documentId: String, annotation: AnnotationCommand)
+    fun replaceAnnotations(documentId: String, annotations: List<AnnotationCommand>)
+    fun clear(documentId: String)
+    suspend fun persist(documentId: String): File?
+    fun trackedDocumentIds(): Set<String>
+}
+
+@Singleton
+class DefaultAnnotationUseCase @Inject constructor(
+    private val repository: AnnotationRepository,
+) : AnnotationUseCase {
+    override fun annotationsFor(documentId: String): List<AnnotationCommand> =
         repository.annotationsForDocument(documentId)
 
-    fun addAnnotation(documentId: String, annotation: AnnotationCommand) {
+    override fun addAnnotation(documentId: String, annotation: AnnotationCommand) {
         repository.addAnnotation(documentId, annotation)
     }
 
-    fun replaceAnnotations(documentId: String, annotations: List<AnnotationCommand>) {
+    override fun replaceAnnotations(documentId: String, annotations: List<AnnotationCommand>) {
         repository.replaceAnnotations(documentId, annotations)
     }
 
-    fun clear(documentId: String) {
+    override fun clear(documentId: String) {
         repository.clearInMemory(documentId)
     }
 
-    suspend fun persist(documentId: String): File? = repository.saveAnnotations(documentId)
+    override suspend fun persist(documentId: String): File? = repository.saveAnnotations(documentId)
 
-    fun trackedDocumentIds(): Set<String> = repository.trackedDocumentIds()
+    override fun trackedDocumentIds(): Set<String> = repository.trackedDocumentIds()
 }
 
-class BookmarkUseCase(
-    private val bookmarkManager: BookmarkManager
-) {
-    suspend fun bookmarksFor(documentId: String): List<Int> = bookmarkManager.bookmarks(documentId)
+interface BookmarkUseCase {
+    suspend fun bookmarksFor(documentId: String): List<Int>
+    suspend fun toggle(documentId: String, pageIndex: Int)
+}
 
-    suspend fun toggle(documentId: String, pageIndex: Int) {
+@Singleton
+class DefaultBookmarkUseCase @Inject constructor(
+    private val bookmarkManager: BookmarkManager,
+) : BookmarkUseCase {
+    override suspend fun bookmarksFor(documentId: String): List<Int> =
+        bookmarkManager.bookmarks(documentId)
+
+    override suspend fun toggle(documentId: String, pageIndex: Int) {
         bookmarkManager.toggleBookmark(documentId, pageIndex)
     }
 }
 
-class DocumentSearchUseCase(
-    private val coordinator: DocumentSearchCoordinator
-) {
-    fun prepare(session: PdfDocumentSession) {
+interface DocumentSearchUseCase {
+    fun prepare(session: PdfDocumentSession)
+    suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult>
+    fun dispose()
+}
+
+@Singleton
+class DefaultDocumentSearchUseCase @Inject constructor(
+    private val coordinator: DocumentSearchCoordinator,
+) : DocumentSearchUseCase {
+    override fun prepare(session: PdfDocumentSession) {
         coordinator.prepare(session)
     }
 
-    suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult> =
+    override suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult> =
         coordinator.search(session, query)
 
-    fun dispose() {
+    override fun dispose() {
         coordinator.dispose()
     }
 }
 
-class RemoteDocumentUseCase(
-    private val downloader: RemotePdfDownloader
-) {
-    suspend fun download(url: String): Result<Uri> = downloader.download(url)
+interface RemoteDocumentUseCase {
+    suspend fun download(url: String): Result<Uri>
 }
 
-class DocumentMaintenanceUseCase(
-    private val scheduler: DocumentMaintenanceScheduler
-) {
-    fun scheduleAutosave(documentId: String) {
+@Singleton
+class DefaultRemoteDocumentUseCase @Inject constructor(
+    private val downloader: RemotePdfDownloader,
+) : RemoteDocumentUseCase {
+    override suspend fun download(url: String): Result<Uri> = downloader.download(url)
+}
+
+interface DocumentMaintenanceUseCase {
+    fun scheduleAutosave(documentId: String)
+    fun requestImmediateSync(documentId: String)
+}
+
+@Singleton
+class DefaultDocumentMaintenanceUseCase @Inject constructor(
+    private val scheduler: DocumentMaintenanceScheduler,
+) : DocumentMaintenanceUseCase {
+    override fun scheduleAutosave(documentId: String) {
         scheduler.scheduleAutosave(documentId)
     }
 
-    fun requestImmediateSync(documentId: String) {
+    override fun requestImmediateSync(documentId: String) {
         scheduler.requestImmediateSync(documentId)
     }
 }
 
-class CrashReportingUseCase(
-    private val crashReporter: CrashReporter
-) {
-    fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) {
+interface CrashReportingUseCase {
+    fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>)
+    fun logBreadcrumb(message: String)
+}
+
+@Singleton
+class DefaultCrashReportingUseCase @Inject constructor(
+    private val crashReporter: CrashReporter,
+) : CrashReportingUseCase {
+    override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) {
         crashReporter.recordNonFatal(throwable, metadata)
     }
 
-    fun logBreadcrumb(message: String) {
+    override fun logBreadcrumb(message: String) {
         crashReporter.logBreadcrumb(message)
     }
 }
 
-class AdaptiveFlowUseCase(
-    private val manager: AdaptiveFlowManager
-) {
-    val readingSpeed: StateFlow<Float> get() = manager.readingSpeedPagesPerMinute
-    val swipeSensitivity: StateFlow<Float> get() = manager.swipeSensitivity
-    val preloadTargets: StateFlow<List<Int>> get() = manager.preloadTargets
-    val uiUnderLoad: StateFlow<Boolean> get() = manager.uiUnderLoad
+interface AdaptiveFlowUseCase {
+    val readingSpeed: StateFlow<Float>
+    val swipeSensitivity: StateFlow<Float>
+    val preloadTargets: StateFlow<List<Int>>
+    val uiUnderLoad: StateFlow<Boolean>
 
-    fun start() = manager.start()
-    fun stop() = manager.stop()
-    fun trackPageChange(pageIndex: Int, totalPages: Int) = manager.trackPageChange(pageIndex, totalPages)
-    fun isUiUnderLoad(): Boolean = manager.isUiUnderLoad()
+    fun start()
+    fun stop()
+    fun trackPageChange(pageIndex: Int, totalPages: Int)
+    fun isUiUnderLoad(): Boolean
+}
+
+@Singleton
+class DefaultAdaptiveFlowUseCase @Inject constructor(
+    private val manager: AdaptiveFlowManager,
+) : AdaptiveFlowUseCase {
+    override val readingSpeed: StateFlow<Float>
+        get() = manager.readingSpeedPagesPerMinute
+    override val swipeSensitivity: StateFlow<Float>
+        get() = manager.swipeSensitivity
+    override val preloadTargets: StateFlow<List<Int>>
+        get() = manager.preloadTargets
+    override val uiUnderLoad: StateFlow<Boolean>
+        get() = manager.uiUnderLoad
+
+    override fun start() = manager.start()
+    override fun stop() = manager.stop()
+    override fun trackPageChange(pageIndex: Int, totalPages: Int) =
+        manager.trackPageChange(pageIndex, totalPages)
+
+    override fun isUiUnderLoad(): Boolean = manager.isUiUnderLoad()
 }

@@ -20,18 +20,21 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withStarted
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.novapdf.reader.presentation.viewer.R
-import com.novapdf.reader.data.remote.RemotePdfException
-import com.novapdf.reader.ui.theme.NovaPdfTheme
-import com.novapdf.reader.legacy.LegacyPdfPageAdapter
-import com.novapdf.reader.domain.usecase.PdfViewerUseCases
-import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
+import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.domain.usecase.PdfViewerUseCases
+import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
+import com.novapdf.reader.legacy.LegacyPdfPageAdapter
+import com.novapdf.reader.presentation.viewer.R
+import com.novapdf.reader.ui.theme.NovaPdfTheme
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
+@AndroidEntryPoint
 open class ReaderActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
@@ -64,12 +67,8 @@ open class ReaderActivity : ComponentActivity() {
             viewModel.openDocument(uri)
         }
 
-    private val dependencies: NovaPdfDependencies
-        get() = (application as? NovaPdfDependencies)
-            ?: throw IllegalStateException("Application must implement NovaPdfDependencies")
-
-    private val useCases: PdfViewerUseCases
-        get() = dependencies.pdfViewerUseCases
+    @Inject
+    lateinit var useCases: PdfViewerUseCases
 
     private val remoteDocumentUseCase: RemoteDocumentUseCase
         get() = useCases.remoteDocuments
