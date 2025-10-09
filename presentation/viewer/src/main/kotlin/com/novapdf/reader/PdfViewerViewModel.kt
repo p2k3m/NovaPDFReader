@@ -278,16 +278,16 @@ open class PdfViewerViewModel @Inject constructor(
             messageRes = R.string.loading_stage_resolving,
             resetError = resetError
         )
-        val session = runCatching {
-            withContext(Dispatchers.IO) {
-                val signal = CancellationSignal()
-                openDocumentUseCase(OpenDocumentRequest(uri), signal).session
-            }
+        val openResult = withContext(Dispatchers.IO) {
+            val signal = CancellationSignal()
+            openDocumentUseCase(OpenDocumentRequest(uri), signal)
         }
-            .getOrElse { throwable ->
-                handleDocumentError(throwable)
-                return
-            }
+        val sessionResult = openResult.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            handleDocumentError(throwable)
+            return
+        }
+        val session = sessionResult.session
         annotationUseCase.clear(session.documentId)
         setLoadingState(
             isLoading = true,
@@ -323,7 +323,18 @@ open class PdfViewerViewModel @Inject constructor(
             BuildSearchIndexRequest(session),
             indexingSignal,
         )
-        indexingJob = indexResult.job
+        indexResult.onSuccess { result ->
+            indexingJob = result.job
+        }.onFailure { throwable ->
+            if (throwable is CancellationException) throw throwable
+            crashReportingUseCase.recordNonFatal(
+                throwable,
+                mapOf(
+                    "stage" to "searchIndex",
+                    "documentId" to session.documentId
+                ),
+            )
+        }
     }
 
     private suspend fun preloadInitialPage() {
@@ -334,9 +345,13 @@ open class PdfViewerViewModel @Inject constructor(
         )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
         withContext(Dispatchers.IO) {
-            runCatching {
-                val signal = CancellationSignal()
-                renderPageUseCase(RenderPageRequest(pageIndex = 0, targetWidth = targetWidth), signal)
+            val signal = CancellationSignal()
+            val result = renderPageUseCase(
+                RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
+                signal,
+            )
+            result.exceptionOrNull()?.let { throwable ->
+                if (throwable is CancellationException) throw throwable
             }
         }
         setLoadingState(
@@ -432,14 +447,28 @@ open class PdfViewerViewModel @Inject constructor(
     suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
         return withContext(Dispatchers.IO) {
             val signal = CancellationSignal()
-            renderPageUseCase(RenderPageRequest(index, targetWidth), signal).bitmap
+            val result = renderPageUseCase(RenderPageRequest(index, targetWidth), signal)
+            result.fold(
+                onSuccess = { it.bitmap },
+                onFailure = { throwable ->
+                    if (throwable is CancellationException) throw throwable
+                    null
+                }
+            )
         }
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
         return withContext(Dispatchers.IO) {
             val signal = CancellationSignal()
-            renderTileUseCase(RenderTileRequest(index, rect, scale), signal).bitmap
+            val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
+            result.fold(
+                onSuccess = { it.bitmap },
+                onFailure = { throwable ->
+                    if (throwable is CancellationException) throw throwable
+                    null
+                }
+            )
         }
     }
 
