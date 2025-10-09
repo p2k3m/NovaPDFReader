@@ -271,6 +271,10 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
+    fun cancelRemoteDocumentLoad() {
+        remoteDownloadJob?.cancel()
+    }
+
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
         searchJob?.cancel()
         setLoadingState(

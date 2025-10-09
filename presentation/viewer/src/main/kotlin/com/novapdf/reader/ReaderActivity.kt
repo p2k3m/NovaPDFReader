@@ -15,8 +15,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.core.view.isVisible
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -24,9 +26,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
-import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
-import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
@@ -69,9 +69,6 @@ open class ReaderActivity : ComponentActivity() {
 
     @Inject
     lateinit var useCases: PdfViewerUseCases
-
-    private val remoteDocumentUseCase: RemoteDocumentUseCase
-        get() = useCases.remoteDocuments
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,28 +123,8 @@ open class ReaderActivity : ComponentActivity() {
     }
 
     private fun openRemoteDocument(url: String) {
-        if (useComposeUi) {
-            showUserSnackbar(getString(R.string.remote_pdf_download_started))
-            viewModel.openRemoteDocument(url)
-        } else {
-            lifecycleScope.launch {
-                showUserSnackbar(getString(R.string.remote_pdf_download_started))
-                val result = remoteDocumentUseCase.download(url)
-                result.onSuccess { uri ->
-                    viewModel.openDocument(uri)
-                }.onFailure { error ->
-                    val messageRes = if (error is RemotePdfException &&
-                        error.reason == RemotePdfException.Reason.CORRUPTED
-                    ) {
-                        R.string.error_pdf_corrupted
-                    } else {
-                        R.string.remote_pdf_download_failed
-                    }
-                    showUserSnackbar(getString(messageRes))
-                    viewModel.reportRemoteOpenFailure(error, url)
-                }
-            }
-        }
+        showUserSnackbar(getString(R.string.remote_pdf_download_started))
+        viewModel.openRemoteDocument(url)
     }
 
     private fun showUserSnackbar(message: String) {
@@ -245,15 +222,22 @@ open class ReaderActivity : ComponentActivity() {
         })
 
         lifecycleScope.launch {
-            viewModel.uiState.collect { state ->
-                val status = state.documentStatus
-                legacyProgress?.isVisible = status is DocumentStatus.Loading
-                adapter.onDocumentChanged(state.documentId, state.pageCount)
-                updateLegacyToolbar(state)
-                updateLegacyStatus(state, statusContainer)
-                maybeScrollToPage(state)
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    val status = state.documentStatus
+                    legacyProgress?.isVisible = status is DocumentStatus.Loading
+                    adapter.onDocumentChanged(state.documentId, state.pageCount)
+                    updateLegacyToolbar(state)
+                    updateLegacyStatus(state, statusContainer)
+                    maybeScrollToPage(state)
+                }
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        viewModel.cancelRemoteDocumentLoad()
     }
 
     private fun updateLegacyToolbar(state: PdfViewerUiState) {
