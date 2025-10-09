@@ -526,12 +526,13 @@ open class PdfViewerViewModel @Inject constructor(
         val pageCount = _uiState.value.pageCount
         if (pageCount <= 0) return
         val targetPage = pageIndex.coerceIn(0, pageCount - 1)
-        viewModelScope.launch {
+        viewModelScope.launch(dispatchers.io) {
             bookmarkUseCase.toggle(documentId, targetPage)
-            _uiState.value = _uiState.value.copy(
-                bookmarks = bookmarkUseCase.bookmarksFor(documentId)
-            )
-            maintenanceUseCase.scheduleAutosave(documentId)
+            val updatedBookmarks = bookmarkUseCase.bookmarksFor(documentId)
+            withContext(dispatchers.main) {
+                _uiState.value = _uiState.value.copy(bookmarks = updatedBookmarks)
+                maintenanceUseCase.scheduleAutosave(documentId)
+            }
         }
     }
 
