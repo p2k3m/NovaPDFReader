@@ -108,7 +108,7 @@ interface OpenDocumentUseCase {
     suspend operator fun invoke(
         request: OpenDocumentRequest,
         cancellationSignal: CancellationSignal? = null,
-    ): OpenDocumentResult
+    ): Result<OpenDocumentResult>
 }
 
 @Singleton
@@ -118,10 +118,12 @@ class DefaultOpenDocumentUseCase @Inject constructor(
     override suspend fun invoke(
         request: OpenDocumentRequest,
         cancellationSignal: CancellationSignal?,
-    ): OpenDocumentResult = withLinkedCancellation(cancellationSignal) { signal ->
-        val session = repository.open(request.uri, signal)
-        OpenDocumentResult(session)
-    }
+    ): Result<OpenDocumentResult> =
+        withLinkedCancellation(cancellationSignal) { signal ->
+            repository.open(request.uri, signal)
+        }.map { session ->
+            OpenDocumentResult(session)
+        }
 }
 
 data class RenderPageRequest(val pageIndex: Int, val targetWidth: Int)
@@ -132,7 +134,7 @@ interface RenderPageUseCase {
     suspend operator fun invoke(
         request: RenderPageRequest,
         cancellationSignal: CancellationSignal? = null,
-    ): RenderPageResult
+    ): Result<RenderPageResult>
 }
 
 @Singleton
@@ -142,10 +144,12 @@ class DefaultRenderPageUseCase @Inject constructor(
     override suspend fun invoke(
         request: RenderPageRequest,
         cancellationSignal: CancellationSignal?,
-    ): RenderPageResult = withLinkedCancellation(cancellationSignal) { signal ->
-        val bitmap = repository.renderPage(request.pageIndex, request.targetWidth, signal)
-        RenderPageResult(bitmap)
-    }
+    ): Result<RenderPageResult> =
+        withLinkedCancellation(cancellationSignal) { signal ->
+            repository.renderPage(request.pageIndex, request.targetWidth, signal)
+        }.map { bitmap ->
+            RenderPageResult(bitmap)
+        }
 }
 
 data class RenderTileRequest(val pageIndex: Int, val tileRect: Rect, val scale: Float)
@@ -156,7 +160,7 @@ interface RenderTileUseCase {
     suspend operator fun invoke(
         request: RenderTileRequest,
         cancellationSignal: CancellationSignal? = null,
-    ): RenderTileResult
+    ): Result<RenderTileResult>
 }
 
 @Singleton
@@ -166,10 +170,12 @@ class DefaultRenderTileUseCase @Inject constructor(
     override suspend fun invoke(
         request: RenderTileRequest,
         cancellationSignal: CancellationSignal?,
-    ): RenderTileResult = withLinkedCancellation(cancellationSignal) { signal ->
-        val bitmap = repository.renderTile(request.pageIndex, request.tileRect, request.scale, signal)
-        RenderTileResult(bitmap)
-    }
+    ): Result<RenderTileResult> =
+        withLinkedCancellation(cancellationSignal) { signal ->
+            repository.renderTile(request.pageIndex, request.tileRect, request.scale, signal)
+        }.map { bitmap ->
+            RenderTileResult(bitmap)
+        }
 }
 
 data class BuildSearchIndexRequest(val session: PdfDocumentSession)
@@ -180,7 +186,7 @@ interface BuildSearchIndexUseCase {
     suspend operator fun invoke(
         request: BuildSearchIndexRequest,
         cancellationSignal: CancellationSignal? = null,
-    ): BuildSearchIndexResult
+    ): Result<BuildSearchIndexResult>
 }
 
 @Singleton
@@ -190,23 +196,24 @@ class DefaultBuildSearchIndexUseCase @Inject constructor(
     override suspend fun invoke(
         request: BuildSearchIndexRequest,
         cancellationSignal: CancellationSignal?,
-    ): BuildSearchIndexResult {
+    ): Result<BuildSearchIndexResult> = runCatching {
         val job = coordinator.prepare(request.session)
         if (job == null) {
-            return BuildSearchIndexResult(job = null)
-        }
-        val cancelException = CancellationException("Search indexing cancelled")
-        cancellationSignal?.let { signal ->
-            if (signal.isCanceled) {
-                job.cancel(cancelException)
-            } else {
-                signal.setOnCancelListener {
+            BuildSearchIndexResult(job = null)
+        } else {
+            val cancelException = CancellationException("Search indexing cancelled")
+            cancellationSignal?.let { signal ->
+                if (signal.isCanceled) {
                     job.cancel(cancelException)
+                } else {
+                    signal.setOnCancelListener {
+                        job.cancel(cancelException)
+                    }
+                    job.invokeOnCompletion { signal.setOnCancelListener(null) }
                 }
-                job.invokeOnCompletion { signal.setOnCancelListener(null) }
             }
+            BuildSearchIndexResult(job = job)
         }
-        return BuildSearchIndexResult(job = job)
     }
 }
 
@@ -214,12 +221,12 @@ private suspend fun <T> withLinkedCancellation(
     signal: CancellationSignal?,
     onCancel: (() -> Unit)? = null,
     block: suspend (CancellationSignal?) -> T,
-): T {
+): Result<T> {
     if (signal == null) {
-        return block(null)
+        return runCatching { block(null) }
     }
     if (signal.isCanceled) {
-        throw CancellationException("Operation cancelled")
+        return Result.failure(CancellationException("Operation cancelled"))
     }
     val job = coroutineContext.job
     val listener = CancellationSignal.OnCancelListener {
@@ -234,7 +241,9 @@ private suspend fun <T> withLinkedCancellation(
         }
     }
     return try {
-        block(signal)
+        Result.success(block(signal))
+    } catch (throwable: Throwable) {
+        Result.failure(throwable)
     } finally {
         detachHandle.dispose()
         signal.setOnCancelListener(null)

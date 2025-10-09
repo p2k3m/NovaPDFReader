@@ -55,6 +55,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
@@ -252,9 +253,11 @@ class PdfViewerViewModelSearchTest {
             document = mock<PdfDocument>(),
             fileDescriptor = mock<ParcelFileDescriptor>()
         )
-        whenever(pdfRepository.open(any())).thenReturn(session)
+        whenever(pdfRepository.open(any(), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
-        whenever(pdfRepository.renderPage(eq(0), any())).thenReturn(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
+        whenever(pdfRepository.renderPage(eq(0), any(), anyOrNull())).thenReturn(
+            Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888)
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -301,9 +304,11 @@ class PdfViewerViewModelSearchTest {
         )
         val downloadUri = Uri.parse("https://example.com/doc.pdf")
         whenever(downloadManager.download(eq(downloadUri.toString()))).thenReturn(Result.success(downloadUri))
-        whenever(pdfRepository.open(eq(downloadUri))).thenReturn(session)
+        whenever(pdfRepository.open(eq(downloadUri), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
-        whenever(pdfRepository.renderPage(eq(0), any())).thenReturn(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888))
+        whenever(pdfRepository.renderPage(eq(0), any(), anyOrNull())).thenReturn(
+            Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -319,7 +324,7 @@ class PdfViewerViewModelSearchTest {
         advanceUntilIdle()
 
         verify(downloadManager).download(eq(downloadUri.toString()))
-        verify(pdfRepository).open(eq(downloadUri))
+        verify(pdfRepository).open(eq(downloadUri), anyOrNull())
         verify(searchCoordinator).prepare(eq(session))
         assertEquals("remote_doc", viewModel.uiState.value.documentId)
         assertEquals(DocumentStatus.Idle, viewModel.uiState.value.documentStatus)
@@ -531,7 +536,9 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
-        whenever(pdfRepository.open(any())).thenThrow(PdfOpenException(PdfOpenException.Reason.CORRUPTED))
+        whenever(pdfRepository.open(any(), anyOrNull())).thenThrow(
+            PdfOpenException(PdfOpenException.Reason.CORRUPTED)
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
