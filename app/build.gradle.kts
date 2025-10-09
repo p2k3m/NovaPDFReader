@@ -480,8 +480,11 @@ if (requireConnectedDevice != true) {
                 .firstOrNull { it.exists() }
 
             if (gradle.startParameter.requestsConnectedAndroidTests()) {
-                val hasConnectedDevice by lazy {
-                    when {
+                var cachedHasConnectedDevice: Boolean? = null
+                fun hasConnectedDevice(): Boolean {
+                    cachedHasConnectedDevice?.let { return it }
+
+                    val result = when {
                         adbExecutable == null -> {
                             logger.warn("ADB executable not found. Skipping connected Android tests.")
                             false
@@ -523,6 +526,9 @@ if (requireConnectedDevice != true) {
                             }
                         }
                     }
+
+                    cachedHasConnectedDevice = result
+                    return result
                 }
 
                 tasks.matching { task ->
@@ -530,7 +536,7 @@ if (requireConnectedDevice != true) {
                         (task.name.startsWith("connected") && task.name.endsWith("AndroidTest"))
                 }.configureEach {
                     onlyIf {
-                        val hasDevice = hasConnectedDevice
+                        val hasDevice = hasConnectedDevice()
                         if (!hasDevice) {
                             logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
                         }
@@ -545,7 +551,7 @@ if (requireConnectedDevice != true) {
                             task.name.startsWith("package", ignoreCase = true))
                 }.configureEach {
                     onlyIf {
-                        val hasDevice = hasConnectedDevice
+                        val hasDevice = hasConnectedDevice()
                         if (!hasDevice) {
                             logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
                         }
