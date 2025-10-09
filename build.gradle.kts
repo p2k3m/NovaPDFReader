@@ -67,13 +67,20 @@ subprojects {
     }
 
     extensions.configure<SpotlessExtension> {
-        kotlin {
-            if (this@subprojects.name == "app") {
-                target("src/**/*.kt")
-                targetExclude("**/build/**/*.kt", "**/src/test/**/*.kt", "**/src/androidTest/**/*.kt")
-                ktlint(ktlintVersion)
-            } else {
-                targetExclude("**/*.kt")
+        val hasKotlinPlugin = pluginManager.hasPlugin("org.jetbrains.kotlin.android") ||
+            pluginManager.hasPlugin("org.jetbrains.kotlin.jvm") ||
+            pluginManager.hasPlugin("org.jetbrains.kotlin.multiplatform") ||
+            pluginManager.hasPlugin("org.jetbrains.kotlin.kapt")
+
+        if (hasKotlinPlugin) {
+            kotlin {
+                if (this@subprojects.name == "app") {
+                    target("src/**/*.kt")
+                    targetExclude("**/build/**/*.kt", "**/src/test/**/*.kt", "**/src/androidTest/**/*.kt")
+                    ktlint(ktlintVersion)
+                } else {
+                    targetExclude("**/*.kt")
+                }
             }
         }
     }
