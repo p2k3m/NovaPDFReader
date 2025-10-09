@@ -981,6 +981,8 @@ kotlin {
         tasks.namedOrNull<Task>("parseBenchmarkReleaseLocalResources")?.configure {
             val incrementalDirProvider = project.layout.buildDirectory
                 .dir("intermediates/incremental/benchmarkRelease/packageBenchmarkReleaseResources")
+            val packagedDirProvider = project.layout.buildDirectory
+                .dir("intermediates/packaged_res/benchmarkRelease/packageBenchmarkReleaseResources")
 
             doFirst {
                 val incrementalDir = incrementalDirProvider.get().asFile
@@ -989,6 +991,11 @@ kotlin {
                 }
                 File(incrementalDir, "merged.dir").mkdirs()
                 File(incrementalDir, "stripped.dir").mkdirs()
+
+                val packagedDir = packagedDirProvider.get().asFile
+                if (!packagedDir.exists()) {
+                    packagedDir.mkdirs()
+                }
 
                 val missingInputs = inputs.files.filterNot(File::exists)
                 if (missingInputs.isNotEmpty()) {
