@@ -10,6 +10,7 @@ import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.download.S3RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.FileCrashReporter
@@ -19,6 +20,15 @@ import com.novapdf.reader.search.LuceneSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
 import com.novapdf.reader.work.DocumentMaintenanceDependencies
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import com.novapdf.reader.domain.usecase.AdaptiveFlowUseCase
+import com.novapdf.reader.domain.usecase.AnnotationUseCase
+import com.novapdf.reader.domain.usecase.BookmarkUseCase
+import com.novapdf.reader.domain.usecase.CrashReportingUseCase
+import com.novapdf.reader.domain.usecase.DocumentMaintenanceUseCase
+import com.novapdf.reader.domain.usecase.DocumentSearchUseCase
+import com.novapdf.reader.domain.usecase.PdfDocumentUseCase
+import com.novapdf.reader.domain.usecase.PdfViewerUseCases
+import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,24 +45,24 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + scopeExceptionHandler)
     private val backgroundInitializationStarted = AtomicBoolean(false)
 
-    override val crashReporter: CrashReporter by lazy {
+    val crashReporter: CrashReporter by lazy {
         FileCrashReporter(this).also { it.install() }
     }
 
     override val annotationRepository: AnnotationRepository by lazy { AnnotationRepository(this) }
 
-    override val pdfDocumentRepository: PdfDocumentRepository by lazy {
+    val pdfDocumentRepository: PdfDocumentRepository by lazy {
         PdfDocumentRepository(this, crashReporter = crashReporter)
     }
 
     private val searchCoordinatorDelegate = lazy<DocumentSearchCoordinator> {
         LuceneSearchCoordinator(this, pdfDocumentRepository)
     }
-    override val searchCoordinator: DocumentSearchCoordinator by searchCoordinatorDelegate
+    val searchCoordinator: DocumentSearchCoordinator by searchCoordinatorDelegate
 
-    override val adaptiveFlowManager: AdaptiveFlowManager by lazy { DefaultAdaptiveFlowManager(this) }
+    val adaptiveFlowManager: AdaptiveFlowManager by lazy { DefaultAdaptiveFlowManager(this) }
 
-    override val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
+    val pdfDownloadManager: PdfDownloadManager by lazy { PdfDownloadManager(this) }
 
     private val databaseDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         Room.databaseBuilder(
@@ -76,7 +86,20 @@ open class NovaPdfApp : Application(), DocumentMaintenanceDependencies, NovaPdfD
     private val maintenanceSchedulerDelegate = lazy {
         DocumentMaintenanceScheduler(this).also { it.ensurePeriodicSync() }
     }
-    override val documentMaintenanceScheduler: DocumentMaintenanceScheduler by maintenanceSchedulerDelegate
+    val documentMaintenanceScheduler: DocumentMaintenanceScheduler by maintenanceSchedulerDelegate
+
+    override val pdfViewerUseCases: PdfViewerUseCases by lazy {
+        PdfViewerUseCases(
+            document = PdfDocumentUseCase(pdfDocumentRepository),
+            annotations = AnnotationUseCase(annotationRepository),
+            bookmarks = BookmarkUseCase(bookmarkManager),
+            search = DocumentSearchUseCase(searchCoordinator),
+            remoteDocuments = RemoteDocumentUseCase(S3RemotePdfDownloader(pdfDownloadManager)),
+            maintenance = DocumentMaintenanceUseCase(documentMaintenanceScheduler),
+            crashReporting = CrashReportingUseCase(crashReporter),
+            adaptiveFlow = AdaptiveFlowUseCase(adaptiveFlowManager)
+        )
+    }
 
     override fun isUiUnderLoad(): Boolean = adaptiveFlowManager.isUiUnderLoad()
 

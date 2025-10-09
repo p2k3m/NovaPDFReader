@@ -34,14 +34,17 @@ dependencyResolutionManagement {
 rootProject.name = "NovaPDFReader"
 include(
     ":app",
-    ":core-model",
-    ":core-io",
-    ":pdf-engine",
-    ":search-index",
-    ":ui-viewer",
-    ":ui-compose",
-    ":features-annotations",
-    ":integration-aws",
+    ":domain:model",
+    ":domain:usecases",
+    ":data:repositories",
+    ":data:search",
+    ":data:annotations",
+    ":engine:pdf",
+    ":presentation:viewer",
+    ":presentation:compose",
+    ":infra:s3",
+    ":infra:download",
+    ":infra:logging",
     ":test-harness"
 )
 
