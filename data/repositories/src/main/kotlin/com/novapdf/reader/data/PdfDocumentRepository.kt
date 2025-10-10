@@ -305,27 +305,69 @@ class PdfDocumentRepository(
         coroutineContext.ensureActive()
         if (openSession.value == null) return@withContextGuard null
         val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
-        val targetWidth = max(1, (pageSize.width * request.scale).roundToInt())
-        val baseBitmap = ensurePageBitmap(
-            request.pageIndex,
-            targetWidth,
-            cancellationSignal = request.cancellationSignal,
-        ) ?: return@withContextGuard null
-        coroutineContext.ensureActive()
-        val scaledLeft = (request.tileRect.left * request.scale).roundToInt().coerceIn(0, baseBitmap.width - 1)
-        val scaledTop = (request.tileRect.top * request.scale).roundToInt().coerceIn(0, baseBitmap.height - 1)
-        val scaledRight = (request.tileRect.right * request.scale).roundToInt().coerceIn(scaledLeft + 1, baseBitmap.width)
-        val scaledBottom = (request.tileRect.bottom * request.scale).roundToInt().coerceIn(scaledTop + 1, baseBitmap.height)
-        val width = (scaledRight - scaledLeft).coerceAtLeast(1)
-        val height = (scaledBottom - scaledTop).coerceAtLeast(1)
-        request.cancellationSignal.throwIfCanceled()
-        coroutineContext.ensureActive()
-        val tile = Bitmap.createBitmap(baseBitmap, scaledLeft, scaledTop, width, height)
-        coroutineContext.ensureActive()
-        if (tile.config != Bitmap.Config.ARGB_8888 && tile.config != Bitmap.Config.RGBA_F16) {
-            copyBitmap(tile)
-        } else {
-            tile
+        val pageWidth = pageSize.width
+        val pageHeight = pageSize.height
+        if (pageWidth <= 0 || pageHeight <= 0 || request.scale <= 0f) {
+            return@withContextGuard null
+        }
+
+        val clampedLeft = request.tileRect.left.coerceIn(0, pageWidth - 1)
+        val clampedTop = request.tileRect.top.coerceIn(0, pageHeight - 1)
+        val clampedRight = request.tileRect.right.coerceIn(clampedLeft + 1, pageWidth)
+        val clampedBottom = request.tileRect.bottom.coerceIn(clampedTop + 1, pageHeight)
+
+        val tileWidth = ((clampedRight - clampedLeft) * request.scale).roundToInt().coerceAtLeast(1)
+        val tileHeight = ((clampedBottom - clampedTop) * request.scale).roundToInt().coerceAtLeast(1)
+        val targetWidth = max(1, (pageWidth * request.scale).roundToInt())
+        val targetHeight = max(1, (pageHeight * request.scale).roundToInt())
+        val offsetX = (-clampedLeft * request.scale).roundToInt()
+        val offsetY = (-clampedTop * request.scale).roundToInt()
+
+        val lockOwner = Any()
+        renderMutex.lock(lockOwner)
+        try {
+            request.cancellationSignal.throwIfCanceled()
+            coroutineContext.ensureActive()
+            val activeSession = openSession.value ?: return@withContextGuard null
+            if (!activeSession.document.hasPage(request.pageIndex)) {
+                pdfiumCore.openPage(activeSession.document, request.pageIndex)
+            }
+            val bitmap = obtainBitmap(tileWidth, tileHeight, Bitmap.Config.ARGB_8888)
+            try {
+                request.cancellationSignal.throwIfCanceled()
+                coroutineContext.ensureActive()
+                pdfiumCore.renderPageBitmap(
+                    activeSession.document,
+                    bitmap,
+                    request.pageIndex,
+                    offsetX,
+                    offsetY,
+                    targetWidth,
+                    targetHeight,
+                    true
+                )
+                request.cancellationSignal.throwIfCanceled()
+                coroutineContext.ensureActive()
+                bitmap
+            } catch (throwable: Throwable) {
+                recycleBitmap(bitmap)
+                if (throwable is CancellationException) {
+                    throw throwable
+                }
+                Log.e(TAG, "Failed to render tile for page ${request.pageIndex}", throwable)
+                reportNonFatal(
+                    throwable,
+                    mapOf(
+                        "stage" to "renderTile",
+                        "pageIndex" to request.pageIndex.toString(),
+                        "scale" to request.scale.toString(),
+                        "tile" to "$clampedLeft,$clampedTop,$clampedRight,$clampedBottom"
+                    )
+                )
+                null
+            }
+        } finally {
+            renderMutex.unlock(lockOwner)
         }
     }
 
@@ -345,14 +387,22 @@ class PdfDocumentRepository(
 
     fun preloadTiles(indices: List<Int>, tileFractions: List<RectF>, scale: Float) {
         val session = openSession.value ?: return
-        if (tileFractions.isEmpty()) return
+        if (tileFractions.isEmpty() || scale <= 0f) return
         renderScope.launch {
             indices.forEach { pageIndex ->
                 if (pageIndex in 0 until session.pageCount) {
                     val pageSize = getPageSizeInternal(pageIndex) ?: return@forEach
-                    val targetWidth = max(1, (pageSize.width * scale).roundToInt())
-                    // Skip speculative tile work when render mutex is contended.
-                    ensurePageBitmap(pageIndex, targetWidth, allowSkippingIfBusy = true)
+                    val requests = tileFractions
+                        .map { fraction -> fraction.toPageRect(pageSize) }
+                        .filter { rect -> rect.width() > 0 && rect.height() > 0 }
+                        .map { rect -> PageTileRequest(pageIndex, rect, scale) }
+                    requests.forEach { request ->
+                        try {
+                            renderTile(request)?.let { bitmap -> recycleBitmap(bitmap) }
+                        } catch (_: CancellationException) {
+                            return@launch
+                        }
+                    }
                 }
             }
         }
