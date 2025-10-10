@@ -235,12 +235,12 @@ val baselineTasksRequested = gradle.startParameter.taskNames.any { it.isBaseline
 
 val sdkDirectoryProvider = androidComponents.sdkComponents.sdkDirectory.map { it.asFile }
 
-val hasConnectedDeviceProvider = providers.provider {
+fun hasConnectedDeviceForBaseline(): Boolean {
     if (!baselineTasksRequested) {
-        return@provider false
+        return false
     }
 
-    val sdkDir = sdkDirectoryProvider.orNull ?: return@provider false
+    val sdkDir = sdkDirectoryProvider.orNull ?: return false
     val platformTools = File(sdkDir, "platform-tools")
     val adbExecutable = sequenceOf("adb", "adb.exe")
         .map { candidate -> File(platformTools, candidate) }
@@ -248,7 +248,7 @@ val hasConnectedDeviceProvider = providers.provider {
 
     if (adbExecutable == null || !adbExecutable.exists()) {
         logger.warn("ADB executable not found. Skipping baseline profile connected checks.")
-        return@provider false
+        return false
     }
 
     fun List<String>.extractEligibleSerials(): List<String> = drop(1)
@@ -306,7 +306,7 @@ val hasConnectedDeviceProvider = providers.provider {
         return sdkLevel != null
     }
 
-    runCatching {
+    return runCatching {
         val process = ProcessBuilder(adbExecutable.absolutePath, "devices")
             .redirectErrorStream(true)
             .start()
@@ -353,7 +353,7 @@ if (skipConnectedTestsOnCi) {
 } else {
     connectedAndroidTestTasks.configureEach {
         onlyIf {
-            val hasDevice = hasConnectedDeviceProvider.get()
+            val hasDevice = hasConnectedDeviceForBaseline()
             if (!hasDevice) {
                 logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
             }

@@ -482,10 +482,7 @@ if (requireConnectedDevice != true) {
                 .firstOrNull { it.exists() }
 
             if (gradle.startParameter.requestsConnectedAndroidTests()) {
-                var cachedHasConnectedDevice: Boolean? = null
                 fun hasConnectedDevice(): Boolean {
-                    cachedHasConnectedDevice?.let { return it }
-
                     fun queryDeviceApiLevel(serial: String): Int? {
                         if (adbExecutable == null) {
                             return null
@@ -601,7 +598,6 @@ if (requireConnectedDevice != true) {
                         }
                     }
 
-                    cachedHasConnectedDevice = result
                     return result
                 }
 
