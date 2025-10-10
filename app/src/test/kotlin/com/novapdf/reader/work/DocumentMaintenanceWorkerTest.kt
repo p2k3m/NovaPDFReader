@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import com.novapdf.reader.TestPdfApp
 import com.novapdf.reader.data.AnnotationRepository
+import com.novapdf.reader.asTestMainDispatcher
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
@@ -41,7 +42,7 @@ class DocumentMaintenanceWorkerTest {
         dispatchers = TestCoroutineDispatchers(
             io = dispatcher,
             default = dispatcher,
-            main = dispatcher
+            main = dispatcher.asTestMainDispatcher()
         )
         annotationRepository = AnnotationRepository(app, dispatchers = dispatchers)
         AnnotationRepository.preferenceFile(app).let { prefsFile ->

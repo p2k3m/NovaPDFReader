@@ -71,10 +71,11 @@ import java.io.IOException
 class PdfViewerViewModelSearchTest {
 
     private val testDispatcher = UnconfinedTestDispatcher()
+    private val mainDispatcher = testDispatcher.asTestMainDispatcher()
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(testDispatcher)
+        Dispatchers.setMain(mainDispatcher)
     }
 
     @After
@@ -116,7 +117,11 @@ class PdfViewerViewModelSearchTest {
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
         )
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
-        return PdfViewerViewModel(app, useCases, TestCoroutineDispatchers(dispatcher, dispatcher, dispatcher))
+        return PdfViewerViewModel(
+            app,
+            useCases,
+            TestCoroutineDispatchers(testDispatcher, testDispatcher, mainDispatcher)
+        )
     }
 
     private fun getString(resId: Int): String {

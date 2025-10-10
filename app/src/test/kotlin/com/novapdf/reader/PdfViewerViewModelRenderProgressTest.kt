@@ -27,6 +27,7 @@ import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -50,10 +51,11 @@ import org.robolectric.annotation.Config
 class PdfViewerViewModelRenderProgressTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
+    private val mainDispatcher = dispatcher.asTestMainDispatcher()
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(dispatcher)
+        Dispatchers.setMain(mainDispatcher)
     }
 
     @After
@@ -111,7 +113,11 @@ class PdfViewerViewModelRenderProgressTest {
         )
 
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
-        val viewModel = PdfViewerViewModel(app, useCases, TestCoroutineDispatchers(dispatcher, dispatcher, dispatcher))
+        val viewModel = PdfViewerViewModel(
+            app,
+            useCases,
+            TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
+        )
 
         renderProgress.value = PdfRenderProgress.Rendering(pageIndex = 2, progress = 0.4f)
         advanceUntilIdle()

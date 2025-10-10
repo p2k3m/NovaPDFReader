@@ -124,6 +124,7 @@ jobs:
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
       NOVAPDF_APP_ID: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      UNIT_TESTS_PASSED: 'false'
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -273,8 +274,13 @@ jobs:
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
           aws iam get-user --query 'User.Arn' --output text >/dev/null 2>/dev/null || true
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --info
+        id: unit_tests
+        run: |
+          set -euo pipefail
+          ./gradlew testDebugUnitTest --info
+          echo "UNIT_TESTS_PASSED=true" >> "$GITHUB_ENV"
       - name: Start emulator
+        if: env.UNIT_TESTS_PASSED == 'true'
         env:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
@@ -449,6 +455,7 @@ jobs:
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
       - name: Install app under test
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
 
@@ -656,6 +663,7 @@ jobs:
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
       - name: Fetch stress PDF fixtures from S3
+        if: env.UNIT_TESTS_PASSED == 'true'
         id: fetch_pdfs
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -711,6 +719,7 @@ jobs:
             echo "thousand_path=${thousand_path}"
           } >> "$GITHUB_OUTPUT"
       - name: Stage stress PDFs on emulator
+        if: env.UNIT_TESTS_PASSED == 'true'
         env:
           STRESS_DEST: stress-large.pdf
           THOUSAND_DEST: stress-thousand-pages.pdf
@@ -781,10 +790,12 @@ jobs:
           stage_fixture "$stress_path" "$STRESS_DEST"
           stage_fixture "$thousand_path" "$THOUSAND_DEST"
       - name: Run instrumentation tests against stress PDFs
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           adb logcat -c || true
           ./gradlew connectedAndroidTest --stacktrace --rerun-tasks --no-build-cache
       - name: Verify heavy PDF instrumentation coverage
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
 
@@ -880,6 +891,7 @@ jobs:
               print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
       - name: Validate ANR and crash-free logcat
+        if: env.UNIT_TESTS_PASSED == 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -940,19 +952,19 @@ jobs:
           print("Logcat is free from ANR/crash signatures")
           PY
       - name: Run macrobenchmark regression suite
-        if: matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
       - name: Generate release baseline profile
-        if: matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
       - name: Verify committed baseline profile is current
-        if: matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
           patterns=(
@@ -981,6 +993,7 @@ jobs:
             exit 1
           fi
       - name: Install debug build for screenshots
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
 
@@ -1086,6 +1099,7 @@ jobs:
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
       - name: Install instrumentation harness for screenshots
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
 
@@ -1145,6 +1159,7 @@ jobs:
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
       - name: Capture screenshots
+        if: env.UNIT_TESTS_PASSED == 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -1343,8 +1358,10 @@ jobs:
         if: always()
         run: adb -s emulator-5554 emu kill || true
       - name: Bundle release app
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: ./gradlew bundleRelease --stacktrace
       - name: Collect signed release bundle
+        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
           bundle_path="app/build/outputs/bundle/release/app-release.aab"
