@@ -53,12 +53,16 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.FilterInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
 import kotlin.math.min
@@ -87,6 +91,8 @@ private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
+private const val REMOTE_CONNECT_TIMEOUT_MS = 15_000
+private const val REMOTE_READ_TIMEOUT_MS = 30_000
 
 class PdfOpenException(
     val reason: Reason,
@@ -148,6 +154,15 @@ class PdfDocumentRepository(
                 Log.w(TAG, "Unable to create PDF repair cache at ${absolutePath}")
             } else if (exists() && !isDirectory) {
                 Log.w(TAG, "PDF repair cache path is not a directory: ${absolutePath}")
+            }
+        }
+    }
+    private val remoteDocumentDir by lazy {
+        File(appContext.cacheDir, "remote-pdfs").apply {
+            if (!exists() && !mkdirs()) {
+                Log.w(TAG, "Unable to create remote PDF cache at ${absolutePath}")
+            } else if (exists() && !isDirectory) {
+                Log.w(TAG, "Remote PDF cache path is not a directory: ${absolutePath}")
             }
         }
     }
@@ -238,6 +253,7 @@ class PdfDocumentRepository(
     }
 
     private var repairedDocumentFile: File? = null
+    private var cachedRemoteFile: File? = null
 
     init {
         appContext.registerComponentCallbacks(componentCallbacks)
@@ -254,90 +270,134 @@ class PdfDocumentRepository(
                 }
             }
             repairedDocumentFile = null
+            cachedRemoteFile?.let { file ->
+                if (file.exists() && !file.delete()) {
+                    Log.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
+                }
+            }
+            cachedRemoteFile = null
             cancellationSignal.throwIfCanceled()
-            if (!validateDocumentUri(uri)) {
-                throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
-            }
-            val preparedFile = prepareLargeDocumentIfNeeded(uri, cancellationSignal)
-            if (preparedFile != null) {
-                repairedDocumentFile = preparedFile
-            }
-            val sourceUri = repairedDocumentFile?.toUri() ?: uri
-            var activePfd = try {
-                openParcelFileDescriptor(sourceUri, cancellationSignal)
-            } catch (security: SecurityException) {
+            var remoteCacheFile: File? = null
+            remoteCacheFile = try {
+                cacheRemoteUriIfNeeded(uri, cancellationSignal)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "Unable to cache remote PDF from $uri", error)
                 reportNonFatal(
-                    security,
+                    error,
                     mapOf(
-                        "stage" to "openFileDescriptor",
-                        "uri" to sourceUri.toString()
+                        "stage" to "cacheRemote",
+                        "uri" to uri.toString()
                     )
                 )
-                throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
-            } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
-            cancellationSignal.throwIfCanceled()
-            val document: PdfDocument = try {
-                pdfiumCore.newDocument(activePfd)
-            } catch (throwable: Throwable) {
-                try {
-                    activePfd.close()
-                } catch (_: IOException) {
+                throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, error)
+            }
+            var keepRemoteCache = false
+            var remoteCacheDeleted = false
+            try {
+                val candidateUri = remoteCacheFile?.toUri() ?: uri
+                if (!validateDocumentUri(candidateUri)) {
+                    throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
                 }
-                Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
-                reportNonFatal(
-                    throwable,
-                    mapOf(
-                        "stage" to "pdfiumNewDocument",
-                        "uri" to sourceUri.toString()
-                    )
-                )
-                val repaired = attemptPdfRepair(uri)
-                    ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
-
-                val repairedPfd = try {
-                    ParcelFileDescriptor.open(repaired, ParcelFileDescriptor.MODE_READ_ONLY)
-                } catch (error: Exception) {
-                    throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, error)
+                val preparedFile = prepareLargeDocumentIfNeeded(candidateUri, cancellationSignal)
+                if (preparedFile != null) {
+                    repairedDocumentFile = preparedFile
                 }
-
-                val repairedDocument = try {
-                    pdfiumCore.newDocument(repairedPfd)
-                } catch (second: Throwable) {
-                    try {
-                        repairedPfd.close()
-                    } catch (_: IOException) {
-                    }
-                    Log.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                val sourceUri = repairedDocumentFile?.toUri() ?: candidateUri
+                var activePfd = try {
+                    openParcelFileDescriptor(sourceUri, cancellationSignal)
+                } catch (security: SecurityException) {
                     reportNonFatal(
-                        second,
+                        security,
                         mapOf(
-                            "stage" to "pdfiumNewDocumentRepair",
-                            "uri" to uri.toString()
+                            "stage" to "openFileDescriptor",
+                            "uri" to sourceUri.toString()
                         )
                     )
-                    throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
-                }
+                    throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
+                } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
+                cancellationSignal.throwIfCanceled()
+                val document: PdfDocument = try {
+                    pdfiumCore.newDocument(activePfd)
+                } catch (throwable: Throwable) {
+                    try {
+                        activePfd.close()
+                    } catch (_: IOException) {
+                    }
+                    Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                    reportNonFatal(
+                        throwable,
+                        mapOf(
+                            "stage" to "pdfiumNewDocument",
+                            "uri" to sourceUri.toString()
+                        )
+                    )
+                    val repaired = attemptPdfRepair(candidateUri)
+                        ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
 
-                if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
-                    cleanedUpRepairedFile(repairedDocumentFile!!)
+                    val repairedPfd = try {
+                        ParcelFileDescriptor.open(repaired, ParcelFileDescriptor.MODE_READ_ONLY)
+                    } catch (error: Exception) {
+                        throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, error)
+                    }
+
+                    val repairedDocument = try {
+                        pdfiumCore.newDocument(repairedPfd)
+                    } catch (second: Throwable) {
+                        try {
+                            repairedPfd.close()
+                        } catch (_: IOException) {
+                        }
+                        Log.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                        reportNonFatal(
+                            second,
+                            mapOf(
+                                "stage" to "pdfiumNewDocumentRepair",
+                                "uri" to candidateUri.toString()
+                            )
+                        )
+                        throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
+                    }
+
+                    if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
+                        cleanedUpRepairedFile(repairedDocumentFile!!)
+                    }
+                    repairedDocumentFile = repaired
+                    activePfd = repairedPfd
+                    repairedDocument
                 }
-                repairedDocumentFile = repaired
-                activePfd = repairedPfd
-                repairedDocument
+                val pageCount = withPdfiumDocument(document, sourceUri) {
+                    pdfiumCore.getPageCount(document)
+                }
+                val session = PdfDocumentSession(
+                    documentId = uri.toString(),
+                    uri = sourceUri,
+                    pageCount = pageCount,
+                    document = document,
+                    fileDescriptor = activePfd
+                )
+                openSession.value = session
+                outlineNodes.value = parseDocumentOutline(session)
+                if (repairedDocumentFile == null) {
+                    cachedRemoteFile = remoteCacheFile
+                    keepRemoteCache = remoteCacheFile != null
+                } else if (remoteCacheFile != null && remoteCacheFile != repairedDocumentFile) {
+                    if (remoteCacheFile.exists() && !remoteCacheFile.delete()) {
+                        Log.w(TAG, "Unable to delete temporary remote PDF at ${remoteCacheFile.absolutePath}")
+                    }
+                    remoteCacheDeleted = true
+                }
+                session
+            } finally {
+                if (!keepRemoteCache && !remoteCacheDeleted) {
+                    remoteCacheFile?.let { file ->
+                        if (file.exists() && !file.delete()) {
+                            Log.w(TAG, "Unable to delete remote PDF cache at ${file.absolutePath}")
+                        }
+                    }
+                }
             }
-            val pageCount = withPdfiumDocument(document, sourceUri) {
-                pdfiumCore.getPageCount(document)
-            }
-            val session = PdfDocumentSession(
-                documentId = uri.toString(),
-                uri = repairedDocumentFile?.toUri() ?: uri,
-                pageCount = pageCount,
-                document = document,
-                fileDescriptor = activePfd
-            )
-            openSession.value = session
-            outlineNodes.value = parseDocumentOutline(session)
-            session
         }
     }
 
@@ -971,6 +1031,12 @@ class PdfDocumentRepository(
             }
         }
         repairedDocumentFile = null
+        cachedRemoteFile?.let { file ->
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Unable to delete cached remote PDF at ${file.absolutePath}")
+            }
+        }
+        cachedRemoteFile = null
     }
 
     @WorkerThread
@@ -1004,6 +1070,90 @@ class PdfDocumentRepository(
         Log.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
         cancellationSignal.throwIfCanceled()
         return attemptPdfRepair(uri, cancellationSignal)
+    }
+
+    private suspend fun cacheRemoteUriIfNeeded(
+        uri: Uri,
+        cancellationSignal: CancellationSignal? = null,
+    ): File? {
+        val scheme = uri.scheme?.lowercase(Locale.US) ?: return null
+        if (scheme == ContentResolver.SCHEME_FILE || scheme == ContentResolver.SCHEME_CONTENT) {
+            return null
+        }
+        if (scheme != "http" && scheme != "https" && scheme != "s3") {
+            return null
+        }
+        if (!remoteDocumentDir.isDirectory) {
+            Log.w(TAG, "Remote PDF cache directory unavailable at ${remoteDocumentDir.absolutePath}")
+            return null
+        }
+
+        val destination = try {
+            File.createTempFile("remote-", ".pdf", remoteDocumentDir)
+        } catch (error: IOException) {
+            Log.w(TAG, "Unable to create remote PDF cache file", error)
+            return null
+        }
+
+        return try {
+            withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+                openRemoteInputStream(uri).use { input ->
+                    FileOutputStream(destination).use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            cancellationSignal?.throwIfCanceled()
+                            val read = input.read(buffer)
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                        }
+                        output.flush()
+                    }
+                }
+            }
+            destination
+        } catch (cancelled: CancellationException) {
+            if (destination.exists() && !destination.delete()) {
+                Log.w(TAG, "Unable to delete cancelled remote PDF cache at ${destination.absolutePath}")
+            }
+            throw cancelled
+        } catch (error: Exception) {
+            if (destination.exists() && !destination.delete()) {
+                Log.w(TAG, "Unable to delete failed remote PDF cache at ${destination.absolutePath}")
+            } else {
+                destination.delete()
+            }
+            throw error
+        }
+    }
+
+    private fun openRemoteInputStream(uri: Uri): InputStream {
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        return when (scheme) {
+            "http", "https" -> {
+                val url = URL(uri.toString())
+                val connection = url.openConnection() as? HttpURLConnection
+                    ?: throw IOException("Unsupported connection for $uri")
+                connection.connectTimeout = REMOTE_CONNECT_TIMEOUT_MS
+                connection.readTimeout = REMOTE_READ_TIMEOUT_MS
+                connection.instanceFollowRedirects = true
+                connection.connect()
+                val stream = connection.inputStream
+                object : FilterInputStream(stream) {
+                    override fun close() {
+                        try {
+                            super.close()
+                        } finally {
+                            connection.disconnect()
+                        }
+                    }
+                }
+            }
+
+            "s3" -> contentResolver.openInputStream(uri)
+                ?: throw IOException("Unable to open remote input stream for $uri")
+
+            else -> throw IOException("Unsupported remote URI scheme: $scheme")
+        }
     }
 
     private suspend fun detectOversizedPageTree(
