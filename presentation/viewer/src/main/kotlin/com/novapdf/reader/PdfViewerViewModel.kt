@@ -84,6 +84,7 @@ data class PdfViewerUiState(
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
     val swipeSensitivity: Float = 1f,
+    val uiUnderLoad: Boolean = false,
     val searchResults: List<SearchResult> = emptyList(),
     val activeAnnotations: List<AnnotationCommand> = emptyList(),
     val bookmarks: List<Int> = emptyList(),
@@ -102,6 +103,7 @@ data class PdfViewerUiState(
 private data class DocumentContext(
     val speed: Float,
     val sensitivity: Float,
+    val isUiUnderLoad: Boolean,
     val session: PdfDocumentSession?,
     val outline: List<PdfOutlineNode>,
     val renderProgress: PdfRenderProgress,
@@ -278,13 +280,18 @@ open class PdfViewerViewModel @Inject constructor(
         )
         viewModelScope.launch {
             combine(
-                adaptiveFlowUseCase.readingSpeed,
-                adaptiveFlowUseCase.swipeSensitivity,
-                documentUseCase.session,
-                documentUseCase.outline,
-                documentUseCase.renderProgress,
-            ) { speed, sensitivity, session, outline, renderProgress ->
-                DocumentContext(speed, sensitivity, session, outline, renderProgress)
+                combine(
+                    adaptiveFlowUseCase.readingSpeed,
+                    adaptiveFlowUseCase.swipeSensitivity,
+                    documentUseCase.session,
+                    documentUseCase.outline,
+                    documentUseCase.renderProgress,
+                ) { speed, sensitivity, session, outline, renderProgress ->
+                    DocumentContext(speed, sensitivity, false, session, outline, renderProgress)
+                },
+                adaptiveFlowUseCase.uiUnderLoad
+            ) { context, uiUnderLoad ->
+                context.copy(isUiUnderLoad = uiUnderLoad)
             }.combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
                 context to bitmapMemory
             }.collect { (context, bitmapMemory) ->
@@ -307,6 +314,7 @@ open class PdfViewerViewModel @Inject constructor(
                 _uiState.value = previous.copy(
                     readingSpeed = context.speed,
                     swipeSensitivity = context.sensitivity,
+                    uiUnderLoad = context.isUiUnderLoad,
                     documentId = documentId,
                     pageCount = session?.pageCount ?: 0,
                     activeAnnotations = annotations,
