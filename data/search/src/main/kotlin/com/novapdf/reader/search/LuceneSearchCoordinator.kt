@@ -45,6 +45,7 @@ import org.apache.lucene.store.ByteBuffersDirectory
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
+import java.io.Closeable
 import java.io.IOException
 import java.io.StringWriter
 import java.util.Locale
@@ -293,55 +294,62 @@ class LuceneSearchCoordinator(
                         val pdPage = runCatching { document.getPage(page) }
                             .onFailure { Log.w(TAG, "Failed to read PDF page $page", it) }
                             .getOrNull() ?: continue
-                        val pageWidth = pdPage.mediaBox?.width?.toInt()?.takeIf { it > 0 } ?: 1
-                        val pageHeight = pdPage.mediaBox?.height?.toInt()?.takeIf { it > 0 } ?: 1
-                        val runs = mutableListOf<TextRunSnapshot>()
-                        val pageWidthF = pageWidth.toFloat()
-                        val pageHeightF = pageHeight.toFloat()
-                        val writer = StringWriter()
-                        val stripper = object : PDFTextStripper() {
-                            override fun writeString(text: String?, textPositions: List<TextPosition>?) {
-                                if (!text.isNullOrEmpty() && !textPositions.isNullOrEmpty()) {
-                                    val bounds = buildList {
-                                        textPositions.forEach { position ->
-                                            val width = position.widthDirAdj
-                                            val height = position.heightDir
-                                            if (width <= 0f || height <= 0f) return@forEach
-                                            var left = position.xDirAdj
-                                            var top = position.yDirAdj - height
-                                            var right = left + width
-                                            var bottom = top + height
-                                            left = left.coerceIn(0f, pageWidthF)
-                                            top = top.coerceIn(0f, pageHeightF)
-                                            right = right.coerceIn(0f, pageWidthF)
-                                            bottom = bottom.coerceIn(0f, pageHeightF)
-                                            if (right - left > 0f && bottom - top > 0f) {
-                                                add(RectF(left, top, right, bottom))
+                        try {
+                            val pageWidth = pdPage.mediaBox?.width?.toInt()?.takeIf { it > 0 } ?: 1
+                            val pageHeight = pdPage.mediaBox?.height?.toInt()?.takeIf { it > 0 } ?: 1
+                            val runs = mutableListOf<TextRunSnapshot>()
+                            val pageWidthF = pageWidth.toFloat()
+                            val pageHeightF = pageHeight.toFloat()
+                            val writer = StringWriter()
+                            val stripper = object : PDFTextStripper() {
+                                override fun writeString(text: String?, textPositions: List<TextPosition>?) {
+                                    if (!text.isNullOrEmpty() && !textPositions.isNullOrEmpty()) {
+                                        val bounds = buildList {
+                                            textPositions.forEach { position ->
+                                                val width = position.widthDirAdj
+                                                val height = position.heightDir
+                                                if (width <= 0f || height <= 0f) return@forEach
+                                                var left = position.xDirAdj
+                                                var top = position.yDirAdj - height
+                                                var right = left + width
+                                                var bottom = top + height
+                                                left = left.coerceIn(0f, pageWidthF)
+                                                top = top.coerceIn(0f, pageHeightF)
+                                                right = right.coerceIn(0f, pageWidthF)
+                                                bottom = bottom.coerceIn(0f, pageHeightF)
+                                                if (right - left > 0f && bottom - top > 0f) {
+                                                    add(RectF(left, top, right, bottom))
+                                                }
                                             }
                                         }
+                                        if (bounds.isNotEmpty()) {
+                                            runs += TextRunSnapshot(text, bounds)
+                                        }
                                     }
-                                    if (bounds.isNotEmpty()) {
-                                        runs += TextRunSnapshot(text, bounds)
-                                    }
+                                    super.writeString(text, textPositions)
                                 }
-                                super.writeString(text, textPositions)
+                            }.apply {
+                                startPage = page + 1
+                                endPage = page + 1
+                                sortByPosition = true
                             }
-                        }.apply {
-                            startPage = page + 1
-                            endPage = page + 1
-                            sortByPosition = true
+                            stripper.writeText(document, writer)
+                            val rawText = writer.toString()
+                            val normalizedText = normalizeSearchQuery(rawText)
+                            contents[page] = PageSearchContent(
+                                text = rawText,
+                                normalizedText = normalizedText,
+                                runs = runs,
+                                coordinateWidth = pageWidth,
+                                coordinateHeight = pageHeight,
+                                fallbackRegions = emptyList()
+                            )
+                        } finally {
+                            if (pdPage is Closeable) {
+                                runCatching { pdPage.close() }
+                                    .onFailure { Log.w(TAG, "Failed to close PDFBox page $page", it) }
+                            }
                         }
-                        stripper.writeText(document, writer)
-                        val rawText = writer.toString()
-                        val normalizedText = normalizeSearchQuery(rawText)
-                        contents[page] = PageSearchContent(
-                            text = rawText,
-                            normalizedText = normalizedText,
-                            runs = runs,
-                            coordinateWidth = pageWidth,
-                            coordinateHeight = pageHeight,
-                            fallbackRegions = emptyList()
-                        )
                     }
                 }
             }
