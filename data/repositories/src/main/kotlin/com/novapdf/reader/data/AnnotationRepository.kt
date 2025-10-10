@@ -9,6 +9,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -22,8 +24,7 @@ class AnnotationRepository(
 ) {
     private val appContext = context.applicationContext
     private val json = Json { prettyPrint = true }
-    private val inMemoryAnnotations = mutableMapOf<String, MutableList<AnnotationCommand>>()
-    private val lock = Any()
+    private val annotationsState = MutableStateFlow<Map<String, List<AnnotationCommand>>>(emptyMap())
     private val preferences: SharedPreferences by lazy {
         runCatching { securePreferencesProvider(appContext) }
             .onFailure { error ->
@@ -33,31 +34,29 @@ class AnnotationRepository(
     }
 
     fun annotationsForDocument(documentId: String): List<AnnotationCommand> =
-        synchronized(lock) { inMemoryAnnotations[documentId]?.toList().orEmpty() }
+        annotationsState.value[documentId].orEmpty()
 
     fun addAnnotation(documentId: String, annotation: AnnotationCommand) {
-        synchronized(lock) {
-            val list = inMemoryAnnotations.getOrPut(documentId) { mutableListOf() }
-            list += annotation
+        annotationsState.update { current ->
+            val updatedList = current[documentId].orEmpty() + annotation
+            current + (documentId to updatedList)
         }
     }
 
     fun replaceAnnotations(documentId: String, annotations: List<AnnotationCommand>) {
-        synchronized(lock) {
-            inMemoryAnnotations[documentId] = annotations.toMutableList()
+        annotationsState.update { current ->
+            current + (documentId to annotations)
         }
     }
 
     fun clearInMemory(documentId: String) {
-        synchronized(lock) {
-            inMemoryAnnotations.remove(documentId)
+        annotationsState.update { current ->
+            if (current.containsKey(documentId)) current - documentId else current
         }
     }
 
     suspend fun saveAnnotations(documentId: String): File? = withContext(dispatchers.io) {
-        val annotations = synchronized(lock) {
-            inMemoryAnnotations[documentId]?.toList()
-        } ?: return@withContext null
+        val annotations = annotationsState.value[documentId] ?: return@withContext null
         val encodedId = Base64.encodeToString(documentId.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
         val payload = json.encodeToString(annotations)
         preferences.edit(commit = true) {
@@ -66,7 +65,7 @@ class AnnotationRepository(
         preferenceFile(appContext)
     }
 
-    fun trackedDocumentIds(): Set<String> = synchronized(lock) { inMemoryAnnotations.keys.toSet() }
+    fun trackedDocumentIds(): Set<String> = annotationsState.value.keys.toSet()
 
     companion object {
         const val PREFERENCES_FILE_NAME = "annotation_repository"

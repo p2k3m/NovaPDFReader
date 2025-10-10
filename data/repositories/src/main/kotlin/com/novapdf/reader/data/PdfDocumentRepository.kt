@@ -22,18 +22,19 @@ import androidx.annotation.WorkerThread
 import androidx.core.net.toUri
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -1080,7 +1081,7 @@ class PdfDocumentRepository(
     }
 
     private abstract inner class BitmapCache {
-        private val aliasLock = Any()
+        private val aliasMutex = Mutex()
         private val aliasKeys = mutableMapOf<String, PageBitmapKey>()
         private var nextAliasId = 0
 
@@ -1093,7 +1094,7 @@ class PdfDocumentRepository(
         fun values(): Collection<Bitmap> = valuesInternal().filterNot(Bitmap::isRecycled)
 
         fun clearAll() {
-            synchronized(aliasLock) {
+            aliasMutex.withLockBlocking(this) {
                 aliasKeys.clear()
                 nextAliasId = 0
             }
@@ -1106,7 +1107,7 @@ class PdfDocumentRepository(
 
         @Suppress("unused")
         fun putBitmap(name: String, bitmap: Bitmap) {
-            val aliasKey = synchronized(aliasLock) {
+            val aliasKey = aliasMutex.withLockBlocking(this) {
                 aliasKeys.getOrPut(name) {
                     nextAliasId -= 1
                     val width = bitmap.width.takeIf { it > 0 } ?: 1
@@ -1118,7 +1119,7 @@ class PdfDocumentRepository(
 
         @Suppress("unused")
         fun getBitmap(name: String): Bitmap? {
-            val aliasKey = synchronized(aliasLock) { aliasKeys[name] } ?: return null
+            val aliasKey = aliasMutex.withLockBlocking(this) { aliasKeys[name] } ?: return null
             return getInternal(aliasKey)?.takeIf { !it.isRecycled }
         }
 
@@ -1131,7 +1132,7 @@ class PdfDocumentRepository(
 
     private inner class BitmapPool(maxBytes: Long) {
         private val maxPoolBytes = maxBytes.coerceAtLeast(0L)
-        private val lock = Any()
+        private val mutex = Mutex()
         private val pool = ArrayDeque<Bitmap>()
         private val identities = IdentityHashMap<Bitmap, Bitmap>()
         private var totalBytes: Long = 0
@@ -1140,7 +1141,7 @@ class PdfDocumentRepository(
             if (maxPoolBytes <= 0L) {
                 return null
             }
-            synchronized(lock) {
+            return mutex.withLockBlocking(this) {
                 val iterator = pool.iterator()
                 while (iterator.hasNext()) {
                     val candidate = iterator.next()
@@ -1158,11 +1159,11 @@ class PdfDocumentRepository(
                         iterator.remove()
                         identities.remove(candidate)
                         totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
-                        return candidate
+                        return@withLockBlocking candidate
                     }
                 }
+                null
             }
-            return null
         }
 
         fun release(bitmap: Bitmap): Boolean {
@@ -1173,25 +1174,25 @@ class PdfDocumentRepository(
                 return false
             }
             val bytes = safeByteCount(bitmap).takeIf { it > 0 }?.toLong() ?: return false
-            synchronized(lock) {
+            return mutex.withLockBlocking(this) {
                 if (identities.containsKey(bitmap)) {
-                    return true
+                    return@withLockBlocking true
                 }
                 if (totalBytes + bytes > maxPoolBytes) {
-                    return false
+                    return@withLockBlocking false
                 }
                 pool.addLast(bitmap)
                 identities[bitmap] = bitmap
                 totalBytes += bytes
-                return true
+                true
             }
         }
 
         fun clear() {
             val drained = mutableListOf<Bitmap>()
-            synchronized(lock) {
+            mutex.withLockBlocking(this) {
                 if (pool.isEmpty()) {
-                    return
+                    return@withLockBlocking
                 }
                 drained.addAll(pool)
                 pool.clear()
@@ -1237,7 +1238,7 @@ class PdfDocumentRepository(
 
     private inner class LruBitmapCache(maxCacheBytes: Long) : BitmapCache() {
         private val cacheSize = maxCacheBytes.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-        private val lock = Any()
+        private val mutex = Mutex()
         private val delegate = object : LruCache<PageBitmapKey, Bitmap>(cacheSize) {
             override fun sizeOf(key: PageBitmapKey, value: Bitmap): Int = safeByteCount(value)
 
@@ -1248,32 +1249,46 @@ class PdfDocumentRepository(
             }
         }
 
-        override fun getInternal(key: PageBitmapKey): Bitmap? = synchronized(lock) {
+        override fun getInternal(key: PageBitmapKey): Bitmap? = mutex.withLockBlocking(this) {
             delegate.get(key)
         }
 
         override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
-            synchronized(lock) {
-                delegate.put(key, bitmap)?.let { previous ->
-                    if (previous !== bitmap) {
-                        recycleBitmap(previous)
-                    }
-                }
+            val previous = mutex.withLockBlocking(this) {
+                delegate.put(key, bitmap)
+            }
+            if (previous != null && previous !== bitmap) {
+                recycleBitmap(previous)
             }
         }
 
-        override fun valuesInternal(): Collection<Bitmap> = synchronized(lock) {
+        override fun valuesInternal(): Collection<Bitmap> = mutex.withLockBlocking(this) {
             delegate.snapshot().values.toList()
         }
 
         override fun clearInternal() {
-            synchronized(lock) {
+            mutex.withLockBlocking(this) {
                 delegate.evictAll()
             }
         }
 
         override fun cleanUpInternal() {
             // LruCache does not require explicit cleanup.
+        }
+    }
+
+    private inline fun <T> Mutex.withLockBlocking(owner: Any, block: () -> T): T {
+        var acquired = tryLock(owner)
+        if (!acquired) {
+            runBlocking { lock(owner) }
+            acquired = true
+        }
+        return try {
+            block()
+        } finally {
+            if (acquired) {
+                unlock(owner)
+            }
         }
     }
 
