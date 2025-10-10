@@ -1048,19 +1048,21 @@ private fun LoadingOverlay(status: DocumentStatus.Loading) {
                 },
             contentAlignment = Alignment.Center
         ) {
-            Surface(
+            val containerShape = MaterialTheme.shapes.extraLarge
+            val containerColor = MaterialTheme.colorScheme.surface
+            val containerBorder = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+            Box(
                 modifier = Modifier
                     .padding(horizontal = 32.dp)
                     .widthIn(min = 260.dp)
-                    .wrapContentHeight(),
-                tonalElevation = 6.dp,
-                shadowElevation = 12.dp,
-                shape = MaterialTheme.shapes.extraLarge
+                    .wrapContentHeight()
+                    .clip(containerShape)
+                    .background(containerColor)
+                    .border(width = 1.dp, color = containerBorder, shape = containerShape)
+                    .padding(horizontal = 24.dp, vertical = 28.dp)
             ) {
                 Column(
-                    modifier = Modifier
-                        .padding(horizontal = 24.dp, vertical = 28.dp)
-                        .fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
