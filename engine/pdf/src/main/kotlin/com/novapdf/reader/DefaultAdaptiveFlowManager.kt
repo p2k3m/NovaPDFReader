@@ -33,6 +33,8 @@ private const val MAX_TRACKED_PAGES = 8
 private const val MAX_ACCELERATION = 12f
 private const val MAX_TRACKED_FRAMES = 90
 private const val DEFAULT_FRAME_INTERVAL_MS = 16.6f
+private const val UI_PRESSURE_THRESHOLD_MS = 32f
+private const val UI_PRESSURE_CONSISTENT_FRAMES = 6
 
 class DefaultAdaptiveFlowManager(
     context: Context,
@@ -89,6 +91,7 @@ class DefaultAdaptiveFlowManager(
     private var isFrameCallbackRegistered = false
     private var lastFrameTimeNanos = 0L
     private val frameDurations = ArrayDeque<Float>()
+    private var consecutiveSlowFrames = 0
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -298,9 +301,7 @@ class DefaultAdaptiveFlowManager(
 
     private fun evaluateFrameHealth(frameDurationMillis: Float) {
         val now = wallClock()
-        if (frameDurationMillis > jankThresholdMillis) {
-            suspendPreloading(now)
-        }
+        trackUiPressure(frameDurationMillis, now)
 
         val aggregator = frameMetricsAggregator ?: return
         val metrics = aggregator.metrics ?: return
@@ -342,7 +343,24 @@ class DefaultAdaptiveFlowManager(
         preloadSuspendedUntilMillis = 0L
         aggregatedTotalFrames = 0
         aggregatedJankyFrames = 0
+        consecutiveSlowFrames = 0
         _uiUnderLoad.value = false
+    }
+
+    private fun trackUiPressure(frameDurationMillis: Float, now: Long) {
+        if (isPreloadingSuspended(now)) {
+            consecutiveSlowFrames = 0
+            return
+        }
+        if (frameDurationMillis > UI_PRESSURE_THRESHOLD_MS) {
+            consecutiveSlowFrames++
+            if (consecutiveSlowFrames >= UI_PRESSURE_CONSISTENT_FRAMES) {
+                suspendPreloading(now)
+                consecutiveSlowFrames = 0
+            }
+        } else if (consecutiveSlowFrames > 0) {
+            consecutiveSlowFrames = 0
+        }
     }
 
     private fun registerFrameMetricsCallbacks() {
