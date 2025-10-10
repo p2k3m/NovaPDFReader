@@ -63,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
 import kotlin.math.min
@@ -70,6 +71,7 @@ import kotlin.math.roundToInt
 import kotlin.coroutines.coroutineContext
 import kotlin.io.DEFAULT_BUFFER_SIZE
 import kotlin.io.buffered
+import kotlin.io.copyTo
 import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
@@ -94,6 +96,8 @@ private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
 private const val REMOTE_CONNECT_TIMEOUT_MS = 15_000
 private const val REMOTE_READ_TIMEOUT_MS = 30_000
 private const val PDF_MAGIC_SCAN_LIMIT = 16
+private const val PERSISTENT_REPAIR_PREFIX = "cached-"
+private val HEX_DIGITS = "0123456789abcdef".toCharArray()
 
 class PdfOpenException(
     val reason: Reason,
@@ -254,6 +258,7 @@ class PdfDocumentRepository(
     }
 
     private var repairedDocumentFile: File? = null
+    private var repairedDocumentIsPersistent: Boolean = false
     private var cachedRemoteFile: File? = null
 
     init {
@@ -265,12 +270,7 @@ class PdfDocumentRepository(
         return withContextGuard {
             cancellationSignal.throwIfCanceled()
             closeSessionInternal()
-            repairedDocumentFile?.let { file ->
-                if (file.exists() && !file.delete()) {
-                    Log.w(TAG, "Unable to delete previous repaired PDF at ${file.absolutePath}")
-                }
-            }
-            repairedDocumentFile = null
+            releaseRepairedDocument(retainPersistent = true)
             cachedRemoteFile?.let { file ->
                 if (file.exists() && !file.delete()) {
                     Log.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
@@ -301,9 +301,9 @@ class PdfDocumentRepository(
                 if (!validateDocumentUri(candidateUri)) {
                     throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
                 }
-                val preparedFile = prepareLargeDocumentIfNeeded(candidateUri, cancellationSignal)
+                val preparedFile = prepareLargeDocumentIfNeeded(candidateUri, uri, cancellationSignal)
                 if (preparedFile != null) {
-                    repairedDocumentFile = preparedFile
+                    assignRepairedDocument(preparedFile)
                 }
                 val sourceUri = repairedDocumentFile?.toUri() ?: candidateUri
                 var activePfd = try {
@@ -334,7 +334,7 @@ class PdfDocumentRepository(
                             "uri" to sourceUri.toString()
                         )
                     )
-                    val repaired = attemptPdfRepair(candidateUri)
+                    val repaired = attemptPdfRepair(candidateUri, cacheKey = uri)
                         ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
 
                     val repairedPfd = try {
@@ -364,7 +364,7 @@ class PdfDocumentRepository(
                     if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
                         cleanedUpRepairedFile(repairedDocumentFile!!)
                     }
-                    repairedDocumentFile = repaired
+                    assignRepairedDocument(repaired)
                     activePfd = repairedPfd
                     repairedDocument
                 }
@@ -1064,12 +1064,7 @@ class PdfDocumentRepository(
         openSession.value = null
         malformedPages.clear()
         pageFailureCounts.clear()
-        repairedDocumentFile?.let { file ->
-            if (file.exists() && !file.delete()) {
-                Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
-            }
-        }
-        repairedDocumentFile = null
+        releaseRepairedDocument(retainPersistent = true)
         cachedRemoteFile?.let { file ->
             if (file.exists() && !file.delete()) {
                 Log.w(TAG, "Unable to delete cached remote PDF at ${file.absolutePath}")
@@ -1086,6 +1081,7 @@ class PdfDocumentRepository(
 
     private suspend fun prepareLargeDocumentIfNeeded(
         uri: Uri,
+        originalUri: Uri,
         cancellationSignal: CancellationSignal? = null,
     ): File? {
         cancellationSignal.throwIfCanceled()
@@ -1108,7 +1104,7 @@ class PdfDocumentRepository(
 
         Log.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
         cancellationSignal.throwIfCanceled()
-        return attemptPdfRepair(uri, cancellationSignal)
+        return attemptPdfRepair(uri, cacheKey = originalUri, cancellationSignal = cancellationSignal)
     }
 
     private suspend fun cacheRemoteUriIfNeeded(
@@ -1286,13 +1282,96 @@ class PdfDocumentRepository(
     }
 
     private fun cleanedUpRepairedFile(file: File) {
+        if (isPersistentRepairFile(file)) {
+            return
+        }
         if (file.exists() && !file.delete()) {
             Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
         }
     }
 
+    private fun assignRepairedDocument(file: File?) {
+        repairedDocumentFile = file
+        repairedDocumentIsPersistent = file?.let(::isPersistentRepairFile) ?: false
+    }
+
+    private fun releaseRepairedDocument(retainPersistent: Boolean) {
+        val file = repairedDocumentFile
+        if (file != null) {
+            val shouldDelete = !repairedDocumentIsPersistent || !retainPersistent
+            if (shouldDelete && file.exists() && !file.delete()) {
+                Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
+            }
+        }
+        repairedDocumentFile = null
+        repairedDocumentIsPersistent = false
+    }
+
+    private fun isPersistentRepairFile(file: File): Boolean {
+        val parent = file.parentFile ?: return false
+        if (parent != repairedDocumentDir) {
+            return false
+        }
+        return file.name.startsWith(PERSISTENT_REPAIR_PREFIX)
+    }
+
+    private fun resolveRepairCacheKey(cacheKey: Uri?): String? {
+        cacheKey ?: return null
+        val scheme = cacheKey.scheme?.lowercase(Locale.US)
+        return when (scheme) {
+            ContentResolver.SCHEME_FILE -> {
+                val path = cacheKey.path ?: return null
+                if (path.contains("/pdf-repairs/")) {
+                    null
+                } else {
+                    File(path).absolutePath
+                }
+            }
+
+            else -> cacheKey.toString()
+        }
+    }
+
+    private fun buildPersistentRepairFile(cacheKey: String): File {
+        val digest = sha256Hex(cacheKey)
+        return File(repairedDocumentDir, "$PERSISTENT_REPAIR_PREFIX${digest}.pdf")
+    }
+
+    private fun persistRepairedFile(tempFile: File, targetFile: File): File {
+        if (targetFile.exists() && !targetFile.delete()) {
+            Log.w(TAG, "Unable to delete stale cached repair at ${targetFile.absolutePath}")
+        }
+        if (tempFile.renameTo(targetFile)) {
+            return targetFile
+        }
+        return try {
+            tempFile.copyTo(targetFile, overwrite = true)
+            if (tempFile.exists() && !tempFile.delete()) {
+                Log.w(TAG, "Unable to delete temporary repaired PDF at ${tempFile.absolutePath}")
+            }
+            targetFile
+        } catch (error: Exception) {
+            if (targetFile.exists() && !targetFile.delete()) {
+                Log.w(TAG, "Unable to delete failed cached repair at ${targetFile.absolutePath}")
+            }
+            throw error
+        }
+    }
+
+    private fun sha256Hex(value: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        val builder = StringBuilder(digest.size * 2)
+        for (byte in digest) {
+            val unsigned = byte.toInt() and 0xFF
+            builder.append(HEX_DIGITS[unsigned ushr 4])
+            builder.append(HEX_DIGITS[unsigned and 0x0F])
+        }
+        return builder.toString()
+    }
+
     private suspend fun attemptPdfRepair(
         uri: Uri,
+        cacheKey: Uri? = null,
         cancellationSignal: CancellationSignal? = null,
     ): File? {
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
@@ -1317,6 +1396,17 @@ class PdfDocumentRepository(
         if (!repairDir.isDirectory) {
             Log.w(TAG, "Cannot repair PDF; repair cache directory is unavailable at ${repairDir.absolutePath}")
             return null
+        }
+
+        val cacheKeyString = resolveRepairCacheKey(cacheKey ?: uri)
+        val persistentTarget = cacheKeyString?.let { buildPersistentRepairFile(it) }
+        if (persistentTarget != null && persistentTarget.exists()) {
+            if (persistentTarget.length() > 0L) {
+                crashReporter?.logBreadcrumb("pdfium repair cache hit: ${cacheKeyString}")
+                return persistentTarget
+            } else if (!persistentTarget.delete()) {
+                Log.w(TAG, "Unable to delete empty cached repair at ${persistentTarget.absolutePath}")
+            }
         }
 
         val input = try {
@@ -1347,8 +1437,14 @@ class PdfDocumentRepository(
                     PDDocument.load(stream).use { document ->
                         document.save(repairedFile)
                     }
-                    crashReporter?.logBreadcrumb("pdfium repair: ${uri}")
-                    repairedFile
+                    val result = if (persistentTarget != null) {
+                        persistRepairedFile(repairedFile, persistentTarget)
+                    } else {
+                        repairedFile
+                    }
+                    val breadcrumbTarget = cacheKeyString ?: uri.toString()
+                    crashReporter?.logBreadcrumb("pdfium repair: ${breadcrumbTarget}")
+                    result
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
@@ -1363,6 +1459,11 @@ class PdfDocumentRepository(
             Log.w(TAG, "Unable to repair PDF via PdfBox", repairError)
             if (repairedFile.exists() && !repairedFile.delete()) {
                 Log.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
+            }
+            persistentTarget?.let { target ->
+                if (target.exists() && !target.delete()) {
+                    Log.w(TAG, "Unable to delete failed cached repair at ${target.absolutePath}")
+                }
             }
             null
         } finally {
