@@ -50,6 +50,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -2390,6 +2391,7 @@ private fun PdfPager(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThumbnailStrip(
     state: PdfViewerUiState,
@@ -2419,6 +2421,9 @@ private fun ThumbnailStrip(
 
     val coroutineScope = rememberCoroutineScope()
     val surfaceColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
+
+    val thumbnailListState = rememberLazyListState()
+    val prefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = 1) }
 
     Surface(
         modifier = modifier
@@ -2467,10 +2472,12 @@ private fun ThumbnailStrip(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 12.dp),
+                    state = thumbnailListState,
                     contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    prefetching = prefetchStrategy
                 ) {
-                    items(pagesToDisplay) { pageIndex ->
+                    items(pagesToDisplay, key = { it }) { pageIndex ->
                         ThumbnailItem(
                             documentId = state.documentId,
                             pageIndex = pageIndex,
