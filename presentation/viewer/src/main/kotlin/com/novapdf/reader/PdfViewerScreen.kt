@@ -109,6 +109,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -325,7 +326,9 @@ fun PdfViewerScreen(
             )
         }
         val pagerState = rememberPagerState(pageCount = { onboardingPages.size })
-        val totalSearchResults = state.searchResults.sumOf { it.matches.size }
+        val totalSearchResults by remember(state.searchResults) {
+            derivedStateOf { state.searchResults.sumOf { it.matches.size } }
+        }
         val searchFocusRequester = remember { FocusRequester() }
         var requestSearchFocus by remember { mutableStateOf(false) }
         val navigationItems = remember {
@@ -336,9 +339,10 @@ fun PdfViewerScreen(
                 NavigationItem(MainDestination.Settings, Icons.Outlined.Settings, R.string.navigation_settings)
             )
         }
-        val playAdaptiveSummary = remember(state, echoModeController, fallbackHaptics) {
+        val echoSummary by remember(state) { derivedStateOf { state.echoSummary() } }
+        val playAdaptiveSummary = remember(echoSummary, echoModeController, fallbackHaptics) {
             {
-                val summary = state.echoSummary()
+                val summary = echoSummary
                 if (summary != null) {
                     echoModeController.speakSummary(summary) {
                         fallbackHaptics()
@@ -2286,12 +2290,14 @@ private fun ThumbnailStrip(
         selectedPage = state.currentPage
     }
 
-    val pagesToDisplay = remember(state.pageCount, state.bookmarks, showBookmarksOnly) {
-        val allPages = (0 until state.pageCount).toList()
-        if (showBookmarksOnly) {
-            allPages.filter { page -> page in state.bookmarks }
-        } else {
-            allPages
+    val pagesToDisplay by remember(state.pageCount, state.bookmarks, showBookmarksOnly) {
+        derivedStateOf {
+            val allPages = (0 until state.pageCount).toList()
+            if (showBookmarksOnly) {
+                allPages.filter { page -> page in state.bookmarks }
+            } else {
+                allPages
+            }
         }
     }
 
@@ -2518,8 +2524,8 @@ private fun PdfPageItem(
     var pageBitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(null) }
     var pageSize by remember(pageIndex) { mutableStateOf<Size?>(null) }
     var isLoading by remember(pageIndex) { mutableStateOf(false) }
-    val isMalformed = remember(state.malformedPages, pageIndex) {
-        pageIndex in state.malformedPages
+    val isMalformed by remember(state.malformedPages, pageIndex) {
+        derivedStateOf { pageIndex in state.malformedPages }
     }
 
     DisposableEffect(pageIndex) {
