@@ -361,111 +361,51 @@ fun PdfViewerScreen(
             onDispose { echoModeController.shutdown() }
         }
 
+        val onExportDocumentClick = {
+            val success = onExportDocument()
+            if (!success) {
+                coroutineScope.launch { snackbarHost.showSnackbar(exportErrorMessage) }
+            }
+        }
+        val hasDocument = state.documentId != null
+        val isCurrentPageBookmarked = state.bookmarks.contains(state.currentPage)
+        val hasOutline = state.outline.isNotEmpty()
+        val bottomBarDestination = if (selectedDestination == MainDestination.DevOptions) {
+            MainDestination.Settings
+        } else {
+            selectedDestination
+        }
+
         Scaffold(
             topBar = {
-                val titleText = stringResource(id = R.string.app_name)
-                CenterAlignedTopAppBar(
-                    title = {
-                        Text(
-                            text = titleText,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.semantics { contentDescription = titleText }
-                        )
-                    },
-                    actions = {
-                        IconButton(onClick = { showSourceDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Outlined.FileOpen,
-                                contentDescription = stringResource(id = R.string.open_pdf)
-                            )
-                        }
-                        IconButton(onClick = { showAccessibilitySheet = true }) {
-                            Icon(
-                                imageVector = Icons.Outlined.Accessibility,
-                                contentDescription = stringResource(id = R.string.accessibility_open_options)
-                            )
-                        }
-                        if (selectedDestination == MainDestination.Reader) {
-                            val hasDocument = state.documentId != null
-                            IconButton(onClick = onSaveAnnotations, enabled = hasDocument) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Download,
-                                    contentDescription = stringResource(id = R.string.save_annotations)
-                                )
-                            }
-                            if (hasDocument) {
-                                IconButton(
-                                    onClick = { showOutlineSheet = true },
-                                    enabled = state.outline.isNotEmpty()
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Outlined.List,
-                                        contentDescription = stringResource(id = R.string.pdf_outline)
-                                    )
-                                }
-                                IconButton(onClick = {
-                                    val success = onExportDocument()
-                                    if (!success) {
-                                        coroutineScope.launch { snackbarHost.showSnackbar(exportErrorMessage) }
-                                    }
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Share,
-                                        contentDescription = stringResource(id = R.string.export_document)
-                                    )
-                                }
-                            }
-                            IconButton(onClick = { onToggleBookmark(state.currentPage) }, enabled = hasDocument) {
-                                val bookmarked = state.bookmarks.contains(state.currentPage)
-                                val icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = stringResource(id = R.string.toggle_bookmark)
-                                )
-                            }
-                        }
-                    }
+                PdfViewerTopBar(
+                    selectedDestination = selectedDestination,
+                    hasDocument = hasDocument,
+                    isCurrentPageBookmarked = isCurrentPageBookmarked,
+                    hasOutline = hasOutline,
+                    onOpenDocument = { showSourceDialog = true },
+                    onOpenAccessibilityOptions = { showAccessibilitySheet = true },
+                    onSaveAnnotations = onSaveAnnotations,
+                    onShowOutlineSheet = { showOutlineSheet = true },
+                    onExportDocument = onExportDocumentClick,
+                    onToggleBookmark = { onToggleBookmark(state.currentPage) }
                 )
             },
             floatingActionButton = {
-                FloatingActionButton(onClick = {
-                    selectedDestination = MainDestination.Reader
-                    requestSearchFocus = true
-                }) {
-                    Icon(
-                        imageVector = Icons.Filled.Search,
-                        contentDescription = stringResource(id = R.string.search_hint)
-                    )
-                }
+                PdfViewerSearchFab(
+                    onClick = {
+                        selectedDestination = MainDestination.Reader
+                        requestSearchFocus = true
+                    }
+                )
             },
             floatingActionButtonPosition = FabPosition.End,
             bottomBar = {
-                NavigationBar {
-                    val bottomBarDestination = if (selectedDestination == MainDestination.DevOptions) {
-                        MainDestination.Settings
-                    } else {
-                        selectedDestination
-                    }
-                    navigationItems.forEach { item ->
-                        val labelText = stringResource(id = item.labelRes)
-                        NavigationBarItem(
-                            selected = bottomBarDestination == item.destination,
-                            onClick = { selectedDestination = item.destination },
-                            icon = {
-                                Icon(
-                                    imageVector = item.icon,
-                                    contentDescription = labelText
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = labelText,
-                                    modifier = Modifier.semantics { contentDescription = labelText }
-                                )
-                            }
-                        )
-                    }
-                }
+                PdfViewerBottomNavigation(
+                    items = navigationItems,
+                    selectedDestination = bottomBarDestination,
+                    onDestinationSelected = { selectedDestination = it }
+                )
             },
             snackbarHost = { SnackbarHost(snackbarHost) }
         ) { paddingValues ->
@@ -474,73 +414,39 @@ fun PdfViewerScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
             ) {
-                when (selectedDestination) {
-                    MainDestination.Home -> {
-                        HomeContent(
-                            onOpenDocument = requestDocument,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    MainDestination.Reader -> {
-                        ReaderContent(
-                            state = state,
-                            searchQuery = searchQuery,
-                            onQueryChange = {
-                                searchQuery = it
-                                onSearch(it)
-                            },
-                            totalSearchResults = totalSearchResults,
-                            onOpenDocument = requestDocument,
-                            onPlayAdaptiveSummary = playAdaptiveSummary,
-                            onOpenAccessibilityOptions = { showAccessibilitySheet = true },
-                            focusRequester = searchFocusRequester,
-                            requestFocus = requestSearchFocus,
-                            onFocusHandled = { requestSearchFocus = false },
-                            onPageChange = latestOnPageChange,
-                            onStrokeFinished = onStrokeFinished,
-                            onToggleBookmark = onToggleBookmark,
-                            renderPage = renderPage,
-                            requestPageSize = requestPageSize,
-                            onViewportWidthChanged = onViewportWidthChanged,
-                            onPrefetchPages = onPrefetchPages,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    MainDestination.Annotations -> {
-                        AnnotationsContent(
-                            annotationCount = state.activeAnnotations.size,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    MainDestination.Settings -> {
-                        SettingsContent(
-                            dynamicColorEnabled = state.dynamicColorEnabled,
-                            highContrastEnabled = state.highContrastEnabled,
-                            talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
-                            fontScale = state.fontScale,
-                            dynamicColorSupported = dynamicColorSupported,
-                            accessibilityManager = accessibilityManager,
-                            hapticFeedbackManager = hapticManager,
-                            onDynamicColorChanged = onToggleDynamicColor,
-                            onHighContrastChanged = onToggleHighContrast,
-                            onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
-                            onFontScaleChanged = onFontScaleChanged,
-                            onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
-                    MainDestination.DevOptions -> {
-                        DevOptionsContent(
-                            stats = state.bitmapMemory,
-                            onBack = { selectedDestination = MainDestination.Settings },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
+                PdfViewerDestinationContainer(
+                    selectedDestination = selectedDestination,
+                    state = state,
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { query ->
+                        searchQuery = query
+                        onSearch(query)
+                    },
+                    totalSearchResults = totalSearchResults,
+                    onOpenDocument = requestDocument,
+                    onPlayAdaptiveSummary = playAdaptiveSummary,
+                    onOpenAccessibilityOptions = { showAccessibilitySheet = true },
+                    focusRequester = searchFocusRequester,
+                    requestFocus = requestSearchFocus,
+                    onFocusHandled = { requestSearchFocus = false },
+                    onPageChange = latestOnPageChange,
+                    onStrokeFinished = onStrokeFinished,
+                    onToggleBookmark = onToggleBookmark,
+                    renderPage = renderPage,
+                    requestPageSize = requestPageSize,
+                    onViewportWidthChanged = onViewportWidthChanged,
+                    onPrefetchPages = onPrefetchPages,
+                    onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
+                    onBackFromDevOptions = { selectedDestination = MainDestination.Settings },
+                    dynamicColorSupported = dynamicColorSupported,
+                    accessibilityManager = accessibilityManager,
+                    hapticFeedbackManager = hapticManager,
+                    onDynamicColorChanged = onToggleDynamicColor,
+                    onHighContrastChanged = onToggleHighContrast,
+                    onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
+                    onFontScaleChanged = onFontScaleChanged,
+                    modifier = Modifier.fillMaxSize()
+                )
 
                 val renderProgressState = state.renderProgress
                 if (state.documentStatus is DocumentStatus.Idle &&
@@ -565,6 +471,8 @@ fun PdfViewerScreen(
                             .padding(16.dp)
                     )
                 }
+            }
+        }
 
                 DocumentStatusHost(
                     status = state.documentStatus,
@@ -654,6 +562,212 @@ fun PdfViewerScreen(
     }
 }
 
+@Composable
+private fun PdfViewerTopBar(
+    selectedDestination: MainDestination,
+    hasDocument: Boolean,
+    isCurrentPageBookmarked: Boolean,
+    hasOutline: Boolean,
+    onOpenDocument: () -> Unit,
+    onOpenAccessibilityOptions: () -> Unit,
+    onSaveAnnotations: () -> Unit,
+    onShowOutlineSheet: () -> Unit,
+    onExportDocument: () -> Unit,
+    onToggleBookmark: () -> Unit,
+) {
+    val titleText = stringResource(id = R.string.app_name)
+    CenterAlignedTopAppBar(
+        title = {
+            Text(
+                text = titleText,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.semantics { contentDescription = titleText }
+            )
+        },
+        actions = {
+            IconButton(onClick = onOpenDocument) {
+                Icon(
+                    imageVector = Icons.Outlined.FileOpen,
+                    contentDescription = stringResource(id = R.string.open_pdf)
+                )
+            }
+            IconButton(onClick = onOpenAccessibilityOptions) {
+                Icon(
+                    imageVector = Icons.Outlined.Accessibility,
+                    contentDescription = stringResource(id = R.string.accessibility_open_options)
+                )
+            }
+            if (selectedDestination == MainDestination.Reader) {
+                IconButton(onClick = onSaveAnnotations, enabled = hasDocument) {
+                    Icon(
+                        imageVector = Icons.Outlined.Download,
+                        contentDescription = stringResource(id = R.string.save_annotations)
+                    )
+                }
+                if (hasDocument) {
+                    IconButton(onClick = onShowOutlineSheet, enabled = hasOutline) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.List,
+                            contentDescription = stringResource(id = R.string.pdf_outline)
+                        )
+                    }
+                    IconButton(onClick = onExportDocument) {
+                        Icon(
+                            imageVector = Icons.Outlined.Share,
+                            contentDescription = stringResource(id = R.string.export_document)
+                        )
+                    }
+                }
+                IconButton(onClick = onToggleBookmark, enabled = hasDocument) {
+                    val icon = if (isCurrentPageBookmarked) {
+                        Icons.Filled.Bookmark
+                    } else {
+                        Icons.Outlined.BookmarkBorder
+                    }
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = stringResource(id = R.string.toggle_bookmark)
+                    )
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun PdfViewerBottomNavigation(
+    items: List<NavigationItem>,
+    selectedDestination: MainDestination,
+    onDestinationSelected: (MainDestination) -> Unit,
+) {
+    NavigationBar {
+        items.forEach { item ->
+            val labelText = stringResource(id = item.labelRes)
+            NavigationBarItem(
+                selected = selectedDestination == item.destination,
+                onClick = { onDestinationSelected(item.destination) },
+                icon = {
+                    Icon(
+                        imageVector = item.icon,
+                        contentDescription = labelText
+                    )
+                },
+                label = {
+                    Text(
+                        text = labelText,
+                        modifier = Modifier.semantics { contentDescription = labelText }
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun PdfViewerSearchFab(onClick: () -> Unit) {
+    FloatingActionButton(onClick = onClick) {
+        Icon(
+            imageVector = Icons.Filled.Search,
+            contentDescription = stringResource(id = R.string.search_hint)
+        )
+    }
+}
+
+@Composable
+private fun PdfViewerDestinationContainer(
+    selectedDestination: MainDestination,
+    state: PdfViewerUiState,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    totalSearchResults: Int,
+    onOpenDocument: () -> Unit,
+    onPlayAdaptiveSummary: () -> Unit,
+    onOpenAccessibilityOptions: () -> Unit,
+    focusRequester: FocusRequester,
+    requestFocus: Boolean,
+    onFocusHandled: () -> Unit,
+    onPageChange: (Int) -> Unit,
+    onStrokeFinished: (AnnotationCommand) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
+    requestPageSize: suspend (Int) -> Size?,
+    onViewportWidthChanged: (Int) -> Unit,
+    onPrefetchPages: (List<Int>, Int) -> Unit,
+    onOpenDevOptions: () -> Unit,
+    onBackFromDevOptions: () -> Unit,
+    dynamicColorSupported: Boolean,
+    accessibilityManager: AccessibilityManager?,
+    hapticFeedbackManager: HapticFeedbackManager,
+    onDynamicColorChanged: (Boolean) -> Unit,
+    onHighContrastChanged: (Boolean) -> Unit,
+    onTalkBackIntegrationChanged: (Boolean) -> Unit,
+    onFontScaleChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (selectedDestination) {
+        MainDestination.Home -> {
+            HomeContent(
+                onOpenDocument = onOpenDocument,
+                modifier = modifier
+            )
+        }
+
+        MainDestination.Reader -> {
+            ReaderContent(
+                state = state,
+                searchQuery = searchQuery,
+                onQueryChange = onSearchQueryChange,
+                totalSearchResults = totalSearchResults,
+                onOpenDocument = onOpenDocument,
+                onPlayAdaptiveSummary = onPlayAdaptiveSummary,
+                onOpenAccessibilityOptions = onOpenAccessibilityOptions,
+                focusRequester = focusRequester,
+                requestFocus = requestFocus,
+                onFocusHandled = onFocusHandled,
+                onPageChange = onPageChange,
+                onStrokeFinished = onStrokeFinished,
+                onToggleBookmark = onToggleBookmark,
+                renderPage = renderPage,
+                requestPageSize = requestPageSize,
+                onViewportWidthChanged = onViewportWidthChanged,
+                onPrefetchPages = onPrefetchPages,
+                modifier = modifier
+            )
+        }
+
+        MainDestination.Annotations -> {
+            AnnotationsContent(
+                annotationCount = state.activeAnnotations.size,
+                modifier = modifier
+            )
+        }
+
+        MainDestination.Settings -> {
+            SettingsContent(
+                dynamicColorEnabled = state.dynamicColorEnabled,
+                highContrastEnabled = state.highContrastEnabled,
+                talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
+                fontScale = state.fontScale,
+                dynamicColorSupported = dynamicColorSupported,
+                accessibilityManager = accessibilityManager,
+                hapticFeedbackManager = hapticFeedbackManager,
+                onDynamicColorChanged = onDynamicColorChanged,
+                onHighContrastChanged = onHighContrastChanged,
+                onTalkBackIntegrationChanged = onTalkBackIntegrationChanged,
+                onFontScaleChanged = onFontScaleChanged,
+                onOpenDevOptions = onOpenDevOptions,
+                modifier = modifier
+            )
+        }
+
+        MainDestination.DevOptions -> {
+            DevOptionsContent(
+                stats = state.bitmapMemory,
+                onBack = onBackFromDevOptions,
+                modifier = modifier
+            )
+        }
+    }
 }
 
 @Composable
