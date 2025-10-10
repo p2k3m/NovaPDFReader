@@ -52,7 +52,8 @@ class PdfViewerScreenTest {
             }
         }
 
-        composeRule.onNodeWithText("Open a PDF to begin").assertIsDisplayed()
+        val emptyStateMessage = composeRule.activity.getString(ViewerR.string.empty_state_message)
+        composeRule.onNodeWithText(emptyStateMessage).assertIsDisplayed()
         val accessibilityTrigger = composeRule.activity.getString(ViewerR.string.accessibility_open_options)
         composeRule.onNodeWithText(accessibilityTrigger).assertIsDisplayed()
     }
