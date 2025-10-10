@@ -126,6 +126,8 @@ val minimumSupportedApiLevel = runCatching {
     versionCatalog.findVersion("androidMinSdk").get().requiredVersion.toInt()
 }.getOrNull()
 
+val minimumConnectedTestApiLevel = max(21, minimumSupportedApiLevel ?: 21)
+
 val androidSdkDirectory = locateAndroidSdkDir()
 val adbExecutable = findAdbExecutable(androidSdkDirectory)
 
@@ -223,7 +225,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
                             return@mapNotNull null
                         }
 
-                        val minimumApi = minimumSupportedApiLevel ?: 1
+                        val minimumApi = minimumConnectedTestApiLevel
                         if (apiLevel < minimumApi) {
                             logger.warn(
                                 "Connected Android device $serial is API level $apiLevel which is below the minimum supported API level $minimumApi. Skipping."
@@ -435,40 +437,38 @@ subprojects {
                 throw StopExecutionException("No responsive Android devices available for connected tests.")
             }
 
-            val responsiveSerial = devices.firstOrNull { serial ->
-                runCatching {
-                    val process = ProcessBuilder(
-                        executable.absolutePath,
-                        "-s",
-                        serial,
-                        "shell",
-                        "getprop",
-                        "ro.build.version.sdk"
-                    )
-                        .redirectErrorStream(true)
-                        .start()
+            val minimumApiLevel = minimumConnectedTestApiLevel
+            var skipReason: String? = null
 
-                    if (!process.waitFor(30, TimeUnit.SECONDS)) {
-                        process.destroy()
-                        process.destroyForcibly()
+            val responsiveSerial = devices.firstOrNull { serial ->
+                val apiLevel = queryDeviceApiLevel(serial)
+
+                when {
+                    apiLevel == null -> {
+                        if (skipReason == null) {
+                            skipReason =
+                                "Skipping task $name because connected Android device $serial did not report an API level."
+                        }
                         false
-                    } else {
-                        val output = process.inputStream.bufferedReader().use { reader -> reader.readText().trim() }
-                        output.toIntOrNull() != null
                     }
-                }.onFailure { error ->
-                    logger.warn(
-                        "Failed to verify connected Android device $serial before executing $name.",
-                        error
-                    )
-                }.getOrDefault(false)
+
+                    apiLevel < minimumApiLevel -> {
+                        if (skipReason == null) {
+                            skipReason =
+                                "Skipping task $name because connected Android device $serial reports API level $apiLevel, but API level $minimumApiLevel or higher is required for connected tests."
+                        }
+                        false
+                    }
+
+                    else -> true
+                }
             }
 
             if (responsiveSerial == null) {
-                logSkip(
-                    "Skipping task $name because no responsive Android devices/emulators were detected. " +
+                val message = skipReason
+                    ?: "Skipping task $name because no responsive Android devices/emulators were detected. " +
                         "Ensure an emulator is fully booted before running connected tests."
-                )
+                logSkip(message)
                 throw StopExecutionException("No responsive Android devices available for connected tests.")
             }
         }
