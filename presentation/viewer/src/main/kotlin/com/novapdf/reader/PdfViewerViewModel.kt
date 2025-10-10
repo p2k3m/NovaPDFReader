@@ -1,11 +1,13 @@
 package com.novapdf.reader
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
 import android.util.Log
 import android.util.Size
+import android.util.LruCache
 import android.os.Build
 import android.os.CancellationSignal
 import android.print.PrintAttributes
@@ -55,6 +57,9 @@ private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
 private const val RENDER_POOL_PARALLELISM = 2
 private const val INDEX_POOL_PARALLELISM = 1
+private const val MAX_PAGE_CACHE_BYTES = 32 * 1024 * 1024
+private const val MAX_TILE_CACHE_BYTES = 24 * 1024 * 1024
+private const val MIN_CACHE_BYTES = 1 * 1024 * 1024
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -105,6 +110,23 @@ private data class PrefetchRequest(
     val widthPx: Int
 )
 
+private data class PageCacheKey(
+    val documentId: String,
+    val pageIndex: Int,
+    val widthPx: Int,
+    val profile: PageRenderProfile,
+)
+
+private data class TileCacheKey(
+    val documentId: String,
+    val pageIndex: Int,
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+    val scaleBits: Int,
+)
+
 @HiltViewModel
 open class PdfViewerViewModel @Inject constructor(
     application: Application,
@@ -150,6 +172,35 @@ open class PdfViewerViewModel @Inject constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
+    private val pageCacheLock = Any()
+    private val tileCacheLock = Any()
+    private val pageCacheMaxBytes = computeCacheBudget(MAX_PAGE_CACHE_BYTES)
+    private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
+    private val pageBitmapCache = object : LruCache<PageCacheKey, Bitmap>(pageCacheMaxBytes) {
+        override fun sizeOf(key: PageCacheKey, value: Bitmap): Int = bitmapSize(value)
+    }
+    private val tileBitmapCache = object : LruCache<TileCacheKey, Bitmap>(tileCacheMaxBytes) {
+        override fun sizeOf(key: TileCacheKey, value: Bitmap): Int = bitmapSize(value)
+    }
+    @Volatile
+    private var activeDocumentId: String? = null
+    private val memoryCallbacks = object : ComponentCallbacks2 {
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun onLowMemory() {
+            clearRenderCaches()
+        }
+
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun onTrimMemory(level: Int) {
+            @Suppress("DEPRECATION")
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                clearRenderCaches()
+            }
+        }
+    }
+
     private var searchJob: Job? = null
     private var indexingJob: Job? = null
     private var remoteDownloadJob: Job? = null
@@ -185,6 +236,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     init {
+        app.registerComponentCallbacks(memoryCallbacks)
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _uiState.value = _uiState.value.copy(
             isNightMode = isNightModeEnabled(),
@@ -213,6 +265,10 @@ open class PdfViewerViewModel @Inject constructor(
                 }
                 val previous = _uiState.value
                 val documentId = session?.documentId
+                if (activeDocumentId != documentId) {
+                    clearRenderCaches()
+                    activeDocumentId = documentId
+                }
                 val shouldResetMalformed = previous.documentId != documentId
                 _uiState.value = previous.copy(
                     readingSpeed = context.speed,
@@ -326,6 +382,8 @@ open class PdfViewerViewModel @Inject constructor(
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
         searchJob?.cancel()
         pageTooLargeNotified.set(false)
+        activeDocumentId = null
+        clearRenderCaches()
         setLoadingState(
             isLoading = true,
             progress = 0f,
@@ -524,46 +582,55 @@ open class PdfViewerViewModel @Inject constructor(
         if (isPageMalformed(index)) {
             return null
         }
+        val documentId = activeDocumentId ?: _uiState.value.documentId ?: return null
+        val profile = renderProfileFor(priority)
+        val cacheKey = PageCacheKey(documentId, index, targetWidth, profile)
+        getCachedPage(cacheKey)?.let { return it }
         return renderQueue.submit(priority) {
+            getCachedPage(cacheKey)?.let { return@submit it }
             if (isPageMalformed(index)) {
                 return@submit null
             }
             val signal = CancellationSignal()
-            val profile = renderProfileFor(priority)
             val result = renderPageUseCase(RenderPageRequest(index, targetWidth, profile), signal)
-            result.getOrNull()?.bitmap ?: run {
-                val throwable = result.exceptionOrNull()
-                if (throwable is CancellationException) throw throwable
-                if (throwable is PdfRenderException) {
-                    return@run when (throwable.reason) {
-                        PdfRenderException.Reason.PAGE_TOO_LARGE -> {
-                            notifyPageTooLarge()
-                            val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
-                                suggestion in 1 until targetWidth
-                            }
-                            if (fallbackWidth != null) {
-                                val fallbackSignal = CancellationSignal()
-                                val fallbackResult = renderPageUseCase(
-                                    RenderPageRequest(index, fallbackWidth, profile),
-                                    fallbackSignal
-                                )
-                                fallbackResult.exceptionOrNull()?.let { error ->
-                                    if (error is CancellationException) throw error
-                                }
-                                fallbackResult.getOrNull()?.bitmap
-                            } else {
-                                null
-                            }
+            result.getOrNull()?.bitmap?.let { bitmap ->
+                cachePageBitmap(documentId, cacheKey, bitmap)
+                return@submit bitmap
+            }
+            val throwable = result.exceptionOrNull()
+            if (throwable is CancellationException) throw throwable
+            if (throwable is PdfRenderException) {
+                when (throwable.reason) {
+                    PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                        notifyPageTooLarge()
+                        val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
+                            suggestion in 1 until targetWidth
                         }
-
-                        PdfRenderException.Reason.MALFORMED_PAGE -> {
-                            markPageMalformed(index)
-                            null
+                        if (fallbackWidth != null) {
+                            val fallbackKey = cacheKey.copy(widthPx = fallbackWidth)
+                            getCachedPage(fallbackKey)?.let { return@submit it }
+                            val fallbackSignal = CancellationSignal()
+                            val fallbackResult = renderPageUseCase(
+                                RenderPageRequest(index, fallbackWidth, profile),
+                                fallbackSignal
+                            )
+                            fallbackResult.exceptionOrNull()?.let { error ->
+                                if (error is CancellationException) throw error
+                            }
+                            val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
+                            if (fallbackBitmap != null) {
+                                cachePageBitmap(documentId, fallbackKey, fallbackBitmap)
+                            }
+                            return@submit fallbackBitmap
                         }
                     }
+
+                    PdfRenderException.Reason.MALFORMED_PAGE -> {
+                        markPageMalformed(index)
+                    }
                 }
-                null
             }
+            null
         }
     }
 
@@ -582,45 +649,62 @@ open class PdfViewerViewModel @Inject constructor(
         if (isPageMalformed(index)) {
             return null
         }
+        val documentId = activeDocumentId ?: _uiState.value.documentId ?: return null
+        val cacheKey = TileCacheKey(
+            documentId = documentId,
+            pageIndex = index,
+            left = rect.left,
+            top = rect.top,
+            right = rect.right,
+            bottom = rect.bottom,
+            scaleBits = scale.toBits(),
+        )
+        getCachedTile(cacheKey)?.let { return it }
         return withContext(renderDispatcher) {
+            getCachedTile(cacheKey)?.let { return@withContext it }
             if (isPageMalformed(index)) {
                 return@withContext null
             }
             val signal = CancellationSignal()
             val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
-            result.getOrNull()?.bitmap ?: run {
-                val throwable = result.exceptionOrNull()
-                if (throwable is CancellationException) throw throwable
-                if (throwable is PdfRenderException) {
-                    return@run when (throwable.reason) {
-                        PdfRenderException.Reason.PAGE_TOO_LARGE -> {
-                            notifyPageTooLarge()
-                            val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
-                                suggestion in 0f..scale && suggestion < scale
-                            }
-                            if (fallbackScale != null) {
-                                val fallbackSignal = CancellationSignal()
-                                val fallbackResult = renderTileUseCase(
-                                    RenderTileRequest(index, rect, fallbackScale),
-                                    fallbackSignal
-                                )
-                                fallbackResult.exceptionOrNull()?.let { error ->
-                                    if (error is CancellationException) throw error
-                                }
-                                fallbackResult.getOrNull()?.bitmap
-                            } else {
-                                null
-                            }
+            result.getOrNull()?.bitmap?.let { bitmap ->
+                cacheTileBitmap(documentId, cacheKey, bitmap)
+                return@withContext bitmap
+            }
+            val throwable = result.exceptionOrNull()
+            if (throwable is CancellationException) throw throwable
+            if (throwable is PdfRenderException) {
+                when (throwable.reason) {
+                    PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                        notifyPageTooLarge()
+                        val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
+                            suggestion in 0f..scale && suggestion < scale
                         }
-
-                        PdfRenderException.Reason.MALFORMED_PAGE -> {
-                            markPageMalformed(index)
-                            null
+                        if (fallbackScale != null) {
+                            val fallbackKey = cacheKey.copy(scaleBits = fallbackScale.toBits())
+                            getCachedTile(fallbackKey)?.let { return@withContext it }
+                            val fallbackSignal = CancellationSignal()
+                            val fallbackResult = renderTileUseCase(
+                                RenderTileRequest(index, rect, fallbackScale),
+                                fallbackSignal
+                            )
+                            fallbackResult.exceptionOrNull()?.let { error ->
+                                if (error is CancellationException) throw error
+                            }
+                            val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
+                            if (fallbackBitmap != null) {
+                                cacheTileBitmap(documentId, fallbackKey, fallbackBitmap)
+                            }
+                            return@withContext fallbackBitmap
                         }
                     }
+
+                    PdfRenderException.Reason.MALFORMED_PAGE -> {
+                        markPageMalformed(index)
+                    }
                 }
-                null
             }
+            null
         }
     }
 
@@ -766,12 +850,82 @@ open class PdfViewerViewModel @Inject constructor(
         indexingJob?.cancel()
         remoteDownloadJob?.cancel()
         prefetchRequests.close()
+        app.unregisterComponentCallbacks(memoryCallbacks)
+        clearRenderCaches()
     }
 
     private fun isNightModeEnabled(): Boolean {
         val configuration = getApplication<Application>().resources.configuration
         val mask = configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         return mask == Configuration.UI_MODE_NIGHT_YES
+    }
+
+    private fun bitmapSize(bitmap: Bitmap): Int {
+        val allocation = try {
+            bitmap.allocationByteCount
+        } catch (_: IllegalStateException) {
+            try {
+                bitmap.byteCount
+            } catch (_: IllegalStateException) {
+                0
+            }
+        }
+        return allocation.coerceAtLeast(1)
+    }
+
+    private fun getCachedPage(key: PageCacheKey): Bitmap? = synchronized(pageCacheLock) {
+        val bitmap = pageBitmapCache.get(key)
+        if (bitmap == null || bitmap.isRecycled) {
+            if (bitmap != null && bitmap.isRecycled) {
+                pageBitmapCache.remove(key)
+            }
+            null
+        } else {
+            bitmap
+        }
+    }
+
+    private fun cachePageBitmap(documentId: String, key: PageCacheKey, bitmap: Bitmap) {
+        if (!bitmap.isRecycled && documentId == activeDocumentId) {
+            synchronized(pageCacheLock) {
+                pageBitmapCache.put(key, bitmap)
+            }
+        }
+    }
+
+    private fun getCachedTile(key: TileCacheKey): Bitmap? = synchronized(tileCacheLock) {
+        val bitmap = tileBitmapCache.get(key)
+        if (bitmap == null || bitmap.isRecycled) {
+            if (bitmap != null && bitmap.isRecycled) {
+                tileBitmapCache.remove(key)
+            }
+            null
+        } else {
+            bitmap
+        }
+    }
+
+    private fun cacheTileBitmap(documentId: String, key: TileCacheKey, bitmap: Bitmap) {
+        if (!bitmap.isRecycled && documentId == activeDocumentId) {
+            synchronized(tileCacheLock) {
+                tileBitmapCache.put(key, bitmap)
+            }
+        }
+    }
+
+    private fun clearRenderCaches() {
+        synchronized(pageCacheLock) {
+            pageBitmapCache.evictAll()
+        }
+        synchronized(tileCacheLock) {
+            tileBitmapCache.evictAll()
+        }
+    }
+
+    private fun computeCacheBudget(limitBytes: Int): Int {
+        val runtimeBudget = Runtime.getRuntime().maxMemory() / 8L
+        val capped = minOf(limitBytes.toLong(), runtimeBudget)
+        return capped.coerceAtLeast(MIN_CACHE_BYTES.toLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
 
 }
