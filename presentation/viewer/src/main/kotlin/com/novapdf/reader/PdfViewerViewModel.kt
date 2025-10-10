@@ -122,6 +122,8 @@ open class PdfViewerViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
 
+    private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, RENDER_POOL_PARALLELISM)
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
 
@@ -478,8 +480,12 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
-        return withContext(renderDispatcher) {
+    suspend fun renderPage(
+        index: Int,
+        targetWidth: Int,
+        priority: RenderWorkQueue.Priority,
+    ): Bitmap? {
+        return renderQueue.submit(priority) {
             val signal = CancellationSignal()
             val result = renderPageUseCase(RenderPageRequest(index, targetWidth), signal)
             result.fold(
