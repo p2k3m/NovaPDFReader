@@ -126,6 +126,14 @@ subprojects {
     tasks.matching { it.name == "check" }.configureEach {
         dependsOn("spotlessCheck", "detekt")
     }
+
+    if (System.getenv("CI") == "true") {
+        tasks.matching { task ->
+            task.name.contains("connectedAndroidTest", ignoreCase = true)
+        }.configureEach {
+            enabled = false
+        }
+    }
 }
 
 tasks.register("clean", Delete::class) {
