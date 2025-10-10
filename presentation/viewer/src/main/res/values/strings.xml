@@ -101,7 +101,7 @@
     <string name="error_pdf_dialog_title">We couldn\'t open this PDF</string>
     <string name="error_pdf_dialog_body">The file might be damaged. You can retry or use an online repair tool.</string>
     <string name="error_pdf_corrupted">The PDF appears to be corrupted and can\'t be opened.</string>
-    <string name="error_pdf_unsupported">This file isn\'t a supported PDF document.</string>
+    <string name="error_pdf_unsupported">This file isn\'t a supported PDF document. Make sure you\'re opening a PDF file or convert it to PDF and try again.</string>
     <string name="error_pdf_permission">NovaPDF Reader doesn\'t have permission to read this file.</string>
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
