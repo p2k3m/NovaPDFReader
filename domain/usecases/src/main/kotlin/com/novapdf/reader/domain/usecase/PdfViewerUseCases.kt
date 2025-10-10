@@ -15,6 +15,7 @@ import com.novapdf.reader.download.RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
@@ -126,7 +127,11 @@ class DefaultOpenDocumentUseCase @Inject constructor(
         }
 }
 
-data class RenderPageRequest(val pageIndex: Int, val targetWidth: Int)
+data class RenderPageRequest(
+    val pageIndex: Int,
+    val targetWidth: Int,
+    val profile: PageRenderProfile = PageRenderProfile.HIGH_DETAIL,
+)
 
 data class RenderPageResult(val bitmap: Bitmap?)
 
@@ -146,7 +151,7 @@ class DefaultRenderPageUseCase @Inject constructor(
         cancellationSignal: CancellationSignal?,
     ): Result<RenderPageResult> =
         withLinkedCancellation(cancellationSignal) { signal ->
-            repository.renderPage(request.pageIndex, request.targetWidth, signal)
+            repository.renderPage(request.pageIndex, request.targetWidth, request.profile, signal)
         }.map { bitmap ->
             RenderPageResult(bitmap)
         }

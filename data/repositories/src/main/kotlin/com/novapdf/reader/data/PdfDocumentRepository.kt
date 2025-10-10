@@ -64,6 +64,7 @@ import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.PdfBoxInitializer
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -115,7 +116,8 @@ data class PageTileRequest(
 
 private data class PageBitmapKey(
     val pageIndex: Int,
-    val width: Int
+    val width: Int,
+    val profile: PageRenderProfile,
 )
 
 class PdfDocumentRepository(
@@ -293,6 +295,7 @@ class PdfDocumentRepository(
     suspend fun renderPage(
         pageIndex: Int,
         targetWidth: Int,
+        profile: PageRenderProfile = PageRenderProfile.HIGH_DETAIL,
         cancellationSignal: CancellationSignal? = null,
     ): Bitmap? = withContextGuard {
         cancellationSignal.throwIfCanceled()
@@ -300,6 +303,7 @@ class PdfDocumentRepository(
         val bitmap = ensurePageBitmap(
             pageIndex,
             targetWidth,
+            profile = profile,
             cancellationSignal = cancellationSignal,
         ) ?: return@withContextGuard null
         cancellationSignal.throwIfCanceled()
@@ -411,7 +415,12 @@ class PdfDocumentRepository(
                 if (index in 0 until session.pageCount) {
                     // Avoid blocking foreground renders if decoding is already busy.
                     try {
-                        ensurePageBitmap(index, targetWidth, allowSkippingIfBusy = true)
+                        ensurePageBitmap(
+                            index,
+                            targetWidth,
+                            profile = PageRenderProfile.HIGH_DETAIL,
+                            allowSkippingIfBusy = true,
+                        )
                     } catch (render: PdfRenderException) {
                         if (render.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
                             Log.w(TAG, "Skipping oversized page prefetch for index $index")
@@ -667,6 +676,7 @@ class PdfDocumentRepository(
     private suspend fun ensurePageBitmap(
         pageIndex: Int,
         targetWidth: Int,
+        profile: PageRenderProfile,
         allowSkippingIfBusy: Boolean = false,
         cancellationSignal: CancellationSignal? = null,
     ): Bitmap? {
@@ -675,7 +685,7 @@ class PdfDocumentRepository(
         cancellationSignal.throwIfCanceled()
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
-        val key = PageBitmapKey(pageIndex, targetWidth)
+        val key = PageBitmapKey(pageIndex, targetWidth, profile)
         bitmapCache.get(key)?.let { existing ->
             if (!existing.isRecycled) {
                 return existing
@@ -729,7 +739,8 @@ class PdfDocumentRepository(
                 if (!session.document.hasPage(pageIndex)) {
                     pdfiumCore.openPage(session.document, pageIndex)
                 }
-                val bitmap = obtainBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                val config = bitmapConfigFor(profile)
+                val bitmap = obtainBitmap(targetWidth, targetHeight, config)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 cancellationSignal.throwIfCanceled()
                 pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
@@ -1053,6 +1064,16 @@ class PdfDocumentRepository(
         safeByteCount(bitmap)
     }
 
+    private fun bitmapConfigFor(profile: PageRenderProfile): Bitmap.Config = when (profile) {
+        PageRenderProfile.HIGH_DETAIL -> Bitmap.Config.ARGB_8888
+        PageRenderProfile.LOW_DETAIL -> Bitmap.Config.RGB_565
+    }
+
+    private fun profileForConfig(config: Bitmap.Config?): PageRenderProfile = when (config) {
+        Bitmap.Config.RGB_565 -> PageRenderProfile.LOW_DETAIL
+        else -> PageRenderProfile.HIGH_DETAIL
+    }
+
     @Suppress("DEPRECATION")
     private fun bytesPerPixel(config: Bitmap.Config): Int = when (config) {
         Bitmap.Config.ALPHA_8 -> 1
@@ -1270,7 +1291,8 @@ class PdfDocumentRepository(
                 aliasKeys.getOrPut(name) {
                     nextAliasId -= 1
                     val width = bitmap.width.takeIf { it > 0 } ?: 1
-                    PageBitmapKey(nextAliasId, width)
+                    val profile = profileForConfig(bitmap.config)
+                    PageBitmapKey(nextAliasId, width, profile)
                 }
             }
             putInternal(aliasKey, bitmap)
