@@ -55,6 +55,7 @@ import java.io.IOException
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.regex.Pattern
+import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -142,6 +143,27 @@ class PdfDocumentRepository(
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
+    private val pdfiumPagesField by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        runCatching {
+            PdfDocument::class.java.getDeclaredField("mNativePagesPtr").apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+    }
+    private val pdfiumClosePageMethod by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        runCatching {
+            PdfiumCore::class.java.getDeclaredMethod("nativeClosePage", java.lang.Long.TYPE).apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+    }
+    private val pdfiumLockObject by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        runCatching {
+            PdfiumCore::class.java.getDeclaredField("lock").apply {
+                isAccessible = true
+            }.get(null)
+        }.getOrNull()
+    }
     private val bitmapCache = createBitmapCache()
     private val bitmapPool = BitmapPool(
         maxBytes = maxCacheBytes / 2,
@@ -277,18 +299,7 @@ class PdfDocumentRepository(
 
     @WorkerThread
     suspend fun getPageSize(pageIndex: Int): Size? = withContextGuard {
-        val session = openSession.value ?: return@withContextGuard null
-        pageSizeLock.withLock {
-            pageSizeCache[pageIndex]?.let { return@withLock it }
-            if (!session.document.hasPage(pageIndex)) {
-                pdfiumCore.openPage(session.document, pageIndex)
-            }
-            val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
-            val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
-            val size = Size(width, height)
-            pageSizeCache.put(pageIndex, size)
-            size
-        }
+        getPageSizeInternal(pageIndex)
     }
 
     @WorkerThread
@@ -364,23 +375,22 @@ class PdfDocumentRepository(
             request.cancellationSignal.throwIfCanceled()
             coroutineContext.ensureActive()
             val activeSession = openSession.value ?: return@withContextGuard null
-            if (!activeSession.document.hasPage(request.pageIndex)) {
-                pdfiumCore.openPage(activeSession.document, request.pageIndex)
-            }
             val bitmap = obtainBitmap(tileWidth, tileHeight, Bitmap.Config.ARGB_8888)
             try {
                 request.cancellationSignal.throwIfCanceled()
                 coroutineContext.ensureActive()
-                pdfiumCore.renderPageBitmap(
-                    activeSession.document,
-                    bitmap,
-                    request.pageIndex,
-                    offsetX,
-                    offsetY,
-                    targetWidth,
-                    targetHeight,
-                    true
-                )
+                withPdfiumPage(activeSession.document, request.pageIndex) {
+                    pdfiumCore.renderPageBitmap(
+                        activeSession.document,
+                        bitmap,
+                        request.pageIndex,
+                        offsetX,
+                        offsetY,
+                        targetWidth,
+                        targetHeight,
+                        true
+                    )
+                }
                 request.cancellationSignal.throwIfCanceled()
                 coroutineContext.ensureActive()
                 bitmap
@@ -649,14 +659,13 @@ class PdfDocumentRepository(
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
             try {
-                if (!session.document.hasPage(pageIndex)) {
-                    pdfiumCore.openPage(session.document, pageIndex)
+                withPdfiumPage(session.document, pageIndex) {
+                    val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
+                    val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
+                    val size = Size(width, height)
+                    pageSizeCache.put(pageIndex, size)
+                    size
                 }
-                val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
-                val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
-                val size = Size(width, height)
-                pageSizeCache.put(pageIndex, size)
-                size
             } catch (throwable: Throwable) {
                 Log.e(TAG, "Failed to obtain page size for index $pageIndex", throwable)
                 reportNonFatal(
@@ -736,14 +745,22 @@ class PdfDocumentRepository(
             try {
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.2f))
                 cancellationSignal.throwIfCanceled()
-                if (!session.document.hasPage(pageIndex)) {
-                    pdfiumCore.openPage(session.document, pageIndex)
-                }
                 val config = bitmapConfigFor(profile)
                 val bitmap = obtainBitmap(targetWidth, targetHeight, config)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 cancellationSignal.throwIfCanceled()
-                pdfiumCore.renderPageBitmap(session.document, bitmap, pageIndex, 0, 0, targetWidth, targetHeight, true)
+                withPdfiumPage(session.document, pageIndex) {
+                    pdfiumCore.renderPageBitmap(
+                        session.document,
+                        bitmap,
+                        pageIndex,
+                        0,
+                        0,
+                        targetWidth,
+                        targetHeight,
+                        true
+                    )
+                }
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
                 bitmapCache.put(key, bitmap)
                 bitmap
@@ -1084,6 +1101,40 @@ class PdfDocumentRepository(
         Bitmap.Config.RGBA_1010102 -> 4
         Bitmap.Config.HARDWARE -> throw IllegalArgumentException("Bitmap.Config.HARDWARE is not supported by the pool")
         else -> 4
+    }
+
+    private inline fun <T> withPdfiumPage(
+        document: PdfDocument,
+        pageIndex: Int,
+        block: () -> T,
+    ): T {
+        var opened = false
+        return try {
+            pdfiumCore.openPage(document, pageIndex)
+            opened = true
+            block()
+        } finally {
+            if (opened) {
+                closePdfiumPage(document, pageIndex)
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun closePdfiumPage(document: PdfDocument, pageIndex: Int) {
+        val pagesField = pdfiumPagesField ?: return
+        val closePage = pdfiumClosePageMethod ?: return
+        val lock = pdfiumLockObject ?: return
+        val pages = runCatching { pagesField.get(document) as? MutableMap<Int, Long> }.getOrNull() ?: return
+        synchronized(lock) {
+            val pointer = pages.remove(pageIndex) ?: return
+            try {
+                closePage.invoke(pdfiumCore, pointer)
+            } catch (error: Throwable) {
+                pages[pageIndex] = pointer
+                Log.w(TAG, "Failed to close Pdfium page $pageIndex", error)
+            }
+        }
     }
 
     private fun obtainBitmap(width: Int, height: Int, config: Bitmap.Config): Bitmap {
