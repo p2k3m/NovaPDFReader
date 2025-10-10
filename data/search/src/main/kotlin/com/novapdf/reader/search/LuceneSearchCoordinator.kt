@@ -4,11 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Process
+import android.util.Base64
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.novapdf.reader.cache.PdfCacheRoot
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
@@ -17,7 +20,6 @@ import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +31,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.asCoroutineDispatcher
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
@@ -43,14 +46,18 @@ import org.apache.lucene.queryparser.classic.QueryParser
 import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.Query
 import org.apache.lucene.search.TermQuery
-import org.apache.lucene.store.ByteBuffersDirectory
+import org.apache.lucene.store.Directory
+import org.apache.lucene.store.FSDirectory
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
 import java.io.Closeable
+import java.io.File
 import java.io.IOException
 import java.io.StringWriter
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import kotlin.math.max
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.resume
@@ -96,12 +103,15 @@ class LuceneSearchCoordinator(
     }
 ) : DocumentSearchCoordinator {
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val indexDispatcher = createIndexDispatcher(dispatchers.io)
+    private val indexDispatcherHandle = createIndexDispatcher(dispatchers.io)
+    private val indexDispatcher: CoroutineDispatcher = indexDispatcherHandle.dispatcher
 
     private val scope = scopeProvider(indexDispatcher)
+    private val appContext = context.applicationContext
+    private val indexRoot = PdfCacheRoot.indexes(appContext)
     private val analyzer = StandardAnalyzer()
     private val indexLock = Mutex()
-    private var directory: ByteBuffersDirectory? = null
+    private var directory: Directory? = null
     private var indexSearcher: IndexSearcher? = null
     private var indexReader: DirectoryReader? = null
     private var currentDocumentId: String? = null
@@ -115,16 +125,44 @@ class LuceneSearchCoordinator(
     private var pageContents: List<PageSearchContent> = emptyList()
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private fun createIndexDispatcher(base: CoroutineDispatcher): CoroutineDispatcher {
+    private data class DispatcherHandle(
+        val dispatcher: CoroutineDispatcher,
+        val shutdown: (() -> Unit)? = null,
+    )
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun createIndexDispatcher(base: CoroutineDispatcher): DispatcherHandle {
         return try {
-            base.limitedParallelism(INDEX_POOL_PARALLELISM)
-        } catch (error: UnsupportedOperationException) {
-            Log.w(
-                TAG,
-                "Unable to limit parallelism for provided dispatcher; falling back to Dispatchers.IO",
-                error
-            )
-            Dispatchers.IO.limitedParallelism(INDEX_POOL_PARALLELISM)
+            val threadFactory = ThreadFactory { runnable ->
+                Thread({
+                    try {
+                        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                    } catch (error: Throwable) {
+                        Log.w(TAG, "Unable to set Lucene index thread priority", error)
+                    }
+                    runnable.run()
+                }, "LuceneIndex").apply {
+                    priority = Thread.MIN_PRIORITY
+                }
+            }
+            val executor = Executors.newSingleThreadExecutor(threadFactory)
+            val dispatcher = executor.asCoroutineDispatcher()
+            DispatcherHandle(dispatcher) {
+                dispatcher.close()
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to create dedicated dispatcher for Lucene indexing", error)
+            val fallback = try {
+                base.limitedParallelism(INDEX_POOL_PARALLELISM)
+            } catch (unsupported: UnsupportedOperationException) {
+                Log.w(
+                    TAG,
+                    "Unable to limit parallelism for provided dispatcher; falling back to Dispatchers.IO",
+                    unsupported
+                )
+                kotlinx.coroutines.Dispatchers.IO.limitedParallelism(INDEX_POOL_PARALLELISM)
+            }
+            DispatcherHandle(fallback, null)
         }
     }
 
@@ -137,6 +175,7 @@ class LuceneSearchCoordinator(
                     "(${session.pageCount} pages)"
             )
             currentDocumentId = session.documentId
+            clearStoredIndex(session.documentId)
             directory = null
             indexSearcher = null
             indexReader = null
@@ -214,6 +253,9 @@ class LuceneSearchCoordinator(
         indexSearcher = null
         currentDocumentId = null
         pageContents = emptyList()
+        indexDispatcherHandle.shutdown?.let { shutdown ->
+            runCatching { shutdown() }
+        }
     }
 
     private suspend fun ensureIndexReady(session: PdfDocumentSession) {
@@ -227,6 +269,7 @@ class LuceneSearchCoordinator(
                 "Skipping Lucene index rebuild for large document (${session.pageCount} pages)"
             )
             currentDocumentId = session.documentId
+            clearStoredIndex(session.documentId)
             directory = null
             indexSearcher = null
             indexReader = null
@@ -236,25 +279,44 @@ class LuceneSearchCoordinator(
         rebuildIndex(session)
     }
 
-    private suspend fun rebuildIndex(session: PdfDocumentSession) {
+    private suspend fun rebuildIndex(session: PdfDocumentSession) = withContext(indexDispatcher) {
         val contents = if (session.pageCount > 0) extractPageContent(session) else emptyList()
         indexLock.withLock {
             runCatching { indexReader?.close() }
             indexReader = null
             directory?.close()
+            directory = null
             if (contents.isEmpty()) {
-                directory = null
+                clearStoredIndex(session.documentId)
                 indexSearcher = null
                 currentDocumentId = session.documentId
                 pageContents = emptyList()
                 return@withLock
             }
-            val memoryDirectory = ByteBuffersDirectory()
-            directory = memoryDirectory
+            val indexDir = documentIndexDirectory(session.documentId)
+            if (indexDir == null) {
+                indexSearcher = null
+                currentDocumentId = session.documentId
+                pageContents = contents
+                return@withLock
+            }
+            val luceneDirectory = runCatching { FSDirectory.open(indexDir.toPath()) }
+                .onFailure { error ->
+                    Log.w(TAG, "Unable to open Lucene directory at ${indexDir.absolutePath}", error)
+                }
+                .getOrNull()
+            if (luceneDirectory == null) {
+                clearStoredIndex(session.documentId)
+                indexSearcher = null
+                currentDocumentId = session.documentId
+                pageContents = contents
+                return@withLock
+            }
+            directory = luceneDirectory
             val config = IndexWriterConfig(analyzer).apply {
                 openMode = IndexWriterConfig.OpenMode.CREATE
             }
-            IndexWriter(memoryDirectory, config).use { writer ->
+            IndexWriter(luceneDirectory, config).use { writer ->
                 contents.forEachIndexed { index, content ->
                     val cleaned = content.text.trim()
                     val document = Document().apply {
@@ -265,20 +327,20 @@ class LuceneSearchCoordinator(
                 }
                 writer.commit()
             }
-            indexReader = DirectoryReader.open(memoryDirectory)
+            indexReader = DirectoryReader.open(luceneDirectory)
             indexSearcher = indexReader?.let { IndexSearcher(it) }
             currentDocumentId = session.documentId
             pageContents = contents
         }
     }
 
-    private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> = withContext(indexDispatcher) {
+    private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> {
         val pageCount = session.pageCount
-        if (pageCount <= 0) return@withContext emptyList()
+        if (pageCount <= 0) return emptyList()
         val pdfBoxReady = PdfBoxInitializer.ensureInitialized(context)
         if (!pdfBoxReady) {
             Log.w(TAG, "PDFBox initialisation failed; skipping text extraction")
-            return@withContext emptyList()
+            return emptyList()
         }
         val contents = MutableList(pageCount) {
             PageSearchContent(
@@ -389,7 +451,7 @@ class LuceneSearchCoordinator(
                 }
             }
         }
-        contents
+        return contents
     }
 
     private suspend fun performOcr(
@@ -435,6 +497,51 @@ class LuceneSearchCoordinator(
                 bitmap.recycle()
             }
         }
+    }
+
+    private fun documentIndexDirectory(
+        documentId: String,
+        createIfMissing: Boolean = true,
+    ): File? {
+        if (documentId.isBlank()) {
+            Log.w(TAG, "Document ID unavailable; skipping Lucene index persistence")
+            return null
+        }
+        val encodedId = encodeDocumentId(documentId)
+        val directory = File(indexRoot, encodedId)
+        if (directory.exists()) {
+            if (!directory.isDirectory) {
+                Log.w(TAG, "Lucene index path is not a directory: ${directory.absolutePath}")
+                return null
+            }
+            return directory
+        }
+        if (!createIfMissing) {
+            return null
+        }
+        return if (directory.mkdirs() || directory.isDirectory) {
+            directory
+        } else {
+            Log.w(TAG, "Unable to create Lucene index directory at ${directory.absolutePath}")
+            null
+        }
+    }
+
+    private fun clearStoredIndex(documentId: String) {
+        val directory = documentIndexDirectory(documentId, createIfMissing = false) ?: return
+        if (!directory.exists()) {
+            return
+        }
+        val deleted = runCatching { directory.deleteRecursively() }
+            .onFailure { error -> Log.w(TAG, "Unable to delete Lucene index at ${directory.absolutePath}", error) }
+            .getOrDefault(false)
+        if (!deleted && directory.exists()) {
+            Log.w(TAG, "Failed to remove Lucene index directory at ${directory.absolutePath}")
+        }
+    }
+
+    private fun encodeDocumentId(documentId: String): String {
+        return Base64.encodeToString(documentId.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
     }
 
     private suspend fun recognizeText(bitmap: Bitmap): OcrPageResult = suspendCancellableCoroutine { continuation ->
