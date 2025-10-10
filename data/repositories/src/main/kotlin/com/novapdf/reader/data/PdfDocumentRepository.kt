@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
@@ -56,6 +57,7 @@ import java.util.regex.Pattern
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.coroutines.coroutineContext
 import kotlin.io.DEFAULT_BUFFER_SIZE
 import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
@@ -300,6 +302,7 @@ class PdfDocumentRepository(
     @WorkerThread
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
         request.cancellationSignal.throwIfCanceled()
+        coroutineContext.ensureActive()
         if (openSession.value == null) return@withContextGuard null
         val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
         val targetWidth = max(1, (pageSize.width * request.scale).roundToInt())
@@ -308,6 +311,7 @@ class PdfDocumentRepository(
             targetWidth,
             cancellationSignal = request.cancellationSignal,
         ) ?: return@withContextGuard null
+        coroutineContext.ensureActive()
         val scaledLeft = (request.tileRect.left * request.scale).roundToInt().coerceIn(0, baseBitmap.width - 1)
         val scaledTop = (request.tileRect.top * request.scale).roundToInt().coerceIn(0, baseBitmap.height - 1)
         val scaledRight = (request.tileRect.right * request.scale).roundToInt().coerceIn(scaledLeft + 1, baseBitmap.width)
@@ -315,7 +319,9 @@ class PdfDocumentRepository(
         val width = (scaledRight - scaledLeft).coerceAtLeast(1)
         val height = (scaledBottom - scaledTop).coerceAtLeast(1)
         request.cancellationSignal.throwIfCanceled()
+        coroutineContext.ensureActive()
         val tile = Bitmap.createBitmap(baseBitmap, scaledLeft, scaledTop, width, height)
+        coroutineContext.ensureActive()
         if (tile.config != Bitmap.Config.ARGB_8888 && tile.config != Bitmap.Config.RGBA_F16) {
             copyBitmap(tile)
         } else {
