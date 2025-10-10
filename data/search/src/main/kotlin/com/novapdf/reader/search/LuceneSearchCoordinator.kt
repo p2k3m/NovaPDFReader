@@ -21,12 +21,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
@@ -52,12 +54,14 @@ import java.util.Locale
 import kotlin.math.max
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.resume
+import kotlin.io.buffered
 import kotlin.jvm.Volatile
 
 private const val TAG = "LuceneSearchCoordinator"
 private const val OCR_RENDER_TARGET_WIDTH = 1280
 private const val MAX_INDEXED_PAGE_COUNT = 400
 private val WHOLE_PAGE_RECT = RectSnapshot(0f, 0f, 1f, 1f)
+private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
 
 private data class PageSearchContent(
     val text: String,
@@ -287,11 +291,12 @@ class LuceneSearchCoordinator(
             )
         }
         try {
-            context.contentResolver.openInputStream(session.uri)?.use { input ->
-                PDDocument.load(input).use { document ->
-                    for (page in 0 until pageCount) {
-                        ensureActive()
-                        val pdPage = runCatching { document.getPage(page) }
+            context.contentResolver.openInputStream(session.uri)?.buffered()?.use { input ->
+                withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+                    PDDocument.load(input).use { document ->
+                        for (page in 0 until pageCount) {
+                            ensureActive()
+                            val pdPage = runCatching { document.getPage(page) }
                             .onFailure { Log.w(TAG, "Failed to read PDF page $page", it) }
                             .getOrNull() ?: continue
                         try {
@@ -351,8 +356,11 @@ class LuceneSearchCoordinator(
                             }
                         }
                     }
+                    }
                 }
             }
+        } catch (timeout: TimeoutCancellationException) {
+            Log.w(TAG, "Timed out while extracting text for search", timeout)
         } catch (io: IOException) {
             Log.w(TAG, "Failed to extract text with PDFBox", io)
         }

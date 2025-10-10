@@ -28,6 +28,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -40,6 +41,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import android.print.PageRange
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
@@ -63,6 +65,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.coroutines.coroutineContext
 import kotlin.io.DEFAULT_BUFFER_SIZE
+import kotlin.io.buffered
 import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
@@ -83,6 +86,7 @@ private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
+private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
 
 class PdfOpenException(
     val reason: Reason,
@@ -588,7 +592,7 @@ class PdfDocumentRepository(
                 }
                 input.use { source ->
                     try {
-                        FileInputStream(source.fileDescriptor).use { inStream ->
+                        FileInputStream(source.fileDescriptor).buffered().use { inStream ->
                             FileOutputStream(destination.fileDescriptor).use { outStream ->
                                 val buffer = ByteArray(DEFAULT_PRINT_BUFFER_SIZE)
                                 while (true) {
@@ -1002,7 +1006,7 @@ class PdfDocumentRepository(
         return attemptPdfRepair(uri, cancellationSignal)
     }
 
-    private fun detectOversizedPageTree(
+    private suspend fun detectOversizedPageTree(
         uri: Uri,
         sizeHint: Long?,
         cancellationSignal: CancellationSignal? = null,
@@ -1033,7 +1037,7 @@ class PdfDocumentRepository(
         return false
     }
 
-    private fun readBytesForPageTreeInspection(
+    private suspend fun readBytesForPageTreeInspection(
         uri: Uri,
         sizeHint: Long?,
         cancellationSignal: CancellationSignal? = null,
@@ -1044,23 +1048,30 @@ class PdfDocumentRepository(
         }.coerceAtLeast(1)
 
         return try {
-            contentResolver.openInputStream(uri)?.use { stream ->
-                val output = ByteArrayOutputStream(limit)
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var remaining = limit
-                while (remaining > 0) {
-                    cancellationSignal.throwIfCanceled()
-                    val read = stream.read(buffer, 0, min(buffer.size, remaining))
-                    if (read == -1) break
-                    output.write(buffer, 0, read)
-                    remaining -= read
-                }
-                if (output.size() == 0) {
-                    null
-                } else {
-                    output.toByteArray()
+            contentResolver.openInputStream(uri)?.let { raw ->
+                raw.buffered().use { stream ->
+                    withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+                        val output = ByteArrayOutputStream(limit)
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var remaining = limit
+                        while (remaining > 0) {
+                            cancellationSignal.throwIfCanceled()
+                            val read = stream.read(buffer, 0, min(buffer.size, remaining))
+                            if (read == -1) break
+                            output.write(buffer, 0, read)
+                            remaining -= read
+                        }
+                        if (output.size() == 0) {
+                            null
+                        } else {
+                            output.toByteArray()
+                        }
+                    }
                 }
             }
+        } catch (timeout: TimeoutCancellationException) {
+            Log.w(TAG, "Timed out while inspecting PDF for page tree analysis", timeout)
+            null
         } catch (error: SecurityException) {
             Log.w(TAG, "Unable to inspect PDF for page tree analysis", error)
             null
@@ -1140,20 +1151,35 @@ class PdfDocumentRepository(
             return null
         }
 
-        return input.use { stream ->
+        return try {
+            withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+                input.buffered().use { stream ->
+                    cancellationSignal.throwIfCanceled()
+                    PDDocument.load(stream).use { document ->
+                        document.save(repairedFile)
+                    }
+                    crashReporter?.logBreadcrumb("pdfium repair: ${uri}")
+                    repairedFile
+                }
+            }
+        } catch (timeout: TimeoutCancellationException) {
+            Log.w(TAG, "Timed out while attempting PDF repair", timeout)
+            if (repairedFile.exists() && !repairedFile.delete()) {
+                Log.w(TAG, "Unable to delete timed out repaired PDF at ${repairedFile.absolutePath}")
+            }
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (repairError: Exception) {
+            Log.w(TAG, "Unable to repair PDF via PdfBox", repairError)
+            if (repairedFile.exists() && !repairedFile.delete()) {
+                Log.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
+            }
+            null
+        } finally {
             try {
-                cancellationSignal.throwIfCanceled()
-                PDDocument.load(stream).use { document ->
-                    document.save(repairedFile)
-                }
-                crashReporter?.logBreadcrumb("pdfium repair: ${uri}")
-                repairedFile
-            } catch (repairError: Exception) {
-                Log.w(TAG, "Unable to repair PDF via PdfBox", repairError)
-                if (repairedFile.exists() && !repairedFile.delete()) {
-                    Log.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
-                }
-                null
+                input.close()
+            } catch (_: IOException) {
             }
         }
     }
@@ -1241,15 +1267,21 @@ class PdfDocumentRepository(
     }
 
     @Suppress("DEPRECATION")
-    private fun bytesPerPixel(config: Bitmap.Config): Int = when (config) {
-        Bitmap.Config.ALPHA_8 -> 1
-        Bitmap.Config.RGB_565 -> 2
-        Bitmap.Config.ARGB_4444 -> 2
-        Bitmap.Config.ARGB_8888 -> 4
-        Bitmap.Config.RGBA_F16 -> 8
-        Bitmap.Config.RGBA_1010102 -> 4
-        Bitmap.Config.HARDWARE -> throw IllegalArgumentException("Bitmap.Config.HARDWARE is not supported by the pool")
-        else -> 4
+    private fun bytesPerPixel(config: Bitmap.Config): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            config == Bitmap.Config.RGBA_1010102
+        ) {
+            return 4
+        }
+        return when (config) {
+            Bitmap.Config.ALPHA_8 -> 1
+            Bitmap.Config.RGB_565 -> 2
+            Bitmap.Config.ARGB_4444 -> 2
+            Bitmap.Config.ARGB_8888 -> 4
+            Bitmap.Config.RGBA_F16 -> 8
+            Bitmap.Config.HARDWARE -> throw IllegalArgumentException("Bitmap.Config.HARDWARE is not supported by the pool")
+            else -> 4
+        }
     }
 
     private inline fun <T> withPdfiumPage(
