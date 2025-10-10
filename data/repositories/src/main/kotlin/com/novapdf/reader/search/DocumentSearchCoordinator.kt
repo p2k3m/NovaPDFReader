@@ -1,8 +1,10 @@
 package com.novapdf.reader.search
 
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * High-level contract for document search so UI layers can depend on the API
@@ -12,4 +14,5 @@ interface DocumentSearchCoordinator {
     fun prepare(session: PdfDocumentSession): Job?
     suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult>
     fun dispose()
+    val indexingState: StateFlow<SearchIndexingState>
 }

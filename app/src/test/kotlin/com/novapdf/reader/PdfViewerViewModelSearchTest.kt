@@ -32,6 +32,7 @@ import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.search.DocumentSearchCoordinator
@@ -98,6 +99,7 @@ class PdfViewerViewModelSearchTest {
             override fun logBreadcrumb(message: String) = Unit
         },
     ): PdfViewerViewModel {
+        whenever(searchCoordinator.indexingState).thenReturn(MutableStateFlow(SearchIndexingState.Idle))
         val openDocumentUseCase = DefaultOpenDocumentUseCase(pdfRepository)
         val renderPageUseCase = DefaultRenderPageUseCase(pdfRepository)
         val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)

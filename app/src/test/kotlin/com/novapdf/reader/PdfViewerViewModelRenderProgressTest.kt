@@ -25,6 +25,7 @@ import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +79,7 @@ class PdfViewerViewModelRenderProgressTest {
         whenever(pdfRepository.renderProgress).thenReturn(renderProgress)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
         whenever(pdfRepository.outline).thenReturn(MutableStateFlow<List<PdfOutlineNode>>(emptyList()))
+        whenever(searchCoordinator.indexingState).thenReturn(MutableStateFlow(SearchIndexingState.Idle))
 
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())

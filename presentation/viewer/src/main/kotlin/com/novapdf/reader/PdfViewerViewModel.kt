@@ -31,6 +31,7 @@ import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.presentation.viewer.R
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -92,6 +93,7 @@ data class PdfViewerUiState(
     val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList(),
+    val searchIndexing: SearchIndexingState = SearchIndexingState.Idle,
     val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
     val bitmapMemory: BitmapMemoryStats = BitmapMemoryStats(),
     val malformedPages: Set<Int> = emptySet()
@@ -316,6 +318,17 @@ open class PdfViewerViewModel @Inject constructor(
                 )
             }
         }
+        viewModelScope.launch {
+            searchUseCase.indexingState.collect { indexingState ->
+                updateUiState { current ->
+                    if (current.searchIndexing == indexingState) {
+                        current
+                    } else {
+                        current.copy(searchIndexing = indexingState)
+                    }
+                }
+            }
+        }
         viewModelScope.launch(renderDispatcher) {
             for (request in prefetchRequests) {
                 if (request.indices.isEmpty() || request.widthPx <= 0) continue
@@ -409,6 +422,10 @@ open class PdfViewerViewModel @Inject constructor(
 
     fun cancelRemoteDocumentLoad() {
         remoteDownloadJob?.cancel()
+    }
+
+    fun cancelIndexing() {
+        indexingJob?.cancel()
     }
 
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {

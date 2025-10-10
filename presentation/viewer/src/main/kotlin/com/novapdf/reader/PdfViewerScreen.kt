@@ -134,9 +134,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -161,6 +161,8 @@ import com.novapdf.reader.model.BitmapMemoryLevel
 import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.model.SearchIndexingPhase
+import com.novapdf.reader.model.SearchIndexingState
 import com.airbnb.lottie.compose.LottieAnimation
 import com.airbnb.lottie.compose.LottieCompositionSpec
 import com.airbnb.lottie.compose.rememberLottieComposition
@@ -217,6 +219,7 @@ fun PdfViewerRoute(
         onStrokeFinished = { viewModel.addAnnotation(it) },
         onSaveAnnotations = { viewModel.persistAnnotations() },
         onSearch = { viewModel.search(it) },
+        onCancelIndexing = { viewModel.cancelIndexing() },
         onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
         onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
         onExportDocument = { viewModel.exportDocument(context) },
@@ -248,6 +251,7 @@ fun PdfViewerScreen(
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onSaveAnnotations: () -> Unit,
     onSearch: (String) -> Unit,
+    onCancelIndexing: () -> Unit,
     onToggleBookmark: (Int) -> Unit,
     onOutlineDestinationSelected: (Int) -> Unit,
     onExportDocument: () -> Boolean,
@@ -547,6 +551,17 @@ fun PdfViewerScreen(
                     )
                 }
 
+                val indexingState = state.searchIndexing
+                if (indexingState is SearchIndexingState.InProgress) {
+                    SearchIndexingBanner(
+                        state = indexingState,
+                        onCancel = onCancelIndexing,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(16.dp)
+                    )
+                }
+
                 DocumentStatusHost(
                     status = state.documentStatus,
                     onDismissError = onDismissError
@@ -775,6 +790,69 @@ private fun DocumentStatusHost(
             onDismiss = onDismissError
         )
         DocumentStatus.Idle -> Unit
+    }
+}
+
+@Composable
+private fun SearchIndexingBanner(
+    state: SearchIndexingState.InProgress,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val phaseText = when (state.phase) {
+        SearchIndexingPhase.PREPARING -> stringResource(id = R.string.search_indexing_phase_preparing)
+        SearchIndexingPhase.EXTRACTING_TEXT -> stringResource(id = R.string.search_indexing_phase_extracting)
+        SearchIndexingPhase.APPLYING_OCR -> stringResource(id = R.string.search_indexing_phase_ocr)
+        SearchIndexingPhase.WRITING_INDEX -> stringResource(id = R.string.search_indexing_phase_writing)
+    }
+    val progressPercent = state.progress?.let { (it * 100).roundToInt().coerceIn(0, 100) }
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(6.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 400.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite }
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(id = R.string.search_indexing_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = phaseText,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            val progress = state.progress
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                progressPercent?.let { percent ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(id = R.string.loading_progress, percent),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onCancel) {
+                    Text(text = stringResource(id = R.string.action_cancel))
+                }
+            }
+        }
     }
 }
 
