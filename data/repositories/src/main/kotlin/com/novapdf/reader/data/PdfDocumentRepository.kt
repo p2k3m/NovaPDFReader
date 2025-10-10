@@ -52,8 +52,10 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
@@ -78,6 +80,7 @@ private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
+private const val MAX_RENDER_FAILURES = 2
 
 class PdfOpenException(
     val reason: Reason,
@@ -94,9 +97,11 @@ class PdfRenderException(
     val reason: Reason,
     val suggestedWidth: Int? = null,
     val suggestedScale: Float? = null,
-) : Exception(reason.name) {
+    cause: Throwable? = null,
+) : Exception(reason.name, cause) {
     enum class Reason {
         PAGE_TOO_LARGE,
+        MALFORMED_PAGE,
     }
 }
 
@@ -179,6 +184,8 @@ class PdfDocumentRepository(
     private val renderProgressState = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
     val renderProgress: StateFlow<PdfRenderProgress> = renderProgressState.asStateFlow()
     private val renderMutex = Mutex()
+    private val malformedPages = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+    private val pageFailureCounts = ConcurrentHashMap<Int, Int>()
     private val componentCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
@@ -311,6 +318,9 @@ class PdfDocumentRepository(
     ): Bitmap? = withContextGuard {
         cancellationSignal.throwIfCanceled()
         if (targetWidth <= 0) return@withContextGuard null
+        if (malformedPages.contains(pageIndex)) {
+            throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
+        }
         val bitmap = ensurePageBitmap(
             pageIndex,
             targetWidth,
@@ -335,6 +345,9 @@ class PdfDocumentRepository(
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
         request.cancellationSignal.throwIfCanceled()
         coroutineContext.ensureActive()
+        if (malformedPages.contains(request.pageIndex)) {
+            throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
+        }
         if (openSession.value == null) return@withContextGuard null
         val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
         val pageWidth = pageSize.width
@@ -393,22 +406,38 @@ class PdfDocumentRepository(
                 }
                 request.cancellationSignal.throwIfCanceled()
                 coroutineContext.ensureActive()
+                pageFailureCounts.remove(request.pageIndex)
                 bitmap
             } catch (throwable: Throwable) {
                 recycleBitmap(bitmap)
                 if (throwable is CancellationException) {
                     throw throwable
                 }
+                if (throwable is PdfRenderException) throw throwable
                 Log.e(TAG, "Failed to render tile for page ${request.pageIndex}", throwable)
+                val failureCount = pageFailureCounts.merge(request.pageIndex, 1) { previous, increment ->
+                    previous + increment
+                } ?: 1
+                val isMalformed = throwable.isLikelyMalformedPageError()
+                val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
                 reportNonFatal(
                     throwable,
                     mapOf(
                         "stage" to "renderTile",
                         "pageIndex" to request.pageIndex.toString(),
                         "scale" to request.scale.toString(),
-                        "tile" to "$clampedLeft,$clampedTop,$clampedRight,$clampedBottom"
+                        "tile" to "$clampedLeft,$clampedTop,$clampedRight,$clampedBottom",
+                        "malformed" to shouldMarkMalformed.toString(),
+                        "failures" to failureCount.toString()
                     )
                 )
+                if (shouldMarkMalformed) {
+                    markPageMalformed(request.pageIndex)
+                    throw PdfRenderException(
+                        PdfRenderException.Reason.MALFORMED_PAGE,
+                        cause = throwable
+                    )
+                }
                 null
             }
         } finally {
@@ -423,6 +452,7 @@ class PdfDocumentRepository(
         renderScope.launch {
             indices.forEach { index ->
                 if (index in 0 until session.pageCount) {
+                    if (malformedPages.contains(index)) return@forEach
                     // Avoid blocking foreground renders if decoding is already busy.
                     try {
                         ensurePageBitmap(
@@ -432,10 +462,14 @@ class PdfDocumentRepository(
                             allowSkippingIfBusy = true,
                         )
                     } catch (render: PdfRenderException) {
-                        if (render.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
-                            Log.w(TAG, "Skipping oversized page prefetch for index $index")
-                        } else {
-                            throw render
+                        when (render.reason) {
+                            PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                                Log.w(TAG, "Skipping oversized page prefetch for index $index")
+                            }
+
+                            PdfRenderException.Reason.MALFORMED_PAGE -> {
+                                Log.w(TAG, "Skipping malformed page prefetch for index $index")
+                            }
                         }
                     }
                 }
@@ -449,6 +483,7 @@ class PdfDocumentRepository(
         renderScope.launch {
             indices.forEach { pageIndex ->
                 if (pageIndex in 0 until session.pageCount) {
+                    if (malformedPages.contains(pageIndex)) return@forEach
                     val pageSize = getPageSizeInternal(pageIndex) ?: return@forEach
                     val requests = tileFractions
                         .map { fraction -> fraction.toPageRect(pageSize) }
@@ -458,10 +493,14 @@ class PdfDocumentRepository(
                         try {
                             renderTile(request)?.let { bitmap -> recycleBitmap(bitmap) }
                         } catch (render: PdfRenderException) {
-                            if (render.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
-                                Log.w(TAG, "Skipping oversized tile preload for page ${request.pageIndex}")
-                            } else {
-                                throw render
+                            when (render.reason) {
+                                PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                                    Log.w(TAG, "Skipping oversized tile preload for page ${request.pageIndex}")
+                                }
+
+                                PdfRenderException.Reason.MALFORMED_PAGE -> {
+                                    Log.w(TAG, "Skipping malformed tile preload for page ${request.pageIndex}")
+                                }
                             }
                         } catch (_: CancellationException) {
                             return@launch
@@ -763,17 +802,34 @@ class PdfDocumentRepository(
                 }
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
                 bitmapCache.put(key, bitmap)
+                pageFailureCounts.remove(pageIndex)
                 bitmap
             } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                if (throwable is PdfRenderException) throw throwable
                 Log.e(TAG, "Failed to render page $pageIndex", throwable)
+                val failureCount = pageFailureCounts.merge(pageIndex, 1) { previous, increment ->
+                    previous + increment
+                } ?: 1
+                val isMalformed = throwable.isLikelyMalformedPageError()
+                val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
                 reportNonFatal(
                     throwable,
                     mapOf(
                         "stage" to "renderPage",
                         "pageIndex" to pageIndex.toString(),
-                        "targetWidth" to targetWidth.toString()
+                        "targetWidth" to targetWidth.toString(),
+                        "malformed" to shouldMarkMalformed.toString(),
+                        "failures" to failureCount.toString()
                     )
                 )
+                if (shouldMarkMalformed) {
+                    markPageMalformed(pageIndex)
+                    throw PdfRenderException(
+                        PdfRenderException.Reason.MALFORMED_PAGE,
+                        cause = throwable
+                    )
+                }
                 null
             } finally {
                 updateRenderProgress(PdfRenderProgress.Idle)
@@ -814,6 +870,38 @@ class PdfDocumentRepository(
         return Rect(left, top, right, bottom)
     }
 
+    private fun markPageMalformed(pageIndex: Int) {
+        pageFailureCounts.remove(pageIndex)
+        if (malformedPages.add(pageIndex)) {
+            Log.w(TAG, "Marking page $pageIndex as malformed; subsequent renders will be skipped")
+        }
+    }
+
+    private fun Throwable.isLikelyMalformedPageError(): Boolean {
+        if (this is OutOfMemoryError) return false
+        val message = message?.lowercase(Locale.US).orEmpty()
+        if (message.isNotEmpty()) {
+            val keywords = listOf("malformed", "invalid", "corrupt", "corrupted", "parse", "stream")
+            if (keywords.any { keyword -> keyword in message }) {
+                return true
+            }
+            if ((this is IllegalArgumentException || this is IllegalStateException || this is RuntimeException) &&
+                (message.contains("nativerenderpagebitmap") || message.contains("nativegetbitmap") || message.contains("nativeopenpage"))
+            ) {
+                return true
+            }
+        }
+        val pdfiumFrame = stackTrace.firstOrNull { frame ->
+            frame.className.contains("Pdfium", ignoreCase = true) ||
+                frame.className.contains("PdfDocument", ignoreCase = true)
+        }
+        if (pdfiumFrame != null && (this is IllegalArgumentException || this is IllegalStateException)) {
+            return true
+        }
+        val cause = cause ?: return false
+        return cause.isLikelyMalformedPageError()
+    }
+
     private fun ensureWorkerThread() {
         val mainLooper = Looper.getMainLooper()
         if (mainLooper != null && Thread.currentThread() == mainLooper.thread) {
@@ -836,6 +924,8 @@ class PdfDocumentRepository(
             }
         }
         openSession.value = null
+        malformedPages.clear()
+        pageFailureCounts.clear()
         repairedDocumentFile?.let { file ->
             if (file.exists() && !file.delete()) {
                 Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
