@@ -178,7 +178,8 @@ import kotlinx.coroutines.withContext
 private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
 private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
-private const val THUMBNAIL_TARGET_WIDTH = 320
+private val THUMBNAIL_WIDTH = 96.dp
+private val THUMBNAIL_HEIGHT = 128.dp
 private const val PAGE_RENDER_PARALLELISM = 2
 private const val THUMBNAIL_PARALLELISM = 2
 private const val VIEWPORT_WIDTH_DEBOUNCE_MS = 120L
@@ -2134,16 +2135,20 @@ private fun ThumbnailItem(
     onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val density = LocalDensity.current
+    val targetWidthPx = remember(density) {
+        with(density) { THUMBNAIL_WIDTH.roundToPx().coerceAtLeast(1) }
+    }
     var thumbnail by remember(documentId, pageIndex) { mutableStateOf<Bitmap?>(null) }
     val latestRender by rememberUpdatedState(renderPage)
 
-    LaunchedEffect(documentId, pageIndex) {
+    LaunchedEffect(documentId, pageIndex, targetWidthPx) {
         if (documentId == null) {
             thumbnail = null
             return@LaunchedEffect
         }
         val rendered = withContext(thumbnailDispatcher) {
-            latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH, RenderWorkQueue.Priority.THUMBNAIL)
+            latestRender(pageIndex, targetWidthPx, RenderWorkQueue.Priority.THUMBNAIL)
         }
         // As with the main page bitmaps we avoid recycling the previous thumbnail here to
         // keep the draw pipeline stable. The DisposableEffect below cleans up once the
@@ -2164,8 +2169,8 @@ private fun ThumbnailItem(
     val outlineColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     val elevation = if (isSelected) 8.dp else 2.dp
     val baseModifier = modifier
-        .width(96.dp)
-        .height(128.dp)
+        .width(THUMBNAIL_WIDTH)
+        .height(THUMBNAIL_HEIGHT)
         .clip(MaterialTheme.shapes.medium)
         .background(MaterialTheme.colorScheme.surfaceColorAtElevation(elevation))
         .border(
