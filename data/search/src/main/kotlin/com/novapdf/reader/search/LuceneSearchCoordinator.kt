@@ -17,10 +17,11 @@ import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -90,7 +91,7 @@ class LuceneSearchCoordinator(
     }
 ) : DocumentSearchCoordinator {
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
+    private val indexDispatcher = createIndexDispatcher(dispatchers.io)
 
     private val scope = scopeProvider(indexDispatcher)
     private val analyzer = StandardAnalyzer()
@@ -107,6 +108,20 @@ class LuceneSearchCoordinator(
     }.getOrNull()
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun createIndexDispatcher(base: CoroutineDispatcher): CoroutineDispatcher {
+        return try {
+            base.limitedParallelism(INDEX_POOL_PARALLELISM)
+        } catch (error: UnsupportedOperationException) {
+            Log.w(
+                TAG,
+                "Unable to limit parallelism for provided dispatcher; falling back to Dispatchers.IO",
+                error
+            )
+            Dispatchers.IO.limitedParallelism(INDEX_POOL_PARALLELISM)
+        }
+    }
 
     override fun prepare(session: PdfDocumentSession): Job? {
         prepareJob?.cancel()
