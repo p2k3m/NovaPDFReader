@@ -53,6 +53,8 @@
     <string name="legacy_error_loading">Something went wrong while opening the PDF.</string>
     <string name="legacy_retry">Try again</string>
     <string name="legacy_pdf_page">Page %1$d</string>
+    <string name="reader_page_content_description">Page %1$d of %2$d</string>
+    <string name="reader_page_announcement">Showing page %1$d of %2$d</string>
     <string name="search_results_count">Matches: %1$d</string>
     <string name="adaptive_flow_summary_title">Adaptive Flow</string>
     <string name="adaptive_flow_summary_description">Speed: %1$.0f pages/min · Sensitivity: %2$.1f</string>
