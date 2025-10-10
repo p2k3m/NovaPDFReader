@@ -50,6 +50,9 @@ open class ReaderActivity : ComponentActivity() {
     private var legacyRoot: View? = null
     private var legacyLayoutManager: LinearLayoutManager? = null
     private var legacyLastFocusedPage: Int = -1
+    private val legacyRecycledViewPool = RecyclerView.RecycledViewPool().apply {
+        setMaxRecycledViews(0, 4)
+    }
 
     private val openDocumentLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.openDocument(it) }
@@ -192,6 +195,8 @@ open class ReaderActivity : ComponentActivity() {
         recyclerView.layoutManager = layoutManager
         val adapter = LegacyPdfPageAdapter(this, lifecycleScope, viewModel)
         legacyAdapter = adapter
+        recyclerView.setHasFixedSize(true)
+        recyclerView.setRecycledViewPool(legacyRecycledViewPool)
         recyclerView.adapter = adapter
         recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
