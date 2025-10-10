@@ -162,6 +162,7 @@ class PdfDocumentRepository(
         0L
     }
     private val pdfiumCore = PdfiumCore(appContext)
+    private val pdfiumCallVerifier = PdfiumCallVerifier()
     private val pdfiumPagesField by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
             PdfDocument::class.java.getDeclaredField("mNativePagesPtr").apply {
@@ -320,7 +321,9 @@ class PdfDocumentRepository(
                 activePfd = repairedPfd
                 repairedDocument
             }
-            val pageCount = pdfiumCore.getPageCount(document)
+            val pageCount = withPdfiumDocument(document, sourceUri) {
+                pdfiumCore.getPageCount(document)
+            }
             val session = PdfDocumentSession(
                 documentId = uri.toString(),
                 uri = repairedDocumentFile?.toUri() ?: uri,
@@ -422,7 +425,7 @@ class PdfDocumentRepository(
             try {
                 request.cancellationSignal.throwIfCanceled()
                 coroutineContext.ensureActive()
-                withPdfiumPage(activeSession.document, request.pageIndex) {
+                withPdfiumPage(activeSession, request.pageIndex) {
                     pdfiumCore.renderPageBitmap(
                         activeSession.document,
                         bitmap,
@@ -728,7 +731,7 @@ class PdfDocumentRepository(
         return pageSizeLock.withLock {
             pageSizeCache[pageIndex]?.let { return@withLock it }
             try {
-                withPdfiumPage(session.document, pageIndex) {
+                withPdfiumPage(session, pageIndex) {
                     val width = pdfiumCore.getPageWidthPoint(session.document, pageIndex)
                     val height = pdfiumCore.getPageHeightPoint(session.document, pageIndex)
                     val size = Size(width, height)
@@ -818,7 +821,7 @@ class PdfDocumentRepository(
                 val bitmap = obtainBitmap(targetWidth, targetHeight, config)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 cancellationSignal.throwIfCanceled()
-                withPdfiumPage(session.document, pageIndex) {
+                withPdfiumPage(session, pageIndex) {
                     pdfiumCore.renderPageBitmap(
                         session.document,
                         bitmap,
@@ -948,7 +951,9 @@ class PdfDocumentRepository(
         updateRenderProgress(PdfRenderProgress.Idle)
         openSession.value?.let { session ->
             try {
-                pdfiumCore.closeDocument(session.document)
+                withPdfiumDocument(session.document, session.documentId) {
+                    pdfiumCore.closeDocument(session.document)
+                }
                 session.fileDescriptor.close()
             } catch (_: IOException) {
             }
@@ -1248,19 +1253,35 @@ class PdfDocumentRepository(
     }
 
     private inline fun <T> withPdfiumPage(
-        document: PdfDocument,
+        session: PdfDocumentSession,
         pageIndex: Int,
         block: () -> T,
     ): T {
         var opened = false
+        return withPdfiumDocument(session.document, session.documentId) {
+            try {
+                pdfiumCore.openPage(session.document, pageIndex)
+                opened = true
+                block()
+            } finally {
+                if (opened) {
+                    closePdfiumPage(session.document, pageIndex)
+                }
+            }
+        }
+    }
+
+    private inline fun <T> withPdfiumDocument(
+        document: PdfDocument,
+        documentToken: Any?,
+        block: () -> T,
+    ): T {
+        ensureWorkerThread()
+        pdfiumCallVerifier.onEnter(document, documentToken)
         return try {
-            pdfiumCore.openPage(document, pageIndex)
-            opened = true
             block()
         } finally {
-            if (opened) {
-                closePdfiumPage(document, pageIndex)
-            }
+            pdfiumCallVerifier.onExit(document)
         }
     }
 
@@ -1973,6 +1994,38 @@ class PdfDocumentRepository(
     private fun CancellationSignal?.throwIfCanceled() {
         if (this?.isCanceled == true) {
             throw CancellationException("PDF operation cancelled")
+        }
+    }
+
+    private class PdfiumCallVerifier {
+        private val lock = Any()
+        private val activeDocuments = IdentityHashMap<PdfDocument, String>()
+
+        fun onEnter(document: PdfDocument, token: Any?) {
+            val description = describe(document, token)
+            synchronized(lock) {
+                if (activeDocuments.containsKey(document)) {
+                    val active = activeDocuments[document]
+                    throw IllegalStateException(
+                        "Pdfium JNI call re-entered concurrently for document ${active ?: description}"
+                    )
+                }
+                activeDocuments[document] = description
+            }
+        }
+
+        fun onExit(document: PdfDocument) {
+            synchronized(lock) {
+                val removed = activeDocuments.remove(document)
+                if (removed == null) {
+                    Log.w(TAG, "Pdfium document ${describe(document, null)} was not tracked by verifier on exit")
+                }
+            }
+        }
+
+        private fun describe(document: PdfDocument, token: Any?): String {
+            val provided = token?.toString()
+            return provided ?: "PdfDocument@${Integer.toHexString(System.identityHashCode(document))}"
         }
     }
 }
