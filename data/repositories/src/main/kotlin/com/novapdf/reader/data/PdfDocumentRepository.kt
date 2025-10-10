@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
@@ -73,6 +74,7 @@ private const val PRE_REPAIR_MIN_SIZE_BYTES = 2L * 1024L * 1024L
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val TAG = "PdfDocumentRepository"
+private const val BITMAP_POOL_REPORT_INTERVAL = 64
 
 class PdfOpenException(
     val reason: Reason,
@@ -128,7 +130,11 @@ class PdfDocumentRepository(
     private val maxCacheBytes = calculateCacheBudget()
     private val pdfiumCore = PdfiumCore(appContext)
     private val bitmapCache = createBitmapCache()
-    private val bitmapPool = BitmapPool(maxCacheBytes / 2)
+    private val bitmapPool = BitmapPool(
+        maxBytes = maxCacheBytes / 2,
+        reportInterval = BITMAP_POOL_REPORT_INTERVAL,
+        onSnapshot = ::reportBitmapPoolMetrics,
+    )
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
@@ -951,10 +957,35 @@ class PdfDocumentRepository(
         updateRenderProgress(progress)
     }
 
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun reportBitmapPoolMetricsForTesting() {
+        bitmapPool.forceReport()
+    }
+
     private fun calculateCacheBudget(): Long {
         val runtimeLimit = Runtime.getRuntime().maxMemory() / 4
         val clamped = min(CACHE_BUDGET_BYTES, runtimeLimit)
         return max(1L, clamped)
+    }
+
+    private fun reportBitmapPoolMetrics(snapshot: BitmapPoolSnapshot) {
+        val hitPercentage = snapshot.hitRate * 100.0
+        val message = String.format(
+            Locale.US,
+            "bitmap_pool requests=%d hits=%d misses=%d hitRate=%.2f%% releases=%d rejects=%d evictions=%d poolSize=%d poolBytes=%d/%d",
+            snapshot.requests,
+            snapshot.hits,
+            snapshot.misses,
+            hitPercentage,
+            snapshot.releases,
+            snapshot.rejects,
+            snapshot.evictions,
+            snapshot.poolSize,
+            snapshot.poolBytes,
+            snapshot.maxPoolBytes,
+        )
+        Log.d(TAG, message)
+        crashReporter?.logBreadcrumb(message)
     }
 
     private fun safeByteCount(bitmap: Bitmap): Int = try {
@@ -963,8 +994,27 @@ class PdfDocumentRepository(
         0
     }
 
+    private fun safeAllocationByteCount(bitmap: Bitmap): Int = try {
+        bitmap.allocationByteCount
+    } catch (_: IllegalStateException) {
+        safeByteCount(bitmap)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bytesPerPixel(config: Bitmap.Config): Int = when (config) {
+        Bitmap.Config.ALPHA_8 -> 1
+        Bitmap.Config.RGB_565 -> 2
+        Bitmap.Config.ARGB_4444 -> 2
+        Bitmap.Config.ARGB_8888 -> 4
+        Bitmap.Config.RGBA_F16 -> 8
+        Bitmap.Config.RGBA_1010102 -> 4
+        Bitmap.Config.HARDWARE -> throw IllegalArgumentException("Bitmap.Config.HARDWARE is not supported by the pool")
+        else -> 4
+    }
+
     private fun obtainBitmap(width: Int, height: Int, config: Bitmap.Config): Bitmap {
-        return bitmapPool.acquire(width, height, config) ?: Bitmap.createBitmap(width, height, config)
+        return bitmapPool.acquire(width, height, config)
+            ?: Bitmap.createBitmap(width, height, config)
     }
 
     private fun recycleBitmap(bitmap: Bitmap) {
@@ -1186,81 +1236,251 @@ class PdfDocumentRepository(
         protected abstract fun cleanUpInternal()
     }
 
-    private inner class BitmapPool(maxBytes: Long) {
+    private inner class BitmapPool(
+        maxBytes: Long,
+        private val reportInterval: Int,
+        private val onSnapshot: (BitmapPoolSnapshot) -> Unit,
+    ) {
         private val maxPoolBytes = maxBytes.coerceAtLeast(0L)
         private val mutex = Mutex()
-        private val pool = ArrayDeque<Bitmap>()
+        private val buckets = java.util.TreeMap<Int, ArrayDeque<Bitmap>>()
         private val identities = IdentityHashMap<Bitmap, Bitmap>()
+        private val metrics = BitmapPoolMetricsTracker(maxPoolBytes, reportInterval, onSnapshot)
         private var totalBytes: Long = 0
+        private var bitmapCount: Int = 0
 
         fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap? {
             if (maxPoolBytes <= 0L) {
+                metrics.onAcquire(hit = false, totalBytes = 0L, poolSize = 0)
                 return null
             }
-            return mutex.withLockBlocking(this) {
-                val iterator = pool.iterator()
-                while (iterator.hasNext()) {
-                    val candidate = iterator.next()
-                    val reclaimedBytes = safeByteCount(candidate).takeIf { it > 0 }?.toLong() ?: 0L
-                    if (candidate.isRecycled) {
-                        iterator.remove()
-                        identities.remove(candidate)
-                        totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
-                        continue
-                    }
-                    if (!candidate.isMutable || candidate.config != config) {
-                        continue
-                    }
-                    if (candidate.width == width && candidate.height == height) {
-                        iterator.remove()
-                        identities.remove(candidate)
-                        totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
-                        return@withLockBlocking candidate
-                    }
-                }
-                null
+            var bitmap: Bitmap? = null
+            var hit = false
+            var totalBytesSnapshot = 0L
+            var poolSizeSnapshot = 0
+            mutex.withLockBlocking(this) {
+                bitmap = removeCandidate(width, height, config)
+                hit = bitmap != null
+                totalBytesSnapshot = totalBytes
+                poolSizeSnapshot = bitmapCount
             }
+            metrics.onAcquire(hit, totalBytesSnapshot, poolSizeSnapshot)
+            return bitmap
         }
 
         fun release(bitmap: Bitmap): Boolean {
             if (maxPoolBytes <= 0L) {
+                metrics.onRelease(false, totalBytes = 0L, poolSize = 0)
                 return false
             }
-            if (bitmap.isRecycled || !bitmap.isMutable || bitmap.config != Bitmap.Config.ARGB_8888) {
-                return false
-            }
-            val bytes = safeByteCount(bitmap).takeIf { it > 0 }?.toLong() ?: return false
-            return mutex.withLockBlocking(this) {
+            var accepted = false
+            var totalBytesSnapshot = 0L
+            var poolSizeSnapshot = 0
+            mutex.withLockBlocking(this) {
+                totalBytesSnapshot = totalBytes
+                poolSizeSnapshot = bitmapCount
+                if (bitmap.isRecycled) {
+                    return@withLockBlocking
+                }
+                val config = bitmap.config ?: return@withLockBlocking
+                if (!bitmap.isMutable || config == Bitmap.Config.HARDWARE) {
+                    return@withLockBlocking
+                }
+                val capacity = safeAllocationByteCount(bitmap)
+                if (capacity <= 0) {
+                    return@withLockBlocking
+                }
                 if (identities.containsKey(bitmap)) {
-                    return@withLockBlocking true
+                    accepted = true
+                    return@withLockBlocking
                 }
-                if (totalBytes + bytes > maxPoolBytes) {
-                    return@withLockBlocking false
+                if (totalBytes + capacity > maxPoolBytes) {
+                    return@withLockBlocking
                 }
-                pool.addLast(bitmap)
+                val bucket = buckets.getOrPut(capacity) { ArrayDeque() }
+                bucket.addLast(bitmap)
                 identities[bitmap] = bitmap
-                totalBytes += bytes
-                true
+                totalBytes += capacity
+                bitmapCount += 1
+                accepted = true
+                totalBytesSnapshot = totalBytes
+                poolSizeSnapshot = bitmapCount
             }
+            metrics.onRelease(accepted, totalBytesSnapshot, poolSizeSnapshot)
+            return accepted
         }
 
         fun clear() {
             val drained = mutableListOf<Bitmap>()
+            var evicted = 0
             mutex.withLockBlocking(this) {
-                if (pool.isEmpty()) {
+                if (buckets.isEmpty()) {
                     return@withLockBlocking
                 }
-                drained.addAll(pool)
-                pool.clear()
+                buckets.values.forEach { bucket ->
+                    drained.addAll(bucket)
+                }
+                evicted = drained.size
+                buckets.clear()
                 identities.clear()
                 totalBytes = 0
+                bitmapCount = 0
             }
-            drained.forEach { bitmap ->
-                if (!bitmap.isRecycled) {
-                    bitmap.recycle()
+            if (evicted > 0) {
+                metrics.onEvict(evicted, totalBytes = 0L, poolSize = 0)
+            }
+            drained.forEach { candidate ->
+                if (!candidate.isRecycled) {
+                    candidate.recycle()
                 }
             }
         }
+
+        fun forceReport() {
+            val (totalBytesSnapshot, poolSizeSnapshot) = mutex.withLockBlocking(this) {
+                totalBytes to bitmapCount
+            }
+            metrics.forceReport(totalBytesSnapshot, poolSizeSnapshot)
+        }
+
+        private fun removeCandidate(width: Int, height: Int, config: Bitmap.Config): Bitmap? {
+            val requiredBytes = requiredBytes(width, height, config)
+            var entry = buckets.ceilingEntry(requiredBytes)
+            while (entry != null) {
+                val bucket = entry.value
+                while (bucket.isNotEmpty()) {
+                    val candidate = bucket.removeLast()
+                    bitmapCount = (bitmapCount - 1).coerceAtLeast(0)
+                    val reclaimedBytes = safeAllocationByteCount(candidate)
+                        .takeIf { it > 0 }
+                        ?.toLong()
+                        ?: 0L
+                    totalBytes = (totalBytes - reclaimedBytes).coerceAtLeast(0L)
+                    identities.remove(candidate)
+                    if (candidate.isRecycled) {
+                        continue
+                    }
+                    val candidateConfig = candidate.config ?: continue
+                    if (!candidate.isMutable || candidateConfig == Bitmap.Config.HARDWARE) {
+                        candidate.recycle()
+                        continue
+                    }
+                    if (candidateConfig != config) {
+                        candidate.recycle()
+                        continue
+                    }
+                    try {
+                        if (candidate.width != width || candidate.height != height) {
+                            candidate.reconfigure(width, height, config)
+                        }
+                        candidate.eraseColor(Color.TRANSPARENT)
+                        return candidate
+                    } catch (error: Throwable) {
+                        candidate.recycle()
+                    }
+                }
+                if (bucket.isEmpty()) {
+                    buckets.remove(entry.key)
+                }
+                entry = buckets.ceilingEntry(requiredBytes)
+            }
+            return null
+        }
+
+        private fun requiredBytes(width: Int, height: Int, config: Bitmap.Config): Int {
+            val pixels = width.toLong() * height.toLong()
+            val bytesPerPixel = bytesPerPixel(config)
+            val total = (pixels * bytesPerPixel).coerceAtMost(Int.MAX_VALUE.toLong())
+            return total.toInt()
+        }
+    }
+
+    private inner class BitmapPoolMetricsTracker(
+        private val maxBytes: Long,
+        private val reportInterval: Int,
+        private val reporter: (BitmapPoolSnapshot) -> Unit,
+    ) {
+        private var acquireCount = 0L
+        private var hitCount = 0L
+        private var missCount = 0L
+        private var releaseCount = 0L
+        private var rejectCount = 0L
+        private var evictionCount = 0L
+        private var lastReportedOperation = 0L
+
+        fun onAcquire(hit: Boolean, totalBytes: Long, poolSize: Int) {
+            acquireCount += 1
+            if (hit) {
+                hitCount += 1
+            } else {
+                missCount += 1
+            }
+            maybeReport(totalBytes, poolSize, force = false)
+        }
+
+        fun onRelease(accepted: Boolean, totalBytes: Long, poolSize: Int) {
+            releaseCount += 1
+            if (!accepted) {
+                rejectCount += 1
+                maybeReport(totalBytes, poolSize, force = true)
+            } else {
+                maybeReport(totalBytes, poolSize, force = false)
+            }
+        }
+
+        fun onEvict(evicted: Int, totalBytes: Long, poolSize: Int) {
+            if (evicted > 0) {
+                evictionCount += evicted
+                maybeReport(totalBytes, poolSize, force = true)
+            }
+        }
+
+        fun forceReport(totalBytes: Long, poolSize: Int) {
+            if (acquireCount == 0L && releaseCount == 0L && evictionCount == 0L) {
+                return
+            }
+            publishSnapshot(totalBytes, poolSize)
+        }
+
+        private fun maybeReport(totalBytes: Long, poolSize: Int, force: Boolean) {
+            val operations = acquireCount + releaseCount
+            if (!force && operations - lastReportedOperation < reportInterval) {
+                return
+            }
+            publishSnapshot(totalBytes, poolSize)
+        }
+
+        private fun publishSnapshot(totalBytes: Long, poolSize: Int) {
+            lastReportedOperation = acquireCount + releaseCount
+            reporter(
+                BitmapPoolSnapshot(
+                    requests = acquireCount,
+                    hits = hitCount,
+                    misses = missCount,
+                    releases = releaseCount,
+                    rejects = rejectCount,
+                    evictions = evictionCount,
+                    poolSize = poolSize,
+                    poolBytes = totalBytes,
+                    maxPoolBytes = maxBytes,
+                )
+            )
+        }
+    }
+
+    data class BitmapPoolSnapshot(
+        val requests: Long,
+        val hits: Long,
+        val misses: Long,
+        val releases: Long,
+        val rejects: Long,
+        val evictions: Long,
+        val poolSize: Int,
+        val poolBytes: Long,
+        val maxPoolBytes: Long,
+    ) {
+        val hitRate: Double
+            get() = if (requests <= 0L) 0.0 else hits.toDouble() / requests.toDouble()
     }
 
     private inner class CaffeineBitmapCache(maxCacheBytes: Long) : BitmapCache() {
