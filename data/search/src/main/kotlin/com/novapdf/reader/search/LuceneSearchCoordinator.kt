@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.CancellationSignal
 import android.os.Process
 import android.util.Base64
 import android.util.Log
@@ -15,12 +16,15 @@ import com.novapdf.reader.cache.PdfCacheRoot
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
@@ -32,6 +36,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withTimeoutOrNull
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
@@ -61,6 +68,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import kotlin.math.max
 import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 import kotlin.io.buffered
 import kotlin.jvm.Volatile
@@ -70,6 +78,9 @@ private const val OCR_RENDER_TARGET_WIDTH = 1280
 private const val MAX_INDEXED_PAGE_COUNT = 400
 private val WHOLE_PAGE_RECT = RectSnapshot(0f, 0f, 1f, 1f)
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
+private const val OCR_BATCH_SIZE = 4
+private const val OCR_SCROLL_GUARD_PAGE_LIMIT = 4
+private const val OCR_SCROLL_GUARD_IDLE_TIMEOUT_MS = 1_000L
 
 private data class PageSearchContent(
     val text: String,
@@ -91,6 +102,14 @@ private data class OcrPageResult(
     val fallbackRegions: List<RectSnapshot>,
     val bitmapWidth: Int,
     val bitmapHeight: Int
+)
+
+private data class OcrFallbackRequest(
+    val pageIndex: Int,
+    val coordinateWidth: Int,
+    val coordinateHeight: Int,
+    val needsText: Boolean,
+    val needsBounds: Boolean,
 )
 
 private data class DocumentIndexShard(
@@ -386,32 +405,95 @@ class LuceneSearchCoordinator(
         } catch (io: IOException) {
             Log.w(TAG, "Failed to extract text with PDFBox", io)
         }
-        contents.forEachIndexed { index, content ->
-            val needsOcrForText = content.text.isBlank()
-            val needsOcrForBounds = content.runs.isEmpty()
-            if (!needsOcrForText && !needsOcrForBounds) {
-                return@forEachIndexed
-            }
-            val fallback = runCatching {
-                performOcr(index, content.coordinateWidth, content.coordinateHeight)
-            }.onFailure {
-                Log.w(TAG, "OCR fallback failed for page $index", it)
-            }.getOrNull()
-            if (fallback != null) {
-                contents[index] = when {
-                    needsOcrForText -> fallback
-                    else -> content.copy(
-                        runs = fallback.runs.takeIf { it.isNotEmpty() } ?: content.runs,
-                        fallbackRegions = if (fallback.fallbackRegions.isNotEmpty()) {
-                            fallback.fallbackRegions
-                        } else {
-                            content.fallbackRegions
-                        }
-                    )
+        val pendingOcr = buildList {
+            contents.forEachIndexed { index, content ->
+                val needsOcrForText = content.text.isBlank()
+                val needsOcrForBounds = content.runs.isEmpty()
+                if (!needsOcrForText && !needsOcrForBounds) {
+                    return@forEachIndexed
                 }
+                add(
+                    OcrFallbackRequest(
+                        pageIndex = index,
+                        coordinateWidth = content.coordinateWidth,
+                        coordinateHeight = content.coordinateHeight,
+                        needsText = needsOcrForText,
+                        needsBounds = needsOcrForBounds,
+                    )
+                )
             }
         }
+        applyOcrFallbacks(contents, pendingOcr)
         return contents
+    }
+
+    private suspend fun applyOcrFallbacks(
+        contents: MutableList<PageSearchContent>,
+        pending: List<OcrFallbackRequest>,
+    ) {
+        if (pending.isEmpty()) return
+        for (batch in pending.chunked(OCR_BATCH_SIZE)) {
+            coroutineContext.ensureActive()
+            waitForRenderIdleIfNeeded(batch)
+            for (request in batch) {
+                coroutineContext.ensureActive()
+                val fallback = runCatching {
+                    performOcr(request.pageIndex, request.coordinateWidth, request.coordinateHeight)
+                }.onFailure {
+                    Log.w(TAG, "OCR fallback failed for page ${request.pageIndex}", it)
+                }.getOrNull() ?: continue
+                val existing = contents[request.pageIndex]
+                contents[request.pageIndex] = mergeOcrFallback(existing, fallback, request)
+            }
+        }
+    }
+
+    private fun mergeOcrFallback(
+        original: PageSearchContent,
+        fallback: PageSearchContent,
+        request: OcrFallbackRequest,
+    ): PageSearchContent {
+        val text = if (request.needsText && fallback.text.isNotBlank()) {
+            fallback.text
+        } else {
+            original.text
+        }
+        val normalized = if (request.needsText && fallback.normalizedText.isNotBlank()) {
+            fallback.normalizedText
+        } else {
+            original.normalizedText
+        }
+        val runs = if (request.needsBounds && fallback.runs.isNotEmpty()) {
+            fallback.runs
+        } else {
+            original.runs
+        }
+        val fallbackRegions = if (fallback.fallbackRegions.isNotEmpty()) {
+            fallback.fallbackRegions
+        } else {
+            original.fallbackRegions
+        }
+        return original.copy(
+            text = text,
+            normalizedText = normalized,
+            runs = runs,
+            fallbackRegions = fallbackRegions,
+        )
+    }
+
+    private suspend fun waitForRenderIdleIfNeeded(batch: List<OcrFallbackRequest>) {
+        if (batch.none { it.pageIndex < OCR_SCROLL_GUARD_PAGE_LIMIT }) return
+        withTimeoutOrNull(OCR_SCROLL_GUARD_IDLE_TIMEOUT_MS) {
+            pdfRepository.renderProgress.first { progress ->
+                !progress.isRenderingGuardedPage()
+            }
+        }
+    }
+
+    private fun PdfRenderProgress.isRenderingGuardedPage(): Boolean {
+        return this is PdfRenderProgress.Rendering &&
+            pageIndex < OCR_SCROLL_GUARD_PAGE_LIMIT &&
+            progress < 1f
     }
 
     private suspend fun performOcr(
@@ -419,8 +501,23 @@ class LuceneSearchCoordinator(
         pageWidth: Int,
         pageHeight: Int
     ): PageSearchContent? = withContext(indexDispatcher) {
-        val bitmap = pdfRepository.renderPage(pageIndex, OCR_RENDER_TARGET_WIDTH) ?: return@withContext null
+        val cancellationSignal = CancellationSignal()
+        val cancelHandle: DisposableHandle = coroutineContext.job.invokeOnCompletion { cause ->
+            if (cause is CancellationException) {
+                cancellationSignal.cancel()
+            }
+        }
+        val bitmap = try {
+            pdfRepository.renderPage(
+                pageIndex,
+                OCR_RENDER_TARGET_WIDTH,
+                cancellationSignal = cancellationSignal,
+            )
+        } finally {
+            cancelHandle.dispose()
+        } ?: return@withContext null
         try {
+            ensureActive()
             val recognized = recognizeText(bitmap)
             val normalizedText = normalizeSearchQuery(recognized.text)
             val pageWidthF = pageWidth.toFloat()
@@ -637,7 +734,6 @@ class LuceneSearchCoordinator(
             )
             return@suspendCancellableCoroutine
         }
-
         val image = InputImage.fromBitmap(bitmap, 0)
         recognizer.process(image)
             .addOnSuccessListener { result ->
