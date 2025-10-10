@@ -86,7 +86,8 @@ data class PdfViewerUiState(
     val fontScale: Float = 1f,
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList(),
-    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle
+    val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
+    val malformedPages: Set<Int> = emptySet()
 )
 
 private data class DocumentContext(
@@ -206,15 +207,19 @@ open class PdfViewerViewModel @Inject constructor(
                 } else {
                     emptyList()
                 }
-                _uiState.value = _uiState.value.copy(
+                val previous = _uiState.value
+                val documentId = session?.documentId
+                val shouldResetMalformed = previous.documentId != documentId
+                _uiState.value = previous.copy(
                     readingSpeed = context.speed,
                     swipeSensitivity = context.sensitivity,
-                    documentId = session?.documentId,
+                    documentId = documentId,
                     pageCount = session?.pageCount ?: 0,
                     activeAnnotations = annotations,
                     bookmarks = bookmarks,
                     outline = context.outline,
-                    renderProgress = context.renderProgress
+                    renderProgress = context.renderProgress,
+                    malformedPages = if (shouldResetMalformed) emptySet() else previous.malformedPages
                 )
             }
         }
@@ -230,7 +235,10 @@ open class PdfViewerViewModel @Inject constructor(
                 if (targets.isNotEmpty() && !shouldThrottlePrefetch()) {
                     val width = viewportWidthPx
                     if (width > 0) {
-                        prefetchRequests.trySend(PrefetchRequest(targets, width)).isSuccess
+                        val sanitized = targets.filterNot(::isPageMalformed)
+                        if (sanitized.isNotEmpty()) {
+                            prefetchRequests.trySend(PrefetchRequest(sanitized, width)).isSuccess
+                        }
                     }
                 }
             }
@@ -495,7 +503,10 @@ open class PdfViewerViewModel @Inject constructor(
         if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
             val width = viewportWidthPx
             if (width > 0) {
-                prefetchRequests.trySend(PrefetchRequest(preloadTargets, width)).isSuccess
+                val targets = preloadTargets.filterNot(::isPageMalformed)
+                if (targets.isNotEmpty()) {
+                    prefetchRequests.trySend(PrefetchRequest(targets, width)).isSuccess
+                }
             }
         }
     }
@@ -505,34 +516,48 @@ open class PdfViewerViewModel @Inject constructor(
         targetWidth: Int,
         priority: RenderWorkQueue.Priority,
     ): Bitmap? {
+        if (isPageMalformed(index)) {
+            return null
+        }
         return renderQueue.submit(priority) {
+            if (isPageMalformed(index)) {
+                return@submit null
+            }
             val signal = CancellationSignal()
             val profile = renderProfileFor(priority)
             val result = renderPageUseCase(RenderPageRequest(index, targetWidth, profile), signal)
             result.getOrNull()?.bitmap ?: run {
                 val throwable = result.exceptionOrNull()
                 if (throwable is CancellationException) throw throwable
-                if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
-                    notifyPageTooLarge()
-                    val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
-                        suggestion in 1 until targetWidth
-                    }
-                    if (fallbackWidth != null) {
-                        val fallbackSignal = CancellationSignal()
-                        val fallbackResult = renderPageUseCase(
-                            RenderPageRequest(index, fallbackWidth, profile),
-                            fallbackSignal
-                        )
-                        fallbackResult.exceptionOrNull()?.let { error ->
-                            if (error is CancellationException) throw error
+                if (throwable is PdfRenderException) {
+                    return@run when (throwable.reason) {
+                        PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                            notifyPageTooLarge()
+                            val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
+                                suggestion in 1 until targetWidth
+                            }
+                            if (fallbackWidth != null) {
+                                val fallbackSignal = CancellationSignal()
+                                val fallbackResult = renderPageUseCase(
+                                    RenderPageRequest(index, fallbackWidth, profile),
+                                    fallbackSignal
+                                )
+                                fallbackResult.exceptionOrNull()?.let { error ->
+                                    if (error is CancellationException) throw error
+                                }
+                                fallbackResult.getOrNull()?.bitmap
+                            } else {
+                                null
+                            }
                         }
-                        fallbackResult.getOrNull()?.bitmap
-                    } else {
-                        null
+
+                        PdfRenderException.Reason.MALFORMED_PAGE -> {
+                            markPageMalformed(index)
+                            null
+                        }
                     }
-                } else {
-                    null
                 }
+                null
             }
         }
     }
@@ -549,33 +574,47 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
+        if (isPageMalformed(index)) {
+            return null
+        }
         return withContext(renderDispatcher) {
+            if (isPageMalformed(index)) {
+                return@withContext null
+            }
             val signal = CancellationSignal()
             val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
             result.getOrNull()?.bitmap ?: run {
                 val throwable = result.exceptionOrNull()
                 if (throwable is CancellationException) throw throwable
-                if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
-                    notifyPageTooLarge()
-                    val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
-                        suggestion in 0f..scale && suggestion < scale
-                    }
-                    if (fallbackScale != null) {
-                        val fallbackSignal = CancellationSignal()
-                        val fallbackResult = renderTileUseCase(
-                            RenderTileRequest(index, rect, fallbackScale),
-                            fallbackSignal
-                        )
-                        fallbackResult.exceptionOrNull()?.let { error ->
-                            if (error is CancellationException) throw error
+                if (throwable is PdfRenderException) {
+                    return@run when (throwable.reason) {
+                        PdfRenderException.Reason.PAGE_TOO_LARGE -> {
+                            notifyPageTooLarge()
+                            val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
+                                suggestion in 0f..scale && suggestion < scale
+                            }
+                            if (fallbackScale != null) {
+                                val fallbackSignal = CancellationSignal()
+                                val fallbackResult = renderTileUseCase(
+                                    RenderTileRequest(index, rect, fallbackScale),
+                                    fallbackSignal
+                                )
+                                fallbackResult.exceptionOrNull()?.let { error ->
+                                    if (error is CancellationException) throw error
+                                }
+                                fallbackResult.getOrNull()?.bitmap
+                            } else {
+                                null
+                            }
                         }
-                        fallbackResult.getOrNull()?.bitmap
-                    } else {
-                        null
+
+                        PdfRenderException.Reason.MALFORMED_PAGE -> {
+                            markPageMalformed(index)
+                            null
+                        }
                     }
-                } else {
-                    null
                 }
+                null
             }
         }
     }
@@ -597,13 +636,18 @@ open class PdfViewerViewModel @Inject constructor(
         viewportWidthPx = widthPx
         val preloadTargets = adaptiveFlowUseCase.preloadTargets.value
         if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
-            prefetchRequests.trySend(PrefetchRequest(preloadTargets, viewportWidthPx)).isSuccess
+            val targets = preloadTargets.filterNot(::isPageMalformed)
+            if (targets.isNotEmpty()) {
+                prefetchRequests.trySend(PrefetchRequest(targets, viewportWidthPx)).isSuccess
+            }
         }
     }
 
     fun prefetchPages(indices: List<Int>, widthPx: Int) {
         if (indices.isEmpty() || widthPx <= 0 || shouldThrottlePrefetch()) return
-        prefetchRequests.trySend(PrefetchRequest(indices, widthPx)).isSuccess
+        val targets = indices.filterNot(::isPageMalformed)
+        if (targets.isEmpty()) return
+        prefetchRequests.trySend(PrefetchRequest(targets, widthPx)).isSuccess
     }
 
     fun exportDocument(context: android.content.Context): Boolean {
@@ -673,6 +717,20 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun enqueueMessage(@StringRes messageRes: Int) {
         _messageEvents.tryEmit(UiMessage(messageRes = messageRes))
+    }
+
+    private fun isPageMalformed(pageIndex: Int): Boolean {
+        return pageIndex in _uiState.value.malformedPages
+    }
+
+    private fun markPageMalformed(pageIndex: Int) {
+        updateUiState { current ->
+            if (pageIndex in current.malformedPages) {
+                current
+            } else {
+                current.copy(malformedPages = current.malformedPages + pageIndex)
+            }
+        }
     }
 
     private fun notifyPageTooLarge() {

@@ -106,6 +106,7 @@
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_page_too_large">This page is too large to render at full resolution. Zoom reset to fit the screen.</string>
+    <string name="page_render_malformed_placeholder">We couldn’t render this page because the PDF is malformed.</string>
     <string name="error_no_browser">No browser found to open the repair link.</string>
     <string name="remote_pdf_download_started">Downloading PDF…</string>
     <string name="remote_pdf_download_failed">Unable to download the PDF.</string>

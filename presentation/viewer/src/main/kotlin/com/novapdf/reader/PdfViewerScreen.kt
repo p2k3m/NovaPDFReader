@@ -2272,6 +2272,9 @@ private fun PdfPageItem(
     var pageBitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(null) }
     var pageSize by remember(pageIndex) { mutableStateOf<Size?>(null) }
     var isLoading by remember(pageIndex) { mutableStateOf(false) }
+    val isMalformed = remember(state.malformedPages, pageIndex) {
+        pageIndex in state.malformedPages
+    }
 
     DisposableEffect(pageIndex) {
         onDispose {
@@ -2291,13 +2294,21 @@ private fun PdfPageItem(
         contentAlignment = Alignment.Center
     ) {
         val widthPx = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
-        LaunchedEffect(state.documentId, pageIndex, widthPx) {
+        LaunchedEffect(state.documentId, state.malformedPages, pageIndex, widthPx) {
             if (state.documentId == null) {
                 pageBitmap = null
                 pageSize = null
+                isLoading = false
                 return@LaunchedEffect
             }
             if (widthPx <= 0) return@LaunchedEffect
+            if (isMalformed) {
+                val size = withContext(pageRenderDispatcher) { latestRequest(pageIndex) }
+                pageSize = size
+                pageBitmap = null
+                isLoading = false
+                return@LaunchedEffect
+            }
             isLoading = true
             val (size, rendered) = withContext(pageRenderDispatcher) {
                 val requested = latestRequest(pageIndex)
@@ -2389,8 +2400,23 @@ private fun PdfPageItem(
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 )
-                if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                when {
+                    isMalformed -> {
+                        val placeholderText = stringResource(id = R.string.page_render_malformed_placeholder)
+                        Text(
+                            text = placeholderText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp)
+                        )
+                    }
+
+                    isLoading -> {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
                 }
             }
 
