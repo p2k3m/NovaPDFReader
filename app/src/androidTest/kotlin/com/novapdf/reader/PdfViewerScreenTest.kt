@@ -36,6 +36,7 @@ class PdfViewerScreenTest {
                     onStrokeFinished = {},
                     onSaveAnnotations = {},
                     onSearch = {},
+                    onCancelIndexing = {},
                     onToggleBookmark = {},
                     onOutlineDestinationSelected = {},
                     onExportDocument = { true },

@@ -19,6 +19,7 @@ import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -313,6 +314,7 @@ interface DocumentSearchUseCase {
     fun prepare(session: PdfDocumentSession)
     suspend fun search(session: PdfDocumentSession, query: String): List<SearchResult>
     fun dispose()
+    val indexingState: StateFlow<SearchIndexingState>
 }
 
 @Singleton
@@ -329,6 +331,9 @@ class DefaultDocumentSearchUseCase @Inject constructor(
     override fun dispose() {
         coordinator.dispose()
     }
+
+    override val indexingState: StateFlow<SearchIndexingState>
+        get() = coordinator.indexingState
 }
 
 interface RemoteDocumentUseCase {

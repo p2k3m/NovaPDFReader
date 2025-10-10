@@ -20,6 +20,8 @@ import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
+import com.novapdf.reader.model.SearchIndexingPhase
+import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
 import kotlinx.coroutines.CancellationException
@@ -38,6 +40,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.withTimeoutOrNull
@@ -148,6 +153,12 @@ private data class DocumentCacheMetadata(
 )
 
 private const val INDEX_POOL_PARALLELISM = 1
+private const val EXTRACTION_WEIGHT = 0.7f
+private const val OCR_WEIGHT = 0.2f
+private const val INDEX_WEIGHT = 0.1f
+
+private const val OCR_BASE = EXTRACTION_WEIGHT
+private const val INDEX_BASE = EXTRACTION_WEIGHT + OCR_WEIGHT
 
 class LuceneSearchCoordinator(
     private val context: Context,
@@ -177,6 +188,34 @@ class LuceneSearchCoordinator(
     }.getOrNull()
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
+
+    private val indexingStateFlow = MutableStateFlow<SearchIndexingState>(SearchIndexingState.Idle)
+    override val indexingState: StateFlow<SearchIndexingState> = indexingStateFlow.asStateFlow()
+
+    private fun emitIndexingState(
+        documentId: String,
+        progress: Float?,
+        phase: SearchIndexingPhase,
+    ) {
+        val normalized = progress?.coerceIn(0f, 1f)
+        val current = indexingStateFlow.value
+        if (current is SearchIndexingState.InProgress && current.documentId != documentId) {
+            return
+        }
+        indexingStateFlow.value = SearchIndexingState.InProgress(documentId, normalized, phase)
+    }
+
+    private fun clearIndexingState(documentId: String) {
+        val current = indexingStateFlow.value
+        if (current is SearchIndexingState.InProgress && current.documentId != documentId) {
+            return
+        }
+        indexingStateFlow.value = SearchIndexingState.Idle
+    }
+
+    private fun stageProgress(base: Float, weight: Float, stageProgress: Float): Float {
+        return (base + weight * stageProgress).coerceIn(0f, 1f)
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private data class DispatcherHandle(
@@ -222,6 +261,7 @@ class LuceneSearchCoordinator(
 
     override fun prepare(session: PdfDocumentSession): Job? {
         prepareJob?.cancel()
+        val documentId = session.documentId
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
             Log.i(
                 TAG,
@@ -232,12 +272,21 @@ class LuceneSearchCoordinator(
             currentDocumentId = session.documentId
             indexSearcher = null
             pageContents = emptyList()
+            clearIndexingState(documentId)
             prepareJob = null
             return null
         }
+        emitIndexingState(documentId, progress = 0f, phase = SearchIndexingPhase.PREPARING)
         prepareJob = scope.launch {
-            runCatching { rebuildIndex(session) }
-                .onFailure { Log.w(TAG, "Failed to pre-build index", it) }
+            try {
+                rebuildIndex(session)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Log.w(TAG, "Failed to pre-build index", error)
+            } finally {
+                clearIndexingState(documentId)
+            }
         }
         return prepareJob
     }
@@ -306,6 +355,7 @@ class LuceneSearchCoordinator(
         indexSearcher = null
         currentDocumentId = null
         pageContents = emptyList()
+        indexingStateFlow.value = SearchIndexingState.Idle
         indexDispatcherHandle.shutdown?.let { shutdown ->
             runCatching { shutdown() }
         }
@@ -334,6 +384,7 @@ class LuceneSearchCoordinator(
         val documentMtime = readDocumentMtime(session)
         val shard = obtainShard(session, documentMtime = documentMtime)
         applyActiveShard(session.documentId, shard)
+        emitIndexingState(session.documentId, progress = 1f, phase = SearchIndexingPhase.WRITING_INDEX)
     }
 
     private suspend fun extractPageContent(
@@ -342,10 +393,23 @@ class LuceneSearchCoordinator(
         useCache: Boolean,
     ): PageContentResult {
         val pageCount = session.pageCount
-        if (pageCount <= 0) return PageContentResult(emptyList(), fromCache = true)
+        val documentId = session.documentId
+        if (pageCount <= 0) {
+            emitIndexingState(
+                documentId,
+                progress = stageProgress(0f, EXTRACTION_WEIGHT, 1f),
+                phase = SearchIndexingPhase.EXTRACTING_TEXT,
+            )
+            return PageContentResult(emptyList(), fromCache = true)
+        }
         if (useCache) {
             val cached = loadCachedPageContents(session.documentId, pageCount, documentMtime)
             if (cached != null) {
+                emitIndexingState(
+                    documentId,
+                    progress = stageProgress(0f, EXTRACTION_WEIGHT, 1f),
+                    phase = SearchIndexingPhase.EXTRACTING_TEXT,
+                )
                 return PageContentResult(cached, fromCache = true)
             }
         }
@@ -354,6 +418,7 @@ class LuceneSearchCoordinator(
             Log.w(TAG, "PDFBox initialisation failed; skipping text extraction")
             return PageContentResult(emptyList(), fromCache = false)
         }
+        emitIndexingState(documentId, progress = 0f, phase = SearchIndexingPhase.EXTRACTING_TEXT)
         val contents = MutableList(pageCount) {
             PageSearchContent(
                 text = "",
@@ -361,7 +426,7 @@ class LuceneSearchCoordinator(
                 runs = emptyList(),
                 coordinateWidth = 1,
                 coordinateHeight = 1,
-                fallbackRegions = emptyList()
+                fallbackRegions = emptyList(),
             )
         }
         try {
@@ -371,65 +436,75 @@ class LuceneSearchCoordinator(
                         for (page in 0 until pageCount) {
                             ensureActive()
                             val pdPage = runCatching { document.getPage(page) }
-                            .onFailure { Log.w(TAG, "Failed to read PDF page $page", it) }
-                            .getOrNull() ?: continue
-                        try {
-                            val pageWidth = pdPage.mediaBox?.width?.toInt()?.takeIf { it > 0 } ?: 1
-                            val pageHeight = pdPage.mediaBox?.height?.toInt()?.takeIf { it > 0 } ?: 1
-                            val runs = mutableListOf<TextRunSnapshot>()
-                            val pageWidthF = pageWidth.toFloat()
-                            val pageHeightF = pageHeight.toFloat()
-                            val writer = StringWriter()
-                            val stripper = object : PDFTextStripper() {
-                                override fun writeString(text: String?, textPositions: List<TextPosition>?) {
-                                    if (!text.isNullOrEmpty() && !textPositions.isNullOrEmpty()) {
-                                        val bounds = buildList {
-                                            textPositions.forEach { position ->
-                                                val width = position.widthDirAdj
-                                                val height = position.heightDir
-                                                if (width <= 0f || height <= 0f) return@forEach
-                                                var left = position.xDirAdj
-                                                var top = position.yDirAdj - height
-                                                var right = left + width
-                                                var bottom = top + height
-                                                left = left.coerceIn(0f, pageWidthF)
-                                                top = top.coerceIn(0f, pageHeightF)
-                                                right = right.coerceIn(0f, pageWidthF)
-                                                bottom = bottom.coerceIn(0f, pageHeightF)
-                                                if (right - left > 0f && bottom - top > 0f) {
-                                                    add(RectF(left, top, right, bottom))
+                                .onFailure { Log.w(TAG, "Failed to read PDF page $page", it) }
+                                .getOrNull() ?: continue
+                            try {
+                                val pageWidth = pdPage.mediaBox?.width?.toInt()?.takeIf { it > 0 } ?: 1
+                                val pageHeight = pdPage.mediaBox?.height?.toInt()?.takeIf { it > 0 } ?: 1
+                                val runs = mutableListOf<TextRunSnapshot>()
+                                val pageWidthF = pageWidth.toFloat()
+                                val pageHeightF = pageHeight.toFloat()
+                                val writer = StringWriter()
+                                val stripper = object : PDFTextStripper() {
+                                    override fun writeString(text: String?, textPositions: List<TextPosition>?) {
+                                        if (!text.isNullOrEmpty() && !textPositions.isNullOrEmpty()) {
+                                            val bounds = buildList {
+                                                textPositions.forEach { position ->
+                                                    val width = position.widthDirAdj
+                                                    val height = position.heightDir
+                                                    if (width <= 0f || height <= 0f) return@forEach
+                                                    var left = position.xDirAdj
+                                                    var top = position.yDirAdj - height
+                                                    var right = left + width
+                                                    var bottom = top + height
+                                                    left = left.coerceIn(0f, pageWidthF)
+                                                    top = top.coerceIn(0f, pageHeightF)
+                                                    right = right.coerceIn(0f, pageWidthF)
+                                                    bottom = bottom.coerceIn(0f, pageHeightF)
+                                                    if (right - left > 0f && bottom - top > 0f) {
+                                                        add(RectF(left, top, right, bottom))
+                                                    }
                                                 }
                                             }
+                                            if (bounds.isNotEmpty()) {
+                                                runs += TextRunSnapshot(text, bounds)
+                                            }
                                         }
-                                        if (bounds.isNotEmpty()) {
-                                            runs += TextRunSnapshot(text, bounds)
-                                        }
+                                        super.writeString(text, textPositions)
                                     }
-                                    super.writeString(text, textPositions)
+                                }.apply {
+                                    startPage = page + 1
+                                    endPage = page + 1
+                                    sortByPosition = true
                                 }
-                            }.apply {
-                                startPage = page + 1
-                                endPage = page + 1
-                                sortByPosition = true
-                            }
-                            stripper.writeText(document, writer)
-                            val rawText = writer.toString()
-                            val normalizedText = normalizeSearchQuery(rawText)
-                            contents[page] = PageSearchContent(
-                                text = rawText,
-                                normalizedText = normalizedText,
-                                runs = runs,
-                                coordinateWidth = pageWidth,
-                                coordinateHeight = pageHeight,
-                                fallbackRegions = emptyList()
-                            )
-                        } finally {
-                            if (pdPage is Closeable) {
-                                runCatching { pdPage.close() }
-                                    .onFailure { Log.w(TAG, "Failed to close PDFBox page $page", it) }
+                                stripper.writeText(document, writer)
+                                val rawText = writer.toString()
+                                val normalizedText = normalizeSearchQuery(rawText)
+                                contents[page] = PageSearchContent(
+                                    text = rawText,
+                                    normalizedText = normalizedText,
+                                    runs = runs,
+                                    coordinateWidth = pageWidth,
+                                    coordinateHeight = pageHeight,
+                                    fallbackRegions = emptyList(),
+                                )
+                                val extractionProgress = stageProgress(
+                                    base = 0f,
+                                    weight = EXTRACTION_WEIGHT,
+                                    stageProgress = (page + 1).toFloat() / pageCount,
+                                )
+                                emitIndexingState(
+                                    documentId,
+                                    progress = extractionProgress,
+                                    phase = SearchIndexingPhase.EXTRACTING_TEXT,
+                                )
+                            } finally {
+                                if (pdPage is Closeable) {
+                                    runCatching { pdPage.close() }
+                                        .onFailure { Log.w(TAG, "Failed to close PDFBox page $page", it) }
+                                }
                             }
                         }
-                    }
                     }
                 }
             }
@@ -438,6 +513,11 @@ class LuceneSearchCoordinator(
         } catch (io: IOException) {
             Log.w(TAG, "Failed to extract text with PDFBox", io)
         }
+        emitIndexingState(
+            documentId,
+            progress = stageProgress(0f, EXTRACTION_WEIGHT, 1f),
+            phase = SearchIndexingPhase.EXTRACTING_TEXT,
+        )
         val pendingOcr = buildList {
             contents.forEachIndexed { index, content ->
                 val needsOcrForText = content.text.isBlank()
@@ -452,11 +532,11 @@ class LuceneSearchCoordinator(
                         coordinateHeight = content.coordinateHeight,
                         needsText = needsOcrForText,
                         needsBounds = needsOcrForBounds,
-                    )
+                    ),
                 )
             }
         }
-        applyOcrFallbacks(contents, pendingOcr)
+        applyOcrFallbacks(documentId, contents, pendingOcr)
         val finalContents = contents.toList()
         if (documentMtime != null) {
             persistPageContents(session.documentId, documentMtime, finalContents)
@@ -465,10 +545,18 @@ class LuceneSearchCoordinator(
     }
 
     private suspend fun applyOcrFallbacks(
+        documentId: String,
         contents: MutableList<PageSearchContent>,
         pending: List<OcrFallbackRequest>,
     ) {
         if (pending.isEmpty()) return
+        emitIndexingState(
+            documentId,
+            progress = OCR_BASE,
+            phase = SearchIndexingPhase.APPLYING_OCR,
+        )
+        var processed = 0
+        val total = pending.size
         for (batch in pending.chunked(OCR_BATCH_SIZE)) {
             coroutineContext.ensureActive()
             waitForRenderIdleIfNeeded(batch)
@@ -481,6 +569,17 @@ class LuceneSearchCoordinator(
                 }.getOrNull() ?: continue
                 val existing = contents[request.pageIndex]
                 contents[request.pageIndex] = mergeOcrFallback(existing, fallback, request)
+                processed++
+                val ocrProgress = stageProgress(
+                    base = OCR_BASE,
+                    weight = OCR_WEIGHT,
+                    stageProgress = processed.toFloat() / total,
+                )
+                emitIndexingState(
+                    documentId,
+                    progress = ocrProgress,
+                    phase = SearchIndexingPhase.APPLYING_OCR,
+                )
             }
         }
     }
@@ -1035,7 +1134,18 @@ class LuceneSearchCoordinator(
                 }
             }
             if (needsRewrite) {
-                rewriteIndex(luceneDirectory, contents)
+                emitIndexingState(
+                    documentId,
+                    progress = INDEX_BASE,
+                    phase = SearchIndexingPhase.WRITING_INDEX,
+                )
+                rewriteIndex(documentId, luceneDirectory, contents)
+            } else {
+                emitIndexingState(
+                    documentId,
+                    progress = stageProgress(INDEX_BASE, INDEX_WEIGHT, 1f),
+                    phase = SearchIndexingPhase.WRITING_INDEX,
+                )
             }
             reader = DirectoryReader.open(luceneDirectory)
             val searcher = IndexSearcher(reader)
@@ -1049,11 +1159,22 @@ class LuceneSearchCoordinator(
         }
     }
 
-    private fun rewriteIndex(directory: Directory, contents: List<PageSearchContent>) {
+    private fun rewriteIndex(
+        documentId: String,
+        directory: Directory,
+        contents: List<PageSearchContent>,
+    ) {
         val config = IndexWriterConfig(analyzer).apply {
             openMode = IndexWriterConfig.OpenMode.CREATE
         }
         IndexWriter(directory, config).use { writer ->
+            if (contents.isEmpty()) {
+                emitIndexingState(
+                    documentId,
+                    progress = stageProgress(INDEX_BASE, INDEX_WEIGHT, 1f),
+                    phase = SearchIndexingPhase.WRITING_INDEX,
+                )
+            }
             contents.forEachIndexed { index, content ->
                 val cleaned = content.text.trim()
                 val document = Document().apply {
@@ -1061,6 +1182,16 @@ class LuceneSearchCoordinator(
                     add(TextField("content", cleaned, Field.Store.YES))
                 }
                 writer.addDocument(document)
+                val progress = stageProgress(
+                    base = INDEX_BASE,
+                    weight = INDEX_WEIGHT,
+                    stageProgress = (index + 1).toFloat() / contents.size,
+                )
+                emitIndexingState(
+                    documentId,
+                    progress = progress,
+                    phase = SearchIndexingPhase.WRITING_INDEX,
+                )
             }
             writer.commit()
         }

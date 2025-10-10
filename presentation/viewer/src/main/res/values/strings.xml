@@ -44,6 +44,11 @@
     <string name="loading_stage_rendering">Rendering the first page…</string>
     <string name="loading_stage_finalizing">Finalizing the reader experience…</string>
     <string name="loading_stage_downloading">Downloading PDF…</string>
+    <string name="search_indexing_title">Building search index</string>
+    <string name="search_indexing_phase_preparing">Preparing search data…</string>
+    <string name="search_indexing_phase_extracting">Extracting text…</string>
+    <string name="search_indexing_phase_ocr">Refining with OCR…</string>
+    <string name="search_indexing_phase_writing">Finalizing index…</string>
     <string name="legacy_select_document">Open a PDF to start reading.</string>
     <string name="legacy_error_loading">Something went wrong while opening the PDF.</string>
     <string name="legacy_retry">Try again</string>
