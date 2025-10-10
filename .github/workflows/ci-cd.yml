@@ -559,6 +559,48 @@ jobs:
             done
           }
 
+          wait_for_content_provider() {
+            local uri="$1"
+            local label="$2"
+            local deadline="$3"
+            local interval=5
+            local elapsed=0
+
+            while true; do
+              if adb shell content query --uri "$uri" --user 0 --limit 1 >/dev/null 2>&1; then
+                return 0
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "${label} content provider did not become available within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
+          wait_for_storage_volumes() {
+            local deadline="$1"
+            local interval=5
+            local elapsed=0
+
+            while true; do
+              if adb shell sm list-volumes all >/dev/null 2>&1; then
+                return 0
+              fi
+
+              if [ $elapsed -ge $deadline ]; then
+                echo "Storage manager volumes did not become accessible within $((deadline / 60)) minutes" >&2
+                exit 1
+              fi
+
+              sleep $interval
+              elapsed=$((elapsed + interval))
+            done
+          }
+
           wait_for_service_registration() {
             local label="$1"
             local deadline="$2"
@@ -623,12 +665,14 @@ jobs:
           echo "Waiting for settings provider readiness"
           wait_for_settings_value global device_provisioned "1|true" "device provisioning" $((5 * 60))
           wait_for_settings_value secure user_setup_complete "1|true" "user setup" $((5 * 60))
+          wait_for_content_provider "content://settings/global" "Settings" $((5 * 60))
 
           echo "Waiting for package manager binder registration"
           wait_for_service_registration "Package manager" $((5 * 60))
 
           echo "Waiting for StorageManager service availability"
           wait_for_service "mount" "StorageManager" $((5 * 60))
+          wait_for_storage_volumes $((5 * 60))
 
           echo "Installing $apk_path onto the emulator"
           install_attempt=1
