@@ -39,7 +39,7 @@ class PdfViewerScreenTest {
                     onToggleBookmark = {},
                     onOutlineDestinationSelected = {},
                     onExportDocument = { true },
-                    renderPage = { _, _ -> null },
+                    renderPage = { _, _, _ -> null },
                     requestPageSize = { null },
                     onViewportWidthChanged = {},
                     onPrefetchPages = { _, _ -> },
