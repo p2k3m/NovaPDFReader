@@ -46,6 +46,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -178,6 +180,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -1230,10 +1233,52 @@ private fun ReaderContent(
     layoutAnimationsEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    PdfPager(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Top
-    ) {
+        state = state,
+        onPageChange = onPageChange,
+        onStrokeFinished = onStrokeFinished,
+        onToggleBookmark = onToggleBookmark,
+        renderPage = renderPage,
+        requestPageSize = requestPageSize,
+        onViewportWidthChanged = onViewportWidthChanged,
+        onPrefetchPages = onPrefetchPages,
+        animationsEnabled = layoutAnimationsEnabled,
+        headerContent = {
+            ReaderHeader(
+                state = state,
+                searchQuery = searchQuery,
+                onQueryChange = onQueryChange,
+                totalSearchResults = totalSearchResults,
+                onPlayAdaptiveSummary = onPlayAdaptiveSummary,
+                onOpenAccessibilityOptions = onOpenAccessibilityOptions,
+                focusRequester = focusRequester,
+                requestFocus = requestFocus,
+                onFocusHandled = onFocusHandled
+            )
+        },
+        emptyStateContent = {
+            EmptyState(
+                onOpenDocument = onOpenDocument,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    )
+}
+
+@Composable
+private fun ReaderHeader(
+    state: PdfViewerUiState,
+    searchQuery: String,
+    onQueryChange: (String) -> Unit,
+    totalSearchResults: Int,
+    onPlayAdaptiveSummary: () -> Unit,
+    onOpenAccessibilityOptions: () -> Unit,
+    focusRequester: FocusRequester,
+    requestFocus: Boolean,
+    onFocusHandled: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         SearchBar(
             query = searchQuery,
             onQueryChange = onQueryChange,
@@ -1259,21 +1304,8 @@ private fun ReaderContent(
             )
         }
 
-        if (state.pageCount == 0) {
-            EmptyState(onOpenDocument)
-        } else {
-            PdfPager(
-                modifier = Modifier.fillMaxSize(),
-                state = state,
-                onPageChange = onPageChange,
-                onStrokeFinished = onStrokeFinished,
-                onToggleBookmark = onToggleBookmark,
-                renderPage = renderPage,
-                requestPageSize = requestPageSize,
-                onViewportWidthChanged = onViewportWidthChanged,
-                onPrefetchPages = onPrefetchPages,
-                animationsEnabled = layoutAnimationsEnabled
-            )
+        if (state.pageCount > 0) {
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
@@ -2105,10 +2137,10 @@ private fun AccessibilityManager?.sendAnnouncement(message: String) {
 }
 
 @Composable
-private fun EmptyState(onOpenDocument: () -> Unit) {
+private fun EmptyState(onOpenDocument: () -> Unit, modifier: Modifier = Modifier) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
+            .fillMaxWidth()
             .padding(horizontal = 32.dp)
             .padding(top = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2281,7 +2313,9 @@ private fun PdfPager(
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
-    animationsEnabled: Boolean
+    animationsEnabled: Boolean,
+    headerContent: (@Composable () -> Unit)? = null,
+    emptyStateContent: (@Composable () -> Unit)? = null
 ) {
     val lazyListState = rememberLazyListState()
     val latestOnPageChange by rememberUpdatedState(onPageChange)
@@ -2291,18 +2325,37 @@ private fun PdfPager(
     val latestViewportWidth by rememberUpdatedState(onViewportWidthChanged)
     val latestPrefetch by rememberUpdatedState(onPrefetchPages)
     val latestBookmarkToggle by rememberUpdatedState(onToggleBookmark)
+    val headerCount = if (headerContent != null) 1 else 0
+
+    if (state.pageCount <= 0) {
+        Column(modifier = modifier.fillMaxSize()) {
+            headerContent?.invoke()
+            emptyStateContent?.let { content ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = true)
+                ) {
+                    content()
+                }
+            }
+        }
+        return
+    }
 
     LaunchedEffect(state.pageCount, state.currentPage) {
         if (state.pageCount <= 0) return@LaunchedEffect
         val target = state.currentPage.coerceIn(0, state.pageCount - 1)
-        if (lazyListState.firstVisibleItemIndex != target || lazyListState.firstVisibleItemScrollOffset != 0) {
-            lazyListState.scrollToItem(target)
+        val listIndex = target + headerCount
+        if (lazyListState.firstVisibleItemIndex != listIndex || lazyListState.firstVisibleItemScrollOffset != 0) {
+            lazyListState.scrollToItem(listIndex)
         }
     }
 
-    LaunchedEffect(lazyListState, state.pageCount) {
+    LaunchedEffect(lazyListState, state.pageCount, headerCount) {
         if (state.pageCount <= 0) return@LaunchedEffect
-        snapshotFlow { lazyListState.firstVisibleItemIndex }
+        snapshotFlow { lazyListState.firstVisiblePageIndex(headerCount) }
+            .filterNotNull()
             .distinctUntilChanged()
             .collect { latestOnPageChange(it) }
     }
@@ -2321,24 +2374,36 @@ private fun PdfPager(
             }
     }
 
-    LaunchedEffect(lazyListState, state.pageCount) {
+    LaunchedEffect(lazyListState, state.pageCount, headerCount) {
         if (state.pageCount <= 0) return@LaunchedEffect
-        var lastIndex = lazyListState.firstVisibleItemIndex
-        var lastOffset = lazyListState.firstVisibleItemScrollOffset
+        var lastIndex = -1
+        var lastOffset = 0
         var lastTime = System.currentTimeMillis()
         snapshotFlow {
             val info = lazyListState.layoutInfo
+            val firstPageInfo = info.firstPageItem(headerCount)
             PrefetchSnapshot(
-                firstVisible = info.visibleItemsInfo.firstOrNull()?.index
-                    ?: lazyListState.firstVisibleItemIndex,
-                firstOffset = lazyListState.firstVisibleItemScrollOffset,
+                firstVisible = firstPageInfo?.let { it.index - headerCount } ?: -1,
+                firstOffset = firstPageInfo?.offset?.let { offset -> max(-offset, 0) } ?: 0,
                 viewportWidth = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(0),
-                firstItemSize = info.visibleItemsInfo.firstOrNull()?.size ?: 0,
+                firstItemSize = firstPageInfo?.size ?: 0,
                 isScrolling = lazyListState.isScrollInProgress
             )
         }.collect { snapshot ->
             val now = System.currentTimeMillis()
             val dt = now - lastTime
+            if (snapshot.firstVisible < 0) {
+                lastIndex = -1
+                lastOffset = 0
+                lastTime = now
+                return@collect
+            }
+            if (lastIndex < 0) {
+                lastIndex = snapshot.firstVisible
+                lastOffset = snapshot.firstOffset
+                lastTime = now
+                return@collect
+            }
             val deltaIndex = snapshot.firstVisible - lastIndex
             val deltaOffset = snapshot.firstOffset - lastOffset
             val direction = when {
@@ -2392,33 +2457,44 @@ private fun PdfPager(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(vertical = 24.dp)
+            contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            items(state.pageCount, key = { it }) { pageIndex ->
-                PdfPageItem(
-                    pageIndex = pageIndex,
-                    state = state,
-                    renderPage = latestRenderPage,
-                    requestPageSize = latestRequestPageSize,
-                    onStrokeFinished = latestStrokeFinished,
-                    animationsEnabled = animationsEnabled
-                )
+            if (headerContent != null) {
+                item(key = PAGER_HEADER_KEY) { headerContent() }
+            }
+            if (state.pageCount <= 0) {
+                if (emptyStateContent != null) {
+                    item(key = PAGER_EMPTY_STATE_KEY) { emptyStateContent() }
+                }
+            } else {
+                items(state.pageCount, key = { it }) { pageIndex ->
+                    PdfPageItem(
+                        pageIndex = pageIndex,
+                        state = state,
+                        renderPage = latestRenderPage,
+                        requestPageSize = latestRequestPageSize,
+                        onStrokeFinished = latestStrokeFinished,
+                        animationsEnabled = animationsEnabled
+                    )
+                }
             }
         }
 
-        PageTransitionScrim(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(96.dp)
-        )
-        PageTransitionScrim(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(96.dp),
-            reverse = true
-        )
+        if (state.pageCount > 0) {
+            PageTransitionScrim(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(96.dp)
+            )
+            PageTransitionScrim(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(96.dp),
+                reverse = true
+            )
+        }
 
         if (state.pageCount in 1..LARGE_DOCUMENT_PAGE_THRESHOLD) {
             ThumbnailStrip(
@@ -2426,6 +2502,7 @@ private fun PdfPager(
                 lazyListState = lazyListState,
                 renderPage = latestRenderPage,
                 onToggleBookmark = latestBookmarkToggle,
+                listStartIndexOffset = headerCount,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
@@ -2435,6 +2512,19 @@ private fun PdfPager(
     }
 }
 
+private const val PAGER_HEADER_KEY = "pdf_pager_header"
+private const val PAGER_EMPTY_STATE_KEY = "pdf_pager_empty_state"
+
+private fun LazyListState.firstVisiblePageIndex(headerCount: Int): Int? {
+    val info = layoutInfo
+    val firstPage = info.firstPageItem(headerCount) ?: return null
+    return firstPage.index - headerCount
+}
+
+private fun LazyListLayoutInfo.firstPageItem(headerCount: Int): LazyListItemInfo? {
+    return visibleItemsInfo.firstOrNull { it.index >= headerCount }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThumbnailStrip(
@@ -2442,6 +2532,7 @@ private fun ThumbnailStrip(
     lazyListState: LazyListState,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     onToggleBookmark: (Int) -> Unit,
+    listStartIndexOffset: Int,
     modifier: Modifier = Modifier
 ) {
     if (state.pageCount <= 0) return
@@ -2538,7 +2629,7 @@ private fun ThumbnailStrip(
                             onSelect = {
                                 selectedPage = pageIndex
                                 coroutineScope.launch {
-                                    lazyListState.animateScrollToItem(pageIndex)
+                                    lazyListState.animateScrollToItem(pageIndex + listStartIndexOffset)
                                 }
                             },
                             onToggleBookmark = { onToggleBookmark(pageIndex) }
