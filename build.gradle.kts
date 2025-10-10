@@ -1,3 +1,5 @@
+import com.android.build.gradle.BaseExtension
+import com.android.build.gradle.internal.tasks.DeviceProviderInstrumentTestTask
 import com.diffplug.gradle.spotless.SpotlessExtension
 import io.gitlab.arturbosch.detekt.Detekt
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
@@ -11,10 +13,12 @@ import org.jlleitschuh.gradle.ktlint.KtlintExtension
 import org.jlleitschuh.gradle.ktlint.tasks.KtLintCheckTask
 import org.jlleitschuh.gradle.ktlint.tasks.KtLintFormatTask
 import kotlin.LazyThreadSafetyMode
+import kotlin.math.max
 import java.io.File
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import org.gradle.api.tasks.StopExecutionException
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -97,7 +101,11 @@ fun StartParameter.requestsConnectedAndroidTests(): Boolean = taskNames.any { ta
             taskName.contains("Check", ignoreCase = true))
 }
 
-data class ConnectedDeviceCheck(val hasDevice: Boolean, val warningMessage: String?)
+data class ConnectedDeviceCheck(
+    val hasDevice: Boolean,
+    val readyDevices: List<String>,
+    val warningMessage: String?
+)
 
 val requireConnectedDevice = parseOptionalBoolean(
     (findProperty("novapdf.requireConnectedDevice") as? String)
@@ -159,6 +167,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
     if (executable == null) {
         return ConnectedDeviceCheck(
             hasDevice = false,
+            readyDevices = emptyList(),
             warningMessage = "ADB executable not found. Skipping connected Android tests. " +
                 "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
         )
@@ -167,6 +176,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
     if (!executable.exists()) {
         return ConnectedDeviceCheck(
             hasDevice = false,
+            readyDevices = emptyList(),
             warningMessage = "ADB executable not found at ${executable.absolutePath}. Skipping connected Android tests."
         )
     }
@@ -181,6 +191,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
             process.destroyForcibly()
             ConnectedDeviceCheck(
                 hasDevice = false,
+                readyDevices = emptyList(),
                 warningMessage = "Timed out while checking for connected Android devices. Skipping connected Android tests."
             )
         } else {
@@ -226,10 +237,15 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
             }
 
             if (readyDevices.isNotEmpty()) {
-                ConnectedDeviceCheck(hasDevice = true, warningMessage = null)
+                ConnectedDeviceCheck(
+                    hasDevice = true,
+                    readyDevices = readyDevices,
+                    warningMessage = null
+                )
             } else {
                 ConnectedDeviceCheck(
                     hasDevice = false,
+                    readyDevices = emptyList(),
                     warningMessage = "No connected Android devices/emulators detected. Skipping connected Android tests."
                 )
             }
@@ -241,6 +257,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
         )
         ConnectedDeviceCheck(
             hasDevice = false,
+            readyDevices = emptyList(),
             warningMessage = "Unable to query connected Android devices via adb. Skipping connected Android tests."
         )
     }
@@ -249,6 +266,7 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
 val connectedDeviceCheck by lazy(LazyThreadSafetyMode.NONE) { computeConnectedDeviceCheck() }
 val deviceWarningLogged = AtomicBoolean(false)
 val skipWarningLogged = AtomicBoolean(false)
+val instrumentationSkipLogged = AtomicBoolean(false)
 
 subprojects {
     configurations.all {
@@ -260,6 +278,20 @@ subprojects {
     pluginManager.apply("org.jlleitschuh.gradle.ktlint")
     pluginManager.apply("com.diffplug.spotless")
     pluginManager.apply("io.gitlab.arturbosch.detekt")
+
+    fun configureAdbTimeout() {
+        val extension = extensions.findByName("android")
+        if (extension is BaseExtension) {
+            val desiredTimeoutMs = 300_000
+            if (extension.adbOptions.timeOutInMs < desiredTimeoutMs) {
+                extension.adbOptions.timeOutInMs = desiredTimeoutMs
+            }
+        }
+    }
+
+    pluginManager.withPlugin("com.android.application") { configureAdbTimeout() }
+    pluginManager.withPlugin("com.android.library") { configureAdbTimeout() }
+    pluginManager.withPlugin("com.android.test") { configureAdbTimeout() }
 
     plugins.withId("com.android.application") {
         dependencies {
@@ -375,6 +407,69 @@ subprojects {
                     }
                 }
                 check.hasDevice
+            }
+        }
+    }
+
+    tasks.withType<DeviceProviderInstrumentTestTask>().configureEach {
+        doFirst {
+            if (requireConnectedDevice == true) {
+                return@doFirst
+            }
+
+            fun logSkip(message: String) {
+                if (instrumentationSkipLogged.compareAndSet(false, true)) {
+                    logger.warn(message)
+                }
+            }
+
+            val devices = connectedDeviceCheck.readyDevices
+            val executable = adbExecutable
+            if (devices.isEmpty() || executable == null || !executable.exists()) {
+                val message = connectedDeviceCheck.warningMessage
+                if (message != null) {
+                    logSkip(message)
+                } else {
+                    logSkip("Skipping task $name because no connected Android devices/emulators were detected.")
+                }
+                throw StopExecutionException("No responsive Android devices available for connected tests.")
+            }
+
+            val responsiveSerial = devices.firstOrNull { serial ->
+                runCatching {
+                    val process = ProcessBuilder(
+                        executable.absolutePath,
+                        "-s",
+                        serial,
+                        "shell",
+                        "getprop",
+                        "ro.build.version.sdk"
+                    )
+                        .redirectErrorStream(true)
+                        .start()
+
+                    if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                        process.destroy()
+                        process.destroyForcibly()
+                        false
+                    } else {
+                        val output = process.inputStream.bufferedReader().use { reader -> reader.readText().trim() }
+                        output.toIntOrNull() != null
+                    }
+                }.onFailure { error ->
+                    logger.warn(
+                        "Failed to verify connected Android device $serial before executing $name.",
+                        error
+                    )
+                }.getOrDefault(false)
+            }
+
+            if (responsiveSerial == null) {
+                logSkip(
+                    "Skipping task $name because no responsive Android devices/emulators were detected. " +
+                        "Ensure an emulator is fully booted before running connected tests."
+                )
+                throw StopExecutionException("No responsive Android devices available for connected tests.")
             }
         }
     }
