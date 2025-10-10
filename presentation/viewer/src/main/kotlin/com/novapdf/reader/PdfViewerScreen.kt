@@ -50,7 +50,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -119,6 +118,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -276,6 +276,13 @@ fun PdfViewerScreen(
     val adjustedDensity = remember(baseDensity, state.fontScale) {
         Density(density = baseDensity.density, fontScale = state.fontScale)
     }
+
+    var firstInteractiveFramePassed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        firstInteractiveFramePassed = true
+    }
+    val layoutAnimationsEnabled = firstInteractiveFramePassed && !state.uiUnderLoad
 
     CompositionLocalProvider(LocalDensity provides adjustedDensity) {
         val context = LocalContext.current
@@ -446,6 +453,7 @@ fun PdfViewerScreen(
                     onHighContrastChanged = onToggleHighContrast,
                     onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
                     onFontScaleChanged = onFontScaleChanged,
+                    layoutAnimationsEnabled = layoutAnimationsEnabled,
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -475,20 +483,19 @@ fun PdfViewerScreen(
             }
         }
 
-                DocumentStatusHost(
-                    status = state.documentStatus,
-                    onDismissError = onDismissError
-                )
+        DocumentStatusHost(
+            status = state.documentStatus,
+            onDismissError = onDismissError,
+            animationsEnabled = layoutAnimationsEnabled
+        )
 
-                if (showOnboarding) {
-                    OnboardingOverlay(
-                        pages = onboardingPages,
-                        pagerState = pagerState,
-                        onSkip = completeOnboarding,
-                        onFinish = completeOnboarding
-                    )
-                }
-            }
+        if (showOnboarding) {
+            OnboardingOverlay(
+                pages = onboardingPages,
+                pagerState = pagerState,
+                onSkip = completeOnboarding,
+                onFinish = completeOnboarding
+            )
         }
 
     if (showSourceDialog) {
@@ -556,13 +563,16 @@ fun PdfViewerScreen(
                     onHighContrastChanged = onToggleHighContrast,
                     onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
                     onFontScaleChanged = onFontScaleChanged,
+                    layoutAnimationsEnabled = layoutAnimationsEnabled,
                     modifier = Modifier.fillMaxHeight(0.95f)
                 )
             }
         }
     }
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PdfViewerTopBar(
     selectedDestination: MainDestination,
@@ -703,6 +713,7 @@ private fun PdfViewerDestinationContainer(
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    layoutAnimationsEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     when (selectedDestination) {
@@ -732,6 +743,7 @@ private fun PdfViewerDestinationContainer(
                 requestPageSize = requestPageSize,
                 onViewportWidthChanged = onViewportWidthChanged,
                 onPrefetchPages = onPrefetchPages,
+                layoutAnimationsEnabled = layoutAnimationsEnabled,
                 modifier = modifier
             )
         }
@@ -756,6 +768,7 @@ private fun PdfViewerDestinationContainer(
                 onHighContrastChanged = onHighContrastChanged,
                 onTalkBackIntegrationChanged = onTalkBackIntegrationChanged,
                 onFontScaleChanged = onFontScaleChanged,
+                layoutAnimationsEnabled = layoutAnimationsEnabled,
                 onOpenDevOptions = onOpenDevOptions,
                 modifier = modifier
             )
@@ -900,10 +913,11 @@ private fun DocumentUrlDialog(
 @Composable
 private fun DocumentStatusHost(
     status: DocumentStatus,
-    onDismissError: () -> Unit
+    onDismissError: () -> Unit,
+    animationsEnabled: Boolean
 ) {
     when (status) {
-        is DocumentStatus.Loading -> LoadingOverlay(status)
+        is DocumentStatus.Loading -> LoadingOverlay(status, animationsEnabled)
         is DocumentStatus.Error -> DocumentErrorDialog(
             message = status.message,
             onDismiss = onDismissError
@@ -1020,7 +1034,7 @@ private fun DocumentErrorDialog(
 }
 
 @Composable
-private fun LoadingOverlay(status: DocumentStatus.Loading) {
+private fun LoadingOverlay(status: DocumentStatus.Loading, animationsEnabled: Boolean) {
     val message = status.messageRes?.let { stringResource(id = it) }
         ?: stringResource(id = R.string.loading_document)
     val progressValue = status.progress?.coerceIn(0f, 1f)
@@ -1073,27 +1087,34 @@ private fun LoadingOverlay(status: DocumentStatus.Loading) {
                         style = MaterialTheme.typography.titleMedium,
                         textAlign = TextAlign.Center
                     )
-                    AnimatedVisibility(visible = progressValue != null) {
-                        if (progressValue != null) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                LinearProgressIndicator(
-                                    progress = { progressValue },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Text(
-                                    text = stringResource(
-                                        id = R.string.loading_progress,
-                                        (progressValue * 100).roundToInt()
-                                    ),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    textAlign = TextAlign.Center
-                                )
-                            }
+                    val progress = progressValue
+                    val showProgress = progress != null
+                    val progressContent: @Composable (Float) -> Unit = { value ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { value },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                text = stringResource(
+                                    id = R.string.loading_progress,
+                                    (value * 100).roundToInt()
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
                         }
+                    }
+                    if (animationsEnabled) {
+                        AnimatedVisibility(visible = showProgress) {
+                            progress?.let { progressContent(it) }
+                        }
+                    } else if (progress != null) {
+                        progressContent(progress)
                     }
                 }
             }
@@ -1235,6 +1256,7 @@ private fun ReaderContent(
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
+    layoutAnimationsEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1278,7 +1300,8 @@ private fun ReaderContent(
                 renderPage = renderPage,
                 requestPageSize = requestPageSize,
                 onViewportWidthChanged = onViewportWidthChanged,
-                onPrefetchPages = onPrefetchPages
+                onPrefetchPages = onPrefetchPages,
+                animationsEnabled = layoutAnimationsEnabled
             )
         }
     }
@@ -1443,6 +1466,7 @@ private fun SettingsContent(
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    layoutAnimationsEnabled: Boolean,
     onOpenDevOptions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1458,11 +1482,13 @@ private fun SettingsContent(
         onHighContrastChanged = onHighContrastChanged,
         onTalkBackIntegrationChanged = onTalkBackIntegrationChanged,
         onFontScaleChanged = onFontScaleChanged,
+        layoutAnimationsEnabled = layoutAnimationsEnabled,
         modifier = modifier,
         footer = {
             ExpandableSettingSection(
                 title = stringResource(id = R.string.dev_options_title),
-                description = stringResource(id = R.string.dev_options_description)
+                description = stringResource(id = R.string.dev_options_description),
+                animationsEnabled = layoutAnimationsEnabled
             ) {
                 Text(
                     text = stringResource(id = R.string.dev_options_body),
@@ -1780,6 +1806,7 @@ private fun AccessibilitySettingsSheet(
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    layoutAnimationsEnabled: Boolean,
     modifier: Modifier = Modifier,
     footer: @Composable ColumnScope.() -> Unit = {},
 ) {
@@ -1807,7 +1834,8 @@ private fun AccessibilitySettingsSheet(
         ExpandableSettingSection(
             title = stringResource(id = R.string.dynamic_color_label),
             description = stringResource(id = R.string.dynamic_color_description),
-            initiallyExpanded = true
+            initiallyExpanded = true,
+            animationsEnabled = layoutAnimationsEnabled
         ) {
             val supported = dynamicColorSupported
             Row(
@@ -1854,7 +1882,8 @@ private fun AccessibilitySettingsSheet(
 
         ExpandableSettingSection(
             title = stringResource(id = R.string.high_contrast_label),
-            description = stringResource(id = R.string.high_contrast_description)
+            description = stringResource(id = R.string.high_contrast_description),
+            animationsEnabled = layoutAnimationsEnabled
         ) {
             val enabled = dynamicColorEnabled
             Row(
@@ -1901,7 +1930,8 @@ private fun AccessibilitySettingsSheet(
 
         ExpandableSettingSection(
             title = stringResource(id = R.string.accessibility_section_talkback_title),
-            description = stringResource(id = R.string.accessibility_section_talkback_description)
+            description = stringResource(id = R.string.accessibility_section_talkback_description),
+            animationsEnabled = layoutAnimationsEnabled
         ) {
             val talkBackAvailable = accessibilityManager?.isTouchExplorationEnabled == true
             val checked = talkBackIntegrationEnabled && talkBackAvailable
@@ -1956,7 +1986,8 @@ private fun AccessibilitySettingsSheet(
 
         ExpandableSettingSection(
             title = stringResource(id = R.string.accessibility_section_font_scale_title),
-            description = stringResource(id = R.string.accessibility_section_font_scale_description)
+            description = stringResource(id = R.string.accessibility_section_font_scale_description),
+            animationsEnabled = layoutAnimationsEnabled
         ) {
             var sliderValue by remember { mutableStateOf(fontScale) }
             LaunchedEffect(fontScale) {
@@ -2002,6 +2033,7 @@ private fun ExpandableSettingSection(
     title: String,
     description: String,
     initiallyExpanded: Boolean = false,
+    animationsEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
@@ -2013,7 +2045,7 @@ private fun ExpandableSettingSection(
         shape = MaterialTheme.shapes.large,
         tonalElevation = 2.dp
     ) {
-        Column(modifier = Modifier.animateContentSize()) {
+        Column(modifier = Modifier.animateContentSizeIf(animationsEnabled)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2038,7 +2070,16 @@ private fun ExpandableSettingSection(
                     contentDescription = null
                 )
             }
-            AnimatedVisibility(visible = expanded) {
+            if (animationsEnabled) {
+                AnimatedVisibility(visible = expanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        content = content
+                    )
+                }
+            } else if (expanded) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2047,6 +2088,14 @@ private fun ExpandableSettingSection(
                 )
             }
         }
+    }
+}
+
+private fun Modifier.animateContentSizeIf(enabled: Boolean): Modifier {
+    return if (enabled) {
+        this.animateContentSize()
+    } else {
+        this
     }
 }
 
@@ -2260,7 +2309,8 @@ private fun PdfPager(
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
-    onPrefetchPages: (List<Int>, Int) -> Unit
+    onPrefetchPages: (List<Int>, Int) -> Unit,
+    animationsEnabled: Boolean
 ) {
     val lazyListState = rememberLazyListState()
     val latestOnPageChange by rememberUpdatedState(onPageChange)
@@ -2357,7 +2407,8 @@ private fun PdfPager(
                     state = state,
                     renderPage = latestRenderPage,
                     requestPageSize = latestRequestPageSize,
-                    onStrokeFinished = latestStrokeFinished
+                    onStrokeFinished = latestStrokeFinished,
+                    animationsEnabled = animationsEnabled
                 )
             }
         }
@@ -2423,8 +2474,6 @@ private fun ThumbnailStrip(
     val surfaceColor = MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
 
     val thumbnailListState = rememberLazyListState()
-    val prefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = 1) }
-
     Surface(
         modifier = modifier
             .padding(horizontal = 16.dp)
@@ -2474,8 +2523,7 @@ private fun ThumbnailStrip(
                         .padding(top = 12.dp),
                     state = thumbnailListState,
                     contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    prefetching = prefetchStrategy
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(pagesToDisplay, key = { it }) { pageIndex ->
                         ThumbnailItem(
@@ -2643,7 +2691,8 @@ private fun PdfPageItem(
     state: PdfViewerUiState,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
-    onStrokeFinished: (AnnotationCommand) -> Unit
+    onStrokeFinished: (AnnotationCommand) -> Unit,
+    animationsEnabled: Boolean
 ) {
     val density = LocalDensity.current
     val latestRender by rememberUpdatedState(renderPage)
@@ -2855,18 +2904,8 @@ private fun PdfPageItem(
                 contentDescription = annotationDescription
             )
 
-            AnimatedVisibility(
-                visible = showPageFlip && composition != null,
-                modifier = Modifier.align(Alignment.Center),
-                enter = fadeIn(animationSpec = tween(220)) + scaleIn(
-                    initialScale = 0.85f,
-                    animationSpec = tween(220)
-                ),
-                exit = fadeOut(animationSpec = tween(200)) + scaleOut(
-                    targetScale = 0.95f,
-                    animationSpec = tween(200)
-                )
-            ) {
+            val showPageFlipAnimation = showPageFlip && composition != null
+            val flipContent: @Composable () -> Unit = {
                 composition?.let {
                     LottieAnimation(
                         composition = it,
@@ -2874,6 +2913,26 @@ private fun PdfPageItem(
                         speed = 1.2f,
                         modifier = Modifier.size(160.dp)
                     )
+                }
+            }
+            if (animationsEnabled) {
+                AnimatedVisibility(
+                    visible = showPageFlipAnimation,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = fadeIn(animationSpec = tween(220)) + scaleIn(
+                        initialScale = 0.85f,
+                        animationSpec = tween(220)
+                    ),
+                    exit = fadeOut(animationSpec = tween(200)) + scaleOut(
+                        targetScale = 0.95f,
+                        animationSpec = tween(200)
+                    )
+                ) {
+                    flipContent()
+                }
+            } else if (showPageFlipAnimation) {
+                Box(modifier = Modifier.align(Alignment.Center)) {
+                    flipContent()
                 }
             }
         }
