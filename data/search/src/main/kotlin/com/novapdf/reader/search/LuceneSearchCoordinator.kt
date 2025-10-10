@@ -56,6 +56,7 @@ import java.io.File
 import java.io.IOException
 import java.io.StringWriter
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import kotlin.math.max
@@ -92,6 +93,19 @@ private data class OcrPageResult(
     val bitmapHeight: Int
 )
 
+private data class DocumentIndexShard(
+    val documentId: String,
+    val directory: Directory?,
+    val reader: DirectoryReader?,
+    val searcher: IndexSearcher?,
+    val contents: List<PageSearchContent>
+) : Closeable {
+    override fun close() {
+        runCatching { reader?.close() }
+        runCatching { directory?.close() }
+    }
+}
+
 private const val INDEX_POOL_PARALLELISM = 1
 
 class LuceneSearchCoordinator(
@@ -110,10 +124,9 @@ class LuceneSearchCoordinator(
     private val appContext = context.applicationContext
     private val indexRoot = PdfCacheRoot.indexes(appContext)
     private val analyzer = StandardAnalyzer()
-    private val indexLock = Mutex()
-    private var directory: Directory? = null
+    private val shardLocks = ConcurrentHashMap<String, Mutex>()
+    private val indexShards = ConcurrentHashMap<String, DocumentIndexShard>()
     private var indexSearcher: IndexSearcher? = null
-    private var indexReader: DirectoryReader? = null
     private var currentDocumentId: String? = null
     private var prepareJob: Job? = null
     private val textRecognizer: TextRecognizer? = runCatching {
@@ -174,11 +187,9 @@ class LuceneSearchCoordinator(
                 "Skipping Lucene index preparation for large document " +
                     "(${session.pageCount} pages)"
             )
-            currentDocumentId = session.documentId
             clearStoredIndex(session.documentId)
-            directory = null
+            currentDocumentId = session.documentId
             indexSearcher = null
-            indexReader = null
             pageContents = emptyList()
             prepareJob = null
             return null
@@ -246,10 +257,11 @@ class LuceneSearchCoordinator(
         prepareJob = null
         scope.cancel()
         runCatching { textRecognizer?.close() }
-        runCatching { indexReader?.close() }
-        runCatching { directory?.close() }
-        indexReader = null
-        directory = null
+        indexShards.values.forEach { shard ->
+            runCatching { shard.close() }
+        }
+        indexShards.clear()
+        shardLocks.clear()
         indexSearcher = null
         currentDocumentId = null
         pageContents = emptyList()
@@ -268,11 +280,9 @@ class LuceneSearchCoordinator(
                 TAG,
                 "Skipping Lucene index rebuild for large document (${session.pageCount} pages)"
             )
-            currentDocumentId = session.documentId
             clearStoredIndex(session.documentId)
-            directory = null
+            currentDocumentId = session.documentId
             indexSearcher = null
-            indexReader = null
             pageContents = emptyList()
             return
         }
@@ -280,58 +290,8 @@ class LuceneSearchCoordinator(
     }
 
     private suspend fun rebuildIndex(session: PdfDocumentSession) = withContext(indexDispatcher) {
-        val contents = if (session.pageCount > 0) extractPageContent(session) else emptyList()
-        indexLock.withLock {
-            runCatching { indexReader?.close() }
-            indexReader = null
-            directory?.close()
-            directory = null
-            if (contents.isEmpty()) {
-                clearStoredIndex(session.documentId)
-                indexSearcher = null
-                currentDocumentId = session.documentId
-                pageContents = emptyList()
-                return@withLock
-            }
-            val indexDir = documentIndexDirectory(session.documentId)
-            if (indexDir == null) {
-                indexSearcher = null
-                currentDocumentId = session.documentId
-                pageContents = contents
-                return@withLock
-            }
-            val luceneDirectory = runCatching { FSDirectory.open(indexDir.toPath()) }
-                .onFailure { error ->
-                    Log.w(TAG, "Unable to open Lucene directory at ${indexDir.absolutePath}", error)
-                }
-                .getOrNull()
-            if (luceneDirectory == null) {
-                clearStoredIndex(session.documentId)
-                indexSearcher = null
-                currentDocumentId = session.documentId
-                pageContents = contents
-                return@withLock
-            }
-            directory = luceneDirectory
-            val config = IndexWriterConfig(analyzer).apply {
-                openMode = IndexWriterConfig.OpenMode.CREATE
-            }
-            IndexWriter(luceneDirectory, config).use { writer ->
-                contents.forEachIndexed { index, content ->
-                    val cleaned = content.text.trim()
-                    val document = Document().apply {
-                        add(StoredField("page", index))
-                        add(TextField("content", cleaned, Field.Store.YES))
-                    }
-                    writer.addDocument(document)
-                }
-                writer.commit()
-            }
-            indexReader = DirectoryReader.open(luceneDirectory)
-            indexSearcher = indexReader?.let { IndexSearcher(it) }
-            currentDocumentId = session.documentId
-            pageContents = contents
-        }
+        val shard = obtainShard(session)
+        applyActiveShard(session.documentId, shard)
     }
 
     private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> {
@@ -528,15 +488,134 @@ class LuceneSearchCoordinator(
     }
 
     private fun clearStoredIndex(documentId: String) {
+        removeShard(documentId)
+        deleteIndexDirectory(documentId)
+    }
+
+    private fun removeShard(documentId: String) {
+        val removed = indexShards.remove(documentId)
+        removed?.close()
+        shardLocks.remove(documentId)
+        if (currentDocumentId == documentId) {
+            indexSearcher = null
+            pageContents = emptyList()
+            currentDocumentId = null
+        }
+    }
+
+    private fun shardLock(documentId: String): Mutex =
+        shardLocks.getOrPut(documentId) { Mutex() }
+
+    private fun deleteIndexDirectory(documentId: String) {
         val directory = documentIndexDirectory(documentId, createIfMissing = false) ?: return
         if (!directory.exists()) {
             return
         }
         val deleted = runCatching { directory.deleteRecursively() }
-            .onFailure { error -> Log.w(TAG, "Unable to delete Lucene index at ${directory.absolutePath}", error) }
+            .onFailure { error ->
+                Log.w(TAG, "Unable to delete Lucene index at ${directory.absolutePath}", error)
+            }
             .getOrDefault(false)
         if (!deleted && directory.exists()) {
             Log.w(TAG, "Failed to remove Lucene index directory at ${directory.absolutePath}")
+        }
+    }
+
+    private suspend fun obtainShard(
+        session: PdfDocumentSession,
+        forceRebuild: Boolean = false,
+    ): DocumentIndexShard {
+        val documentId = session.documentId
+        if (!forceRebuild) {
+            indexShards[documentId]?.let { return it }
+        }
+        val contents = if (session.pageCount > 0) extractPageContent(session) else emptyList()
+        val lock = shardLock(documentId)
+        return lock.withLock {
+            if (!forceRebuild) {
+                indexShards[documentId]?.let { return@withLock it }
+            } else {
+                indexShards.remove(documentId)?.close()
+            }
+            if (contents.isEmpty()) {
+                deleteIndexDirectory(documentId)
+                val emptyShard = DocumentIndexShard(documentId, null, null, null, emptyList())
+                indexShards.put(documentId, emptyShard)?.close()
+                emptyShard
+            } else {
+                val shard = buildShard(documentId, contents, forceRebuild)
+                indexShards.put(documentId, shard)?.close()
+                shard
+            }
+        }
+    }
+
+    private fun applyActiveShard(documentId: String, shard: DocumentIndexShard) {
+        currentDocumentId = documentId
+        indexSearcher = shard.searcher
+        pageContents = shard.contents
+    }
+
+    private fun buildShard(
+        documentId: String,
+        contents: List<PageSearchContent>,
+        forceRewrite: Boolean,
+    ): DocumentIndexShard {
+        val indexDir = documentIndexDirectory(documentId) ?: return DocumentIndexShard(
+            documentId,
+            directory = null,
+            reader = null,
+            searcher = null,
+            contents = contents
+        )
+        val luceneDirectory = runCatching { FSDirectory.open(indexDir.toPath()) }
+            .onFailure { error ->
+                Log.w(TAG, "Unable to open Lucene directory at ${indexDir.absolutePath}", error)
+            }
+            .getOrNull()
+        if (luceneDirectory == null) {
+            deleteIndexDirectory(documentId)
+            return DocumentIndexShard(documentId, null, null, null, contents)
+        }
+        var reader: DirectoryReader? = null
+        try {
+            var needsRewrite = forceRewrite || !DirectoryReader.indexExists(luceneDirectory)
+            if (!needsRewrite) {
+                DirectoryReader.open(luceneDirectory).use { existing ->
+                    if (existing.numDocs() != contents.size) {
+                        needsRewrite = true
+                    }
+                }
+            }
+            if (needsRewrite) {
+                rewriteIndex(luceneDirectory, contents)
+            }
+            reader = DirectoryReader.open(luceneDirectory)
+            val searcher = IndexSearcher(reader)
+            return DocumentIndexShard(documentId, luceneDirectory, reader, searcher, contents)
+        } catch (error: Throwable) {
+            Log.w(TAG, "Unable to build Lucene index at ${indexDir.absolutePath}", error)
+            runCatching { reader?.close() }
+            runCatching { luceneDirectory.close() }
+            deleteIndexDirectory(documentId)
+            return DocumentIndexShard(documentId, null, null, null, contents)
+        }
+    }
+
+    private fun rewriteIndex(directory: Directory, contents: List<PageSearchContent>) {
+        val config = IndexWriterConfig(analyzer).apply {
+            openMode = IndexWriterConfig.OpenMode.CREATE
+        }
+        IndexWriter(directory, config).use { writer ->
+            contents.forEachIndexed { index, content ->
+                val cleaned = content.text.trim()
+                val document = Document().apply {
+                    add(StoredField("page", index))
+                    add(TextField("content", cleaned, Field.Store.YES))
+                }
+                writer.addDocument(document)
+            }
+            writer.commit()
         }
     }
 
