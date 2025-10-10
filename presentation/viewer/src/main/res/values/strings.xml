@@ -110,4 +110,22 @@
     <string name="error_no_browser">No browser found to open the repair link.</string>
     <string name="remote_pdf_download_started">Downloading PDF…</string>
     <string name="remote_pdf_download_failed">Unable to download the PDF.</string>
+    <string name="dev_options_title">Developer options</string>
+    <string name="dev_options_description">Diagnostics for debugging and performance verification.</string>
+    <string name="dev_options_body">Inspect runtime metrics and tools that support QA and profiling sessions.</string>
+    <string name="dev_options_open">Open developer options</string>
+    <string name="dev_options_memory_overview">Track bitmap cache usage to understand rendering pressure and memory headroom.</string>
+    <string name="dev_options_memory_title">Bitmap memory</string>
+    <string name="dev_options_memory_description">Live metrics from the render cache and bitmap pool.</string>
+    <string name="dev_options_memory_current">Current usage</string>
+    <string name="dev_options_memory_peak">Peak usage</string>
+    <string name="dev_options_memory_warn_threshold">Warning threshold</string>
+    <string name="dev_options_memory_critical_threshold">Critical threshold</string>
+    <string name="dev_options_memory_status_label">Status</string>
+    <string name="dev_options_status_normal">Normal</string>
+    <string name="dev_options_status_warning">Warning</string>
+    <string name="dev_options_status_critical">Critical</string>
+    <string name="dev_options_threshold_unavailable">Not configured</string>
+    <string name="dev_options_memory_value_format">%1$s (%2$d B)</string>
+    <string name="dev_options_back">Back to settings</string>
 </resources>

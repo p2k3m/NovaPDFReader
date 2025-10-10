@@ -15,6 +15,7 @@ import com.novapdf.reader.download.RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
@@ -69,6 +70,7 @@ interface PdfDocumentUseCase {
     val session: StateFlow<PdfDocumentSession?>
     val outline: StateFlow<List<PdfOutlineNode>>
     val renderProgress: StateFlow<PdfRenderProgress>
+    val bitmapMemory: StateFlow<BitmapMemoryStats>
 
     fun prefetchPages(indices: List<Int>, targetWidth: Int)
     suspend fun getPageSize(pageIndex: Int): Size?
@@ -86,6 +88,8 @@ class DefaultPdfDocumentUseCase @Inject constructor(
         get() = repository.outline
     override val renderProgress: StateFlow<PdfRenderProgress>
         get() = repository.renderProgress
+    override val bitmapMemory: StateFlow<BitmapMemoryStats>
+        get() = repository.bitmapMemory
 
     override fun prefetchPages(indices: List<Int>, targetWidth: Int) {
         repository.prefetchPages(indices, targetWidth)
