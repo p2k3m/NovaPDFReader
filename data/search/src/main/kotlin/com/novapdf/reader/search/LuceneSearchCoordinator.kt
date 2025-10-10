@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -78,6 +79,8 @@ private data class OcrPageResult(
     val bitmapHeight: Int
 )
 
+private const val INDEX_POOL_PARALLELISM = 1
+
 class LuceneSearchCoordinator(
     private val context: Context,
     private val pdfRepository: PdfDocumentRepository,
@@ -86,7 +89,10 @@ class LuceneSearchCoordinator(
         CoroutineScope(SupervisorJob() + dispatcher)
     }
 ) : DocumentSearchCoordinator {
-    private val scope = scopeProvider(dispatchers.io)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
+
+    private val scope = scopeProvider(indexDispatcher)
     private val analyzer = StandardAnalyzer()
     private val indexLock = Mutex()
     private var directory: ByteBuffersDirectory? = null
@@ -246,7 +252,7 @@ class LuceneSearchCoordinator(
         }
     }
 
-    private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> = withContext(Dispatchers.IO) {
+    private suspend fun extractPageContent(session: PdfDocumentSession): List<PageSearchContent> = withContext(indexDispatcher) {
         val pageCount = session.pageCount
         if (pageCount <= 0) return@withContext emptyList()
         val pdfBoxReady = PdfBoxInitializer.ensureInitialized(context)
@@ -359,7 +365,7 @@ class LuceneSearchCoordinator(
         pageIndex: Int,
         pageWidth: Int,
         pageHeight: Int
-    ): PageSearchContent? = withContext(Dispatchers.IO) {
+    ): PageSearchContent? = withContext(indexDispatcher) {
         val bitmap = pdfRepository.renderPage(pageIndex, OCR_RENDER_TARGET_WIDTH) ?: return@withContext null
         try {
             val recognized = recognizeText(bitmap)

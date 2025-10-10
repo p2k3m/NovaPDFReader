@@ -165,6 +165,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
@@ -176,6 +177,14 @@ private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
 private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
 private const val THUMBNAIL_TARGET_WIDTH = 320
+private const val PAGE_RENDER_PARALLELISM = 2
+private const val THUMBNAIL_PARALLELISM = 2
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private val pageRenderDispatcher = Dispatchers.IO.limitedParallelism(PAGE_RENDER_PARALLELISM)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+private val thumbnailDispatcher = Dispatchers.IO.limitedParallelism(THUMBNAIL_PARALLELISM)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -2125,7 +2134,7 @@ private fun ThumbnailItem(
             thumbnail = null
             return@LaunchedEffect
         }
-        val rendered = withContext(Dispatchers.IO) {
+        val rendered = withContext(thumbnailDispatcher) {
             latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
         }
         // As with the main page bitmaps we avoid recycling the previous thumbnail here to
@@ -2277,7 +2286,7 @@ private fun PdfPageItem(
             }
             if (widthPx <= 0) return@LaunchedEffect
             isLoading = true
-            val (size, rendered) = withContext(Dispatchers.IO) {
+            val (size, rendered) = withContext(pageRenderDispatcher) {
                 val requested = latestRequest(pageIndex)
                 val bitmap = latestRender(pageIndex, widthPx)
                 requested to bitmap

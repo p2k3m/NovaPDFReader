@@ -30,6 +30,7 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.presentation.viewer.R
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
@@ -47,6 +48,8 @@ import javax.inject.Inject
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
+private const val RENDER_POOL_PARALLELISM = 2
+private const val INDEX_POOL_PARALLELISM = 1
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -109,6 +112,12 @@ open class PdfViewerViewModel @Inject constructor(
     private val maintenanceUseCase = useCases.maintenance
     private val crashReportingUseCase = useCases.crashReporting
     private val adaptiveFlowUseCase = useCases.adaptiveFlow
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
@@ -324,10 +333,12 @@ open class PdfViewerViewModel @Inject constructor(
         }
         indexingJob?.cancel()
         val indexingSignal = CancellationSignal()
-        val indexResult = buildSearchIndexUseCase(
-            BuildSearchIndexRequest(session),
-            indexingSignal,
-        )
+        val indexResult = withContext(indexDispatcher) {
+            buildSearchIndexUseCase(
+                BuildSearchIndexRequest(session),
+                indexingSignal,
+            )
+        }
         indexResult.onSuccess { result ->
             indexingJob = result.job
         }.onFailure { throwable ->
@@ -349,7 +360,7 @@ open class PdfViewerViewModel @Inject constructor(
             messageRes = R.string.loading_stage_rendering
         )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
-        withContext(dispatchers.io) {
+        withContext(renderDispatcher) {
             val signal = CancellationSignal()
             val result = renderPageUseCase(
                 RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
@@ -450,7 +461,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     suspend fun renderPage(index: Int, targetWidth: Int): Bitmap? {
-        return withContext(dispatchers.io) {
+        return withContext(renderDispatcher) {
             val signal = CancellationSignal()
             val result = renderPageUseCase(RenderPageRequest(index, targetWidth), signal)
             result.fold(
@@ -464,7 +475,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
-        return withContext(dispatchers.io) {
+        return withContext(renderDispatcher) {
             val signal = CancellationSignal()
             val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
             result.fold(
@@ -500,7 +511,7 @@ open class PdfViewerViewModel @Inject constructor(
 
     fun prefetchPages(indices: List<Int>, widthPx: Int) {
         if (indices.isEmpty() || widthPx <= 0 || shouldThrottlePrefetch()) return
-        viewModelScope.launch(dispatchers.io) {
+        viewModelScope.launch(renderDispatcher) {
             documentUseCase.prefetchPages(indices, widthPx)
         }
     }
@@ -580,7 +591,7 @@ open class PdfViewerViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(searchResults = emptyList())
             return
         }
-        searchJob = viewModelScope.launch(dispatchers.io) {
+        searchJob = viewModelScope.launch(indexDispatcher) {
             val session = documentUseCase.session.value ?: return@launch
             val results = runCatching { searchUseCase.search(session, query) }
                 .onFailure { throwable -> Log.e("PdfViewerViewModel", "Search failed", throwable) }
