@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.novapdf.reader.CacheFileNames
 import com.novapdf.reader.data.PdfDocumentRepository
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -79,7 +80,8 @@ class LargePdfInstrumentedTest {
                 renderedPage.recycle()
             }
 
-            val cacheDir = File(context.cacheDir, "instrumentation-screenshots").apply { mkdirs() }
+            val cacheDir = File(context.cacheDir, CacheFileNames.INSTRUMENTATION_SCREENSHOT_DIRECTORY)
+                .apply { mkdirs() }
             assertTrue("Cache directory should exist", cacheDir.exists())
         } finally {
             repository.dispose()

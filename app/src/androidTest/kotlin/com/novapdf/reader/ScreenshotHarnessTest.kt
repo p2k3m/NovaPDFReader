@@ -18,6 +18,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
+import com.novapdf.reader.CacheFileNames
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -115,10 +116,10 @@ class ScreenshotHarnessTest {
 
     private suspend fun waitForScreenshotHandshake() {
         val readyFlags = handshakeCacheDirs.map { directory ->
-            File(directory, SCREENSHOT_READY_FLAG)
+            File(directory, CacheFileNames.SCREENSHOT_READY_FLAG)
         }
         val doneFlags = handshakeCacheDirs.map { directory ->
-            File(directory, SCREENSHOT_DONE_FLAG)
+            File(directory, CacheFileNames.SCREENSHOT_DONE_FLAG)
         }
 
         withContext(Dispatchers.IO) {
@@ -199,8 +200,14 @@ class ScreenshotHarnessTest {
         }
         handshakeCacheDirs.forEach { directory ->
             logHarnessInfo("Cleaning up screenshot harness flags in ${directory.absolutePath}")
-            deleteHandshakeFlag(File(directory, SCREENSHOT_READY_FLAG), failOnError = false)
-            deleteHandshakeFlag(File(directory, SCREENSHOT_DONE_FLAG), failOnError = false)
+            deleteHandshakeFlag(
+                File(directory, CacheFileNames.SCREENSHOT_READY_FLAG),
+                failOnError = false
+            )
+            deleteHandshakeFlag(
+                File(directory, CacheFileNames.SCREENSHOT_DONE_FLAG),
+                failOnError = false
+            )
         }
     }
 
@@ -665,8 +672,11 @@ class ScreenshotHarnessTest {
                 return
             }
 
-            val screenshotDir = File(appContext.cacheDir, PROGRAMMATIC_SCREENSHOT_DIRECTORY).apply { mkdirs() }
-            val screenshotFile = File(screenshotDir, PROGRAMMATIC_SCREENSHOT_FILE)
+            val screenshotDir = File(
+                appContext.cacheDir,
+                CacheFileNames.INSTRUMENTATION_SCREENSHOT_DIRECTORY
+            ).apply { mkdirs() }
+            val screenshotFile = File(screenshotDir, CacheFileNames.PROGRAMMATIC_SCREENSHOT_FILE)
             withContext(Dispatchers.IO) {
                 runCatching {
                     FileOutputStream(screenshotFile).use { stream ->
@@ -755,12 +765,8 @@ class ScreenshotHarnessTest {
     }
 
     private companion object {
-        private const val SCREENSHOT_READY_FLAG = "screenshot_ready.flag"
-        private const val SCREENSHOT_DONE_FLAG = "screenshot_done.flag"
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
         private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
-        private const val PROGRAMMATIC_SCREENSHOT_DIRECTORY = "instrumentation-screenshots"
-        private const val PROGRAMMATIC_SCREENSHOT_FILE = "programmatic_screenshot.png"
         private const val CAPTURE_VIDEO_OUTPUT_PERMISSION = "android.permission.CAPTURE_VIDEO_OUTPUT"
         // Opening a thousand-page stress document can take a while on CI devices, so give the
         // viewer ample time to finish rendering before failing the harness run.

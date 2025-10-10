@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import com.novapdf.reader.util.sanitizeCacheFileName
 import java.io.File
 import java.io.IOException
 import kotlin.math.absoluteValue
@@ -14,7 +15,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 internal object StressDocumentFixtures {
-    private const val LARGE_CACHE_FILE_NAME = "baseline-stress-large.pdf"
+    private val LARGE_CACHE_FILE_NAME = sanitizeCacheFileName(
+        raw = "baseline-stress-large.pdf",
+        fallback = "baseline-stress-large.pdf",
+        label = "baseline stress PDF cache file",
+    )
     private const val PAGE_COUNT = 32
 
     fun ensureStressDocument(context: Context): Uri {

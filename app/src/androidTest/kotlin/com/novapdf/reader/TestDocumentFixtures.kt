@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
 import com.novapdf.reader.BuildConfig
+import com.novapdf.reader.CacheFileNames
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -50,7 +51,7 @@ class TestDocumentFixtures @Inject constructor() {
                 ?: orderedCandidates.firstOrNull()?.directory
                 ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
 
-            val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
+            val destination = File(destinationDirectory, CacheFileNames.THOUSAND_PAGE_CACHE)
             destination.parentFile?.mkdirs()
             Log.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
             createThousandPagePdf(destination)
@@ -135,11 +136,11 @@ class TestDocumentFixtures @Inject constructor() {
         }
 
         val targetDirectories = buildList {
-            add(File(context.cacheDir, HARNESS_CACHE_DIRECTORY))
-            context.filesDir?.let { add(File(it, HARNESS_CACHE_DIRECTORY)) }
-            context.externalCacheDir?.let { add(File(it, HARNESS_CACHE_DIRECTORY)) }
+            add(File(context.cacheDir, CacheFileNames.HARNESS_CACHE_DIRECTORY))
+            context.filesDir?.let { add(File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY)) }
+            context.externalCacheDir?.let { add(File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY)) }
             context.getExternalFilesDir(null)?.let { parent ->
-                add(File(parent, HARNESS_CACHE_DIRECTORY))
+                add(File(parent, CacheFileNames.HARNESS_CACHE_DIRECTORY))
             }
         }
 
@@ -149,7 +150,7 @@ class TestDocumentFixtures @Inject constructor() {
                 return@forEach
             }
 
-            val destination = File(directory, THOUSAND_PAGE_CACHE)
+            val destination = File(directory, CacheFileNames.THOUSAND_PAGE_CACHE)
             if (copyFixture(file, destination)) {
                 Log.i(
                     TAG,
@@ -185,7 +186,7 @@ class TestDocumentFixtures @Inject constructor() {
     }
 
     private fun findValidFixture(candidate: StorageCandidate, logReuse: Boolean = true): File? {
-        val file = File(candidate.directory, THOUSAND_PAGE_CACHE)
+        val file = File(candidate.directory, CacheFileNames.THOUSAND_PAGE_CACHE)
         if (!file.exists() || file.length() <= 0L) {
             return null
         }
@@ -222,7 +223,7 @@ class TestDocumentFixtures @Inject constructor() {
             )
             return null
         }
-        val destination = File(destinationDirectory, THOUSAND_PAGE_CACHE)
+        val destination = File(destinationDirectory, CacheFileNames.THOUSAND_PAGE_CACHE)
         return try {
             source.copyTo(destination, overwrite = true)
             if (validateThousandPagePdf(destination)) {
@@ -532,8 +533,6 @@ class TestDocumentFixtures @Inject constructor() {
     }
 
     private companion object {
-        private const val THOUSAND_PAGE_CACHE = "stress-thousand-pages.pdf"
-        private const val HARNESS_CACHE_DIRECTORY = "screenshot-harness"
         private const val THOUSAND_PAGE_URL_ARG = "thousandPagePdfUrl"
         private const val THOUSAND_PAGE_COUNT = 1_000
         private const val THOUSAND_PAGE_ASSET_BASE64 = "thousand_page_fixture.base64"

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.novapdf.reader.CacheFileNames
 import com.novapdf.reader.data.PdfDocumentRepository
 import java.io.File
 import java.io.FileOutputStream
@@ -54,8 +55,9 @@ class SamplePdfInstrumentedTest {
             assertNotNull("Sample PDF should render a bitmap", bitmap)
             val renderedPage = requireNotNull(bitmap)
 
-            val screenshotDir = File(context.cacheDir, "instrumentation-screenshots").apply { mkdirs() }
-            val screenshotFile = File(screenshotDir, "sample_page.png")
+            val screenshotDir = File(context.cacheDir, CacheFileNames.INSTRUMENTATION_SCREENSHOT_DIRECTORY)
+                .apply { mkdirs() }
+            val screenshotFile = File(screenshotDir, CacheFileNames.SAMPLE_SCREENSHOT_FILE)
             FileOutputStream(screenshotFile).use { stream ->
                 renderedPage.compress(Bitmap.CompressFormat.PNG, 100, stream)
             }
