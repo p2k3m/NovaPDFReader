@@ -1,6 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import io.gitlab.arturbosch.detekt.Detekt
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import org.gradle.StartParameter
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByType
@@ -8,6 +9,11 @@ import org.gradle.kotlin.dsl.withType
 import org.jlleitschuh.gradle.ktlint.KtlintExtension
 import org.jlleitschuh.gradle.ktlint.tasks.KtLintCheckTask
 import org.jlleitschuh.gradle.ktlint.tasks.KtLintFormatTask
+import kotlin.LazyThreadSafetyMode
+import java.io.File
+import java.util.Properties
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -42,6 +48,205 @@ val dependencyAnalysisEnabled = providers.gradleProperty("novapdf.enableDependen
 if (dependencyAnalysisRequested || dependencyAnalysisEnabled.get()) {
     pluginManager.apply("com.autonomousapps.dependency-analysis")
 }
+
+fun parseOptionalBoolean(raw: String?): Boolean? = when {
+    raw == null -> null
+    raw.equals("true", ignoreCase = true) -> true
+    raw.equals("false", ignoreCase = true) -> false
+    else -> null
+}
+
+fun locateAndroidSdkDir(): File? {
+    val localProperties = rootProject.file("local.properties")
+    if (localProperties.exists()) {
+        val properties = Properties()
+        localProperties.inputStream().use { input ->
+            properties.load(input)
+        }
+        properties.getProperty("sdk.dir")?.takeIf { it.isNotBlank() }?.let { sdkPath ->
+            val sdkDirCandidate = File(sdkPath)
+            if (sdkDirCandidate.exists()) {
+                return sdkDirCandidate
+            }
+        }
+    }
+
+    return sequenceOf("ANDROID_SDK_ROOT", "ANDROID_HOME")
+        .mapNotNull { key -> System.getenv(key)?.takeIf { it.isNotBlank() } }
+        .map { path -> File(path) }
+        .firstOrNull { it.exists() }
+}
+
+fun findAdbExecutable(sdkDirectory: File?): File? {
+    if (sdkDirectory == null) {
+        return null
+    }
+
+    val platformTools = File(sdkDirectory, "platform-tools")
+    return sequenceOf("adb", "adb.exe")
+        .map { executable -> File(platformTools, executable) }
+        .firstOrNull { it.exists() }
+}
+
+fun StartParameter.requestsConnectedAndroidTests(): Boolean = taskNames.any { taskPath ->
+    val taskName = taskPath.substringAfterLast(":")
+    taskName.contains("connected", ignoreCase = true) &&
+        (taskName.contains("AndroidTest", ignoreCase = true) ||
+            taskName.contains("Check", ignoreCase = true))
+}
+
+data class ConnectedDeviceCheck(val hasDevice: Boolean, val warningMessage: String?)
+
+val requireConnectedDevice = parseOptionalBoolean(
+    (findProperty("novapdf.requireConnectedDevice") as? String)
+        ?: providers.gradleProperty("novapdf.requireConnectedDevice").orNull
+        ?: System.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
+)
+
+val allowCiConnectedTests = parseOptionalBoolean(
+    (findProperty("novapdf.allowCiConnectedTests") as? String)
+        ?: providers.gradleProperty("novapdf.allowCiConnectedTests").orNull
+        ?: System.getenv("NOVAPDF_ALLOW_CI_CONNECTED_TESTS")
+)
+
+val isCiBuild = parseOptionalBoolean(System.getenv("CI")) ?: false
+val skipConnectedTestsOnCi = isCiBuild && allowCiConnectedTests != true && requireConnectedDevice != true
+
+val minimumSupportedApiLevel = runCatching {
+    versionCatalog.findVersion("androidMinSdk").get().requiredVersion.toInt()
+}.getOrNull()
+
+val androidSdkDirectory = locateAndroidSdkDir()
+val adbExecutable = findAdbExecutable(androidSdkDirectory)
+
+fun queryDeviceApiLevel(serial: String): Int? {
+    val executable = adbExecutable ?: return null
+
+    return try {
+        val process = ProcessBuilder(
+            executable.absolutePath,
+            "-s",
+            serial,
+            "shell",
+            "getprop",
+            "ro.build.version.sdk"
+        )
+            .redirectErrorStream(true)
+            .start()
+
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroy()
+            process.destroyForcibly()
+            null
+        } else {
+            process.inputStream.bufferedReader().use { reader ->
+                reader.readText().trim().toIntOrNull()
+            }
+        }
+    } catch (error: Exception) {
+        logger.warn(
+            "Unable to determine API level for connected Android device $serial. Skipping.",
+            error
+        )
+        null
+    }
+}
+
+fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
+    val executable = adbExecutable
+    if (executable == null) {
+        return ConnectedDeviceCheck(
+            hasDevice = false,
+            warningMessage = "ADB executable not found. Skipping connected Android tests. " +
+                "Set ANDROID_SDK_ROOT or create a local.properties with sdk.dir to enable instrumentation builds."
+        )
+    }
+
+    if (!executable.exists()) {
+        return ConnectedDeviceCheck(
+            hasDevice = false,
+            warningMessage = "ADB executable not found at ${executable.absolutePath}. Skipping connected Android tests."
+        )
+    }
+
+    return runCatching {
+        val process = ProcessBuilder(executable.absolutePath, "devices")
+            .redirectErrorStream(true)
+            .start()
+
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroy()
+            process.destroyForcibly()
+            ConnectedDeviceCheck(
+                hasDevice = false,
+                warningMessage = "Timed out while checking for connected Android devices. Skipping connected Android tests."
+            )
+        } else {
+            val readyDevices = process.inputStream.bufferedReader().useLines { lines ->
+                lines
+                    .drop(1)
+                    .mapNotNull { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty()) {
+                            return@mapNotNull null
+                        }
+
+                        val tokens = trimmed.split(Regex("\\s+"))
+                        val serial = tokens.firstOrNull() ?: return@mapNotNull null
+                        val state = tokens.getOrNull(1)?.lowercase()
+
+                        if (state != null && state != "device") {
+                            if (state == "offline") {
+                                logger.warn("Skipping connected Android device $serial with state $state.")
+                            } else {
+                                logger.info("Skipping connected Android device $serial with state $state.")
+                            }
+                            return@mapNotNull null
+                        }
+
+                        val apiLevel = queryDeviceApiLevel(serial)
+                        if (apiLevel == null) {
+                            logger.warn("Connected Android device $serial did not report an API level. Skipping.")
+                            return@mapNotNull null
+                        }
+
+                        val minimumApi = minimumSupportedApiLevel ?: 1
+                        if (apiLevel < minimumApi) {
+                            logger.warn(
+                                "Connected Android device $serial is API level $apiLevel which is below the minimum supported API level $minimumApi. Skipping."
+                            )
+                            return@mapNotNull null
+                        }
+
+                        serial
+                    }
+                    .toList()
+            }
+
+            if (readyDevices.isNotEmpty()) {
+                ConnectedDeviceCheck(hasDevice = true, warningMessage = null)
+            } else {
+                ConnectedDeviceCheck(
+                    hasDevice = false,
+                    warningMessage = "No connected Android devices/emulators detected. Skipping connected Android tests."
+                )
+            }
+        }
+    }.getOrElse { error ->
+        logger.warn(
+            "Unable to query connected Android devices via adb. Skipping connected Android tests.",
+            error
+        )
+        ConnectedDeviceCheck(
+            hasDevice = false,
+            warningMessage = "Unable to query connected Android devices via adb. Skipping connected Android tests."
+        )
+    }
+}
+
+val connectedDeviceCheck by lazy(LazyThreadSafetyMode.NONE) { computeConnectedDeviceCheck() }
+val deviceWarningLogged = AtomicBoolean(false)
+val skipWarningLogged = AtomicBoolean(false)
 
 subprojects {
     configurations.all {
@@ -127,11 +332,36 @@ subprojects {
         dependsOn("spotlessCheck", "detekt")
     }
 
-    if (System.getenv("CI") == "true") {
-        tasks.matching { task ->
-            task.name.contains("connectedAndroidTest", ignoreCase = true)
-        }.configureEach {
-            enabled = false
+    val connectedAndroidTestTasks = tasks.matching { task ->
+        task.name.startsWith("connected", ignoreCase = true) && task.name.contains("AndroidTest")
+    }
+
+    if (skipConnectedTestsOnCi) {
+        connectedAndroidTestTasks.configureEach {
+            onlyIf {
+                if (skipWarningLogged.compareAndSet(false, true)) {
+                    logger.warn(
+                        "Skipping task $name because connected Android tests are disabled on CI. " +
+                            "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
+                    )
+                }
+                false
+            }
+        }
+    } else if (requireConnectedDevice != true) {
+        connectedAndroidTestTasks.configureEach {
+            onlyIf {
+                val check = connectedDeviceCheck
+                if (!check.hasDevice && deviceWarningLogged.compareAndSet(false, true)) {
+                    val message = check.warningMessage
+                    if (message != null) {
+                        logger.warn(message)
+                    } else {
+                        logger.warn("No connected Android devices/emulators detected. Skipping task $name.")
+                    }
+                }
+                check.hasDevice
+            }
         }
     }
 }
