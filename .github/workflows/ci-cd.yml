@@ -125,6 +125,7 @@ jobs:
       NOVAPDF_APP_ID: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       UNIT_TESTS_PASSED: 'false'
+      NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
