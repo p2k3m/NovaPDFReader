@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import androidx.core.net.toUri
+import com.novapdf.reader.CacheFileNames
 import java.io.File
 import java.io.IOException
 import java.util.Base64
@@ -15,7 +16,7 @@ class SampleDocument @Inject constructor() {
 
     suspend fun installIntoCache(context: Context): android.net.Uri = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
-        val cacheFile = File(appContext.cacheDir, CACHE_FILE_NAME)
+        val cacheFile = File(appContext.cacheDir, CacheFileNames.SAMPLE_PDF_CACHE)
         cacheFile.parentFile?.mkdirs()
 
         if (!cacheFile.exists() || cacheFile.length() != SAMPLE_PDF_BYTES.size.toLong()) {
@@ -58,8 +59,6 @@ class SampleDocument @Inject constructor() {
     }
 
     private companion object {
-        private const val CACHE_FILE_NAME = "sample.pdf"
-
         private val SAMPLE_PDF_BYTES: ByteArray by lazy {
             val normalized = SAMPLE_PDF_BASE64.filterNot(Char::isWhitespace)
             Base64.getDecoder().decode(normalized)

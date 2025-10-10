@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.net.toUri
+import com.novapdf.reader.CacheFileNames
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
@@ -24,7 +25,7 @@ class StressDocumentFactory @Inject constructor() {
         val candidateDirectories = writableStorageCandidates(context)
 
         val existing = candidateDirectories
-            .map { File(it, LARGE_CACHE_FILE_NAME) }
+            .map { File(it, CacheFileNames.STRESS_PDF_CACHE) }
             .firstOrNull { it.exists() && it.length() > 0L }
 
         if (existing != null) {
@@ -34,7 +35,7 @@ class StressDocumentFactory @Inject constructor() {
         val failures = mutableListOf<IOException>()
 
         for (directory in candidateDirectories) {
-            val destination = File(directory, LARGE_CACHE_FILE_NAME)
+            val destination = File(directory, CacheFileNames.STRESS_PDF_CACHE)
 
             try {
                 destination.parentFile?.mkdirs()
@@ -195,7 +196,6 @@ class StressDocumentFactory @Inject constructor() {
     }
 
     private companion object {
-        private const val LARGE_CACHE_FILE_NAME = "stress-large.pdf"
         private const val PAGE_COUNT = 32
     }
 }
