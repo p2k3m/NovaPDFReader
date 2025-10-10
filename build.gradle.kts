@@ -4,6 +4,7 @@ import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.StartParameter
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.kotlin.dsl.configure
+import org.gradle.kotlin.dsl.dependencies
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.withType
 import org.jlleitschuh.gradle.ktlint.KtlintExtension
@@ -35,6 +36,7 @@ buildscript {
 
 val versionCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val ktlintVersion = versionCatalog.findVersion("ktlint").get().requiredVersion
+val androidTestRunnerDependencyProvider = versionCatalog.findLibrary("androidx-test-runner").get()
 
 val dependencyAnalysisRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.contains("dependency", ignoreCase = true) ||
@@ -258,6 +260,18 @@ subprojects {
     pluginManager.apply("org.jlleitschuh.gradle.ktlint")
     pluginManager.apply("com.diffplug.spotless")
     pluginManager.apply("io.gitlab.arturbosch.detekt")
+
+    plugins.withId("com.android.application") {
+        dependencies {
+            add("androidTestImplementation", androidTestRunnerDependencyProvider.get())
+        }
+    }
+
+    plugins.withId("com.android.library") {
+        dependencies {
+            add("androidTestImplementation", androidTestRunnerDependencyProvider.get())
+        }
+    }
 
     extensions.configure<KtlintExtension> {
         version.set(ktlintVersion)
