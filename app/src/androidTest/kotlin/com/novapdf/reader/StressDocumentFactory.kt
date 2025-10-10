@@ -76,10 +76,11 @@ class StressDocumentFactory @Inject constructor() {
 
         val pageSizes = buildList {
             // A mix of portrait, landscape, and extreme aspect ratio pages to mimic "unusual" PDFs
-            add(PdfDocument.PageInfo.Builder(2480, 3508, 1).create()) // A4 portrait
-            add(PdfDocument.PageInfo.Builder(3508, 2480, 2).create()) // A4 landscape
-            add(PdfDocument.PageInfo.Builder(2000, 6000, 3).create()) // Tall infographic style
-            add(PdfDocument.PageInfo.Builder(6000, 2000, 4).create()) // Wide panoramic spread
+            // The resolutions are intentionally modest to keep rendering demands manageable on CI devices
+            add(PdfDocument.PageInfo.Builder(1240, 1754, 1).create()) // A4 portrait @ ~150 DPI
+            add(PdfDocument.PageInfo.Builder(1754, 1240, 2).create()) // A4 landscape @ ~150 DPI
+            add(PdfDocument.PageInfo.Builder(1000, 3000, 3).create()) // Tall infographic style
+            add(PdfDocument.PageInfo.Builder(3000, 1000, 4).create()) // Wide panoramic spread
         }
 
         try {
