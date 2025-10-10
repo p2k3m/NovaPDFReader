@@ -34,6 +34,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -93,6 +94,11 @@ private data class DocumentContext(
     val renderProgress: PdfRenderProgress
 )
 
+private data class PrefetchRequest(
+    val indices: List<Int>,
+    val widthPx: Int
+)
+
 @HiltViewModel
 open class PdfViewerViewModel @Inject constructor(
     application: Application,
@@ -128,6 +134,11 @@ open class PdfViewerViewModel @Inject constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val messageEvents: SharedFlow<UiMessage> = _messageEvents.asSharedFlow()
+
+    private val prefetchRequests = Channel<PrefetchRequest>(
+        capacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
     private var searchJob: Job? = null
     private var indexingJob: Job? = null
@@ -199,12 +210,19 @@ open class PdfViewerViewModel @Inject constructor(
                 )
             }
         }
+        viewModelScope.launch(renderDispatcher) {
+            for (request in prefetchRequests) {
+                if (request.indices.isEmpty() || request.widthPx <= 0) continue
+                if (shouldThrottlePrefetch()) continue
+                documentUseCase.prefetchPages(request.indices, request.widthPx)
+            }
+        }
         viewModelScope.launch {
             adaptiveFlowUseCase.preloadTargets.collect { targets ->
                 if (targets.isNotEmpty() && !shouldThrottlePrefetch()) {
                     val width = viewportWidthPx
                     if (width > 0) {
-                        documentUseCase.prefetchPages(targets, width)
+                        prefetchRequests.trySend(PrefetchRequest(targets, width)).isSuccess
                     }
                 }
             }
@@ -455,7 +473,7 @@ open class PdfViewerViewModel @Inject constructor(
         if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
             val width = viewportWidthPx
             if (width > 0) {
-                documentUseCase.prefetchPages(preloadTargets, width)
+                prefetchRequests.trySend(PrefetchRequest(preloadTargets, width)).isSuccess
             }
         }
     }
@@ -505,15 +523,13 @@ open class PdfViewerViewModel @Inject constructor(
         viewportWidthPx = widthPx
         val preloadTargets = adaptiveFlowUseCase.preloadTargets.value
         if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
-            documentUseCase.prefetchPages(preloadTargets, viewportWidthPx)
+            prefetchRequests.trySend(PrefetchRequest(preloadTargets, viewportWidthPx)).isSuccess
         }
     }
 
     fun prefetchPages(indices: List<Int>, widthPx: Int) {
         if (indices.isEmpty() || widthPx <= 0 || shouldThrottlePrefetch()) return
-        viewModelScope.launch(renderDispatcher) {
-            documentUseCase.prefetchPages(indices, widthPx)
-        }
+        prefetchRequests.trySend(PrefetchRequest(indices, widthPx)).isSuccess
     }
 
     fun exportDocument(context: android.content.Context): Boolean {
@@ -606,6 +622,7 @@ open class PdfViewerViewModel @Inject constructor(
         documentUseCase.dispose()
         indexingJob?.cancel()
         remoteDownloadJob?.cancel()
+        prefetchRequests.close()
     }
 
     private fun isNightModeEnabled(): Boolean {
