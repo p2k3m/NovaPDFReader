@@ -1,10 +1,7 @@
 package com.novapdf.reader
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
-import android.net.Uri
 import android.os.Build
 import android.util.Size
 import android.util.Patterns
@@ -94,8 +91,10 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Slider
@@ -149,7 +148,6 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import android.widget.Toast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -185,7 +183,6 @@ import kotlinx.coroutines.withContext
 
 private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
-private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
 private val THUMBNAIL_WIDTH = 96.dp
 private val THUMBNAIL_HEIGHT = 128.dp
 private const val PAGE_RENDER_PARALLELISM = 2
@@ -486,6 +483,7 @@ fun PdfViewerScreen(
 
         DocumentStatusHost(
             status = state.documentStatus,
+            snackbarHost = snackbarHost,
             onDismissError = onDismissError,
             animationsEnabled = layoutAnimationsEnabled
         )
@@ -914,16 +912,32 @@ private fun DocumentUrlDialog(
 @Composable
 private fun DocumentStatusHost(
     status: DocumentStatus,
+    snackbarHost: SnackbarHostState,
     onDismissError: () -> Unit,
     animationsEnabled: Boolean
 ) {
-    when (status) {
-        is DocumentStatus.Loading -> LoadingOverlay(status, animationsEnabled)
-        is DocumentStatus.Error -> DocumentErrorDialog(
-            message = status.message,
-            onDismiss = onDismissError
-        )
-        DocumentStatus.Idle -> Unit
+    val currentDismissError by rememberUpdatedState(newValue = onDismissError)
+    val currentSnackbarHost by rememberUpdatedState(newValue = snackbarHost)
+
+    if (status is DocumentStatus.Error) {
+        val retryLabel = stringResource(id = R.string.action_try_again)
+        val message = status.message
+        LaunchedEffect(status, currentSnackbarHost, retryLabel, message) {
+            val result = currentSnackbarHost.showSnackbar(
+                message = message,
+                actionLabel = retryLabel,
+                withDismissAction = true,
+                duration = SnackbarDuration.Indefinite
+            )
+            when (result) {
+                SnackbarResult.ActionPerformed,
+                SnackbarResult.Dismissed -> currentDismissError()
+            }
+        }
+    }
+
+    if (status is DocumentStatus.Loading) {
+        LoadingOverlay(status, animationsEnabled)
     }
 }
 
@@ -988,50 +1002,6 @@ private fun SearchIndexingBanner(
             }
         }
     }
-}
-
-@Composable
-private fun DocumentErrorDialog(
-    message: String,
-    onDismiss: () -> Unit,
-) {
-    val context = LocalContext.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(text = stringResource(id = R.string.error_pdf_dialog_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = message,
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Text(
-                    text = stringResource(id = R.string.error_pdf_dialog_body),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(text = stringResource(id = R.string.action_try_again))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PDF_REPAIR_URL))
-                try {
-                    context.startActivity(intent)
-                } catch (error: ActivityNotFoundException) {
-                    Toast.makeText(context, R.string.error_no_browser, Toast.LENGTH_LONG).show()
-                } finally {
-                    onDismiss()
-                }
-            }) {
-                Text(text = stringResource(id = R.string.action_repair_pdf))
-            }
-        },
-        properties = DialogProperties(dismissOnClickOutside = false)
-    )
 }
 
 @Composable

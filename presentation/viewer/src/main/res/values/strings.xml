@@ -104,9 +104,6 @@
     <string name="action_open">Open</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_try_again">Try again</string>
-    <string name="action_repair_pdf">Try repairing the file</string>
-    <string name="error_pdf_dialog_title">We couldn\'t open this PDF</string>
-    <string name="error_pdf_dialog_body">The file might be damaged. You can retry or use an online repair tool.</string>
     <string name="error_pdf_corrupted">The PDF appears to be corrupted and can\'t be opened.</string>
     <string name="error_pdf_unsupported">This file isn\'t a supported PDF document. Make sure you\'re opening a PDF file or convert it to PDF and try again.</string>
     <string name="error_pdf_permission">NovaPDF Reader doesn\'t have permission to read this file.</string>
@@ -114,7 +111,6 @@
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_page_too_large">This page is too large to render at full resolution. Zoom reset to fit the screen.</string>
     <string name="page_render_malformed_placeholder">We couldn’t render this page because the PDF is malformed.</string>
-    <string name="error_no_browser">No browser found to open the repair link.</string>
     <string name="remote_pdf_download_started">Downloading PDF…</string>
     <string name="remote_pdf_download_failed">Unable to download the PDF.</string>
     <string name="dev_options_title">Developer options</string>
