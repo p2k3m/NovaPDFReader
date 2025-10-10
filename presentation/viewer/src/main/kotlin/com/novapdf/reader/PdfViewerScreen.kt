@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Size
 import android.util.Patterns
+import android.text.format.Formatter
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.annotation.StringRes
@@ -156,6 +157,8 @@ import com.novapdf.reader.accessibility.HapticFeedbackManager
 import com.novapdf.reader.accessibility.rememberHapticFeedbackManager
 import com.novapdf.reader.features.annotations.AnnotationOverlay
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.BitmapMemoryLevel
+import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.airbnb.lottie.compose.LottieAnimation
@@ -430,10 +433,15 @@ fun PdfViewerScreen(
             floatingActionButtonPosition = FabPosition.End,
             bottomBar = {
                 NavigationBar {
+                    val bottomBarDestination = if (selectedDestination == MainDestination.DevOptions) {
+                        MainDestination.Settings
+                    } else {
+                        selectedDestination
+                    }
                     navigationItems.forEach { item ->
                         val labelText = stringResource(id = item.labelRes)
                         NavigationBarItem(
-                            selected = selectedDestination == item.destination,
+                            selected = bottomBarDestination == item.destination,
                             onClick = { selectedDestination = item.destination },
                             icon = {
                                 Icon(
@@ -512,6 +520,15 @@ fun PdfViewerScreen(
                             onHighContrastChanged = onToggleHighContrast,
                             onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
                             onFontScaleChanged = onFontScaleChanged,
+                            onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    MainDestination.DevOptions -> {
+                        DevOptionsContent(
+                            stats = state.bitmapMemory,
+                            onBack = { selectedDestination = MainDestination.Settings },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -1227,6 +1244,7 @@ private fun SettingsContent(
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    onOpenDevOptions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     AccessibilitySettingsSheet(
@@ -1241,8 +1259,154 @@ private fun SettingsContent(
         onHighContrastChanged = onHighContrastChanged,
         onTalkBackIntegrationChanged = onTalkBackIntegrationChanged,
         onFontScaleChanged = onFontScaleChanged,
-        modifier = modifier
+        modifier = modifier,
+        footer = {
+            ExpandableSettingSection(
+                title = stringResource(id = R.string.dev_options_title),
+                description = stringResource(id = R.string.dev_options_description)
+            ) {
+                Text(
+                    text = stringResource(id = R.string.dev_options_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                FilledTonalButton(
+                    onClick = onOpenDevOptions,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = stringResource(id = R.string.dev_options_open))
+                }
+            }
+        }
     )
+}
+
+@Composable
+private fun DevOptionsContent(
+    stats: BitmapMemoryStats,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val scrollState = rememberScrollState()
+    val statusTextRes = when (stats.level) {
+        BitmapMemoryLevel.CRITICAL -> R.string.dev_options_status_critical
+        BitmapMemoryLevel.WARNING -> R.string.dev_options_status_warning
+        BitmapMemoryLevel.NORMAL -> R.string.dev_options_status_normal
+    }
+    val statusColor = when (stats.level) {
+        BitmapMemoryLevel.CRITICAL -> MaterialTheme.colorScheme.error
+        BitmapMemoryLevel.WARNING -> MaterialTheme.colorScheme.tertiary
+        BitmapMemoryLevel.NORMAL -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val statusText = stringResource(id = statusTextRes)
+
+    fun readable(bytes: Long): String {
+        val short = Formatter.formatShortFileSize(context, bytes)
+        return context.getString(R.string.dev_options_memory_value_format, short, bytes)
+    }
+
+    fun threshold(bytes: Long): String {
+        return if (bytes > 0L) {
+            readable(bytes)
+        } else {
+            context.getString(R.string.dev_options_threshold_unavailable)
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+    ) {
+        Text(
+            text = stringResource(id = R.string.dev_options_title),
+            style = MaterialTheme.typography.headlineSmall
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(id = R.string.dev_options_memory_overview),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = stringResource(id = R.string.dev_options_memory_title),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = stringResource(id = R.string.dev_options_memory_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                MemoryStatRow(
+                    label = stringResource(id = R.string.dev_options_memory_current),
+                    value = readable(stats.currentBytes)
+                )
+                MemoryStatRow(
+                    label = stringResource(id = R.string.dev_options_memory_peak),
+                    value = readable(stats.peakBytes)
+                )
+                MemoryStatRow(
+                    label = stringResource(id = R.string.dev_options_memory_warn_threshold),
+                    value = threshold(stats.warnThresholdBytes)
+                )
+                MemoryStatRow(
+                    label = stringResource(id = R.string.dev_options_memory_critical_threshold),
+                    value = threshold(stats.criticalThresholdBytes)
+                )
+                MemoryStatRow(
+                    label = stringResource(id = R.string.dev_options_memory_status_label),
+                    value = statusText,
+                    valueColor = statusColor
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        FilledTonalButton(onClick = onBack) {
+            Text(text = stringResource(id = R.string.dev_options_back))
+        }
+    }
+}
+
+@Composable
+private fun MemoryStatRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = valueColor,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f)
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1400,7 +1564,8 @@ private enum class MainDestination {
     Home,
     Reader,
     Annotations,
-    Settings
+    Settings,
+    DevOptions
 }
 
 @Composable
@@ -1416,7 +1581,8 @@ private fun AccessibilitySettingsSheet(
     onHighContrastChanged: (Boolean) -> Unit,
     onTalkBackIntegrationChanged: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    footer: @Composable ColumnScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
@@ -1627,6 +1793,8 @@ private fun AccessibilitySettingsSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+
+        footer()
     }
 }
 

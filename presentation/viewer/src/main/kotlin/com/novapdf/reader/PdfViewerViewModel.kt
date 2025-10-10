@@ -25,6 +25,7 @@ import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.domain.usecase.RenderPageRequest
 import com.novapdf.reader.domain.usecase.RenderTileRequest
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
@@ -87,6 +88,7 @@ data class PdfViewerUiState(
     val themeSeedColor: Long = DEFAULT_THEME_SEED_COLOR,
     val outline: List<PdfOutlineNode> = emptyList(),
     val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
+    val bitmapMemory: BitmapMemoryStats = BitmapMemoryStats(),
     val malformedPages: Set<Int> = emptySet()
 )
 
@@ -95,7 +97,7 @@ private data class DocumentContext(
     val sensitivity: Float,
     val session: PdfDocumentSession?,
     val outline: List<PdfOutlineNode>,
-    val renderProgress: PdfRenderProgress
+    val renderProgress: PdfRenderProgress,
 )
 
 private data class PrefetchRequest(
@@ -194,10 +196,12 @@ open class PdfViewerViewModel @Inject constructor(
                 adaptiveFlowUseCase.swipeSensitivity,
                 documentUseCase.session,
                 documentUseCase.outline,
-                documentUseCase.renderProgress
+                documentUseCase.renderProgress,
             ) { speed, sensitivity, session, outline, renderProgress ->
                 DocumentContext(speed, sensitivity, session, outline, renderProgress)
-            }.collect { context ->
+            }.combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
+                context to bitmapMemory
+            }.collect { (context, bitmapMemory) ->
                 val session = context.session
                 prefetchEnabled = session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true
                 val annotations = session?.let { annotationUseCase.annotationsFor(it.documentId) }
@@ -219,6 +223,7 @@ open class PdfViewerViewModel @Inject constructor(
                     bookmarks = bookmarks,
                     outline = context.outline,
                     renderProgress = context.renderProgress,
+                    bitmapMemory = bitmapMemory,
                     malformedPages = if (shouldResetMalformed) emptySet() else previous.malformedPages
                 )
             }

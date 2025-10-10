@@ -67,6 +67,8 @@ import kotlin.text.Charsets
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.model.BitmapMemoryLevel
+import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.PdfBoxInitializer
@@ -147,6 +149,18 @@ class PdfDocumentRepository(
     }
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
+    private val bitmapPoolMaxBytes = (maxCacheBytes / 2).coerceAtLeast(0L)
+    private val bitmapMemoryBudgetBytes = maxCacheBytes + bitmapPoolMaxBytes
+    private val bitmapMemoryWarningThreshold = if (bitmapMemoryBudgetBytes > 0L) {
+        (bitmapMemoryBudgetBytes * 3L) / 4L
+    } else {
+        0L
+    }
+    private val bitmapMemoryCriticalThreshold = if (bitmapMemoryBudgetBytes > 0L) {
+        (bitmapMemoryBudgetBytes * 9L) / 10L
+    } else {
+        0L
+    }
     private val pdfiumCore = PdfiumCore(appContext)
     private val pdfiumPagesField by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
@@ -171,9 +185,23 @@ class PdfDocumentRepository(
     }
     private val bitmapCache = createBitmapCache()
     private val bitmapPool = BitmapPool(
-        maxBytes = maxCacheBytes / 2,
+        maxBytes = bitmapPoolMaxBytes,
         reportInterval = BITMAP_POOL_REPORT_INTERVAL,
         onSnapshot = ::reportBitmapPoolMetrics,
+    )
+    private val _bitmapMemoryStats = MutableStateFlow(
+        BitmapMemoryStats(
+            currentBytes = 0L,
+            peakBytes = 0L,
+            warnThresholdBytes = bitmapMemoryWarningThreshold,
+            criticalThresholdBytes = bitmapMemoryCriticalThreshold,
+            level = BitmapMemoryLevel.NORMAL,
+        )
+    )
+    val bitmapMemory: StateFlow<BitmapMemoryStats> = _bitmapMemoryStats.asStateFlow()
+    private val bitmapMemoryTracker = BitmapMemoryTracker(
+        warnThresholdBytes = bitmapMemoryWarningThreshold,
+        criticalThresholdBytes = bitmapMemoryCriticalThreshold,
     )
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
@@ -843,7 +871,7 @@ class PdfDocumentRepository(
     private fun copyBitmap(source: Bitmap): Bitmap? {
         val config = source.config ?: Bitmap.Config.ARGB_8888
         return try {
-            source.copy(config, false)
+            source.copy(config, false).also(::recordBitmapAllocation)
         } catch (throwable: Throwable) {
             Log.w(TAG, "Unable to copy bitmap", throwable)
             reportNonFatal(
@@ -1159,6 +1187,30 @@ class PdfDocumentRepository(
         crashReporter?.logBreadcrumb(message)
     }
 
+    private fun logBitmapMemoryThreshold(level: BitmapMemoryLevel, stats: BitmapMemoryStats) {
+        val levelLabel = level.name.lowercase(Locale.US)
+        val message = String.format(
+            Locale.US,
+            "bitmap_memory level=%s current=%s peak=%s warn=%s critical=%s",
+            levelLabel,
+            formatMemoryForLog(stats.currentBytes),
+            formatMemoryForLog(stats.peakBytes),
+            formatMemoryForLog(stats.warnThresholdBytes),
+            formatMemoryForLog(stats.criticalThresholdBytes),
+        )
+        when (level) {
+            BitmapMemoryLevel.WARNING -> Log.w(TAG, message)
+            BitmapMemoryLevel.CRITICAL -> Log.e(TAG, message)
+            BitmapMemoryLevel.NORMAL -> Log.i(TAG, message)
+        }
+        crashReporter?.logBreadcrumb(message)
+    }
+
+    private fun formatMemoryForLog(bytes: Long): String {
+        val megabytes = bytes.toDouble() / (1024.0 * 1024.0)
+        return String.format(Locale.US, "%.2fMB (%dB)", megabytes, bytes)
+    }
+
     private fun safeByteCount(bitmap: Bitmap): Int = try {
         bitmap.byteCount
     } catch (ignored: IllegalStateException) {
@@ -1228,14 +1280,35 @@ class PdfDocumentRepository(
     }
 
     private fun obtainBitmap(width: Int, height: Int, config: Bitmap.Config): Bitmap {
-        return bitmapPool.acquire(width, height, config)
-            ?: Bitmap.createBitmap(width, height, config)
+        val pooled = bitmapPool.acquire(width, height, config)
+        if (pooled != null) {
+            return pooled
+        }
+        return Bitmap.createBitmap(width, height, config).also(::recordBitmapAllocation)
     }
 
     private fun recycleBitmap(bitmap: Bitmap) {
         if (!bitmap.isRecycled && !bitmapPool.release(bitmap)) {
-            bitmap.recycle()
+            destroyBitmap(bitmap)
         }
+    }
+
+    private fun destroyBitmap(bitmap: Bitmap) {
+        if (bitmap.isRecycled) {
+            return
+        }
+        recordBitmapRelease(bitmap)
+        bitmap.recycle()
+    }
+
+    private fun recordBitmapAllocation(bitmap: Bitmap) {
+        val bytes = safeAllocationByteCount(bitmap).takeIf { it > 0 }?.toLong() ?: return
+        bitmapMemoryTracker.onAllocated(bytes)
+    }
+
+    private fun recordBitmapRelease(bitmap: Bitmap) {
+        val bytes = safeAllocationByteCount(bitmap).takeIf { it > 0 }?.toLong() ?: return
+        bitmapMemoryTracker.onReleased(bytes)
     }
 
     private fun createBitmapCache(): BitmapCache {
@@ -1452,6 +1525,70 @@ class PdfDocumentRepository(
         protected abstract fun cleanUpInternal()
     }
 
+    private inner class BitmapMemoryTracker(
+        private val warnThresholdBytes: Long,
+        private val criticalThresholdBytes: Long,
+    ) {
+        private val lock = Any()
+        private var currentBytes = 0L
+        private var peakBytes = 0L
+        private var currentLevel = BitmapMemoryLevel.NORMAL
+
+        fun onAllocated(bytes: Long) {
+            if (bytes <= 0L) return
+            update(bytes)
+        }
+
+        fun onReleased(bytes: Long) {
+            if (bytes <= 0L) return
+            update(-bytes)
+        }
+
+        private fun update(delta: Long) {
+            if (delta == 0L) return
+            val (stats, previousLevel) = synchronized(lock) {
+                currentBytes = (currentBytes + delta).coerceAtLeast(0L)
+                if (currentBytes > peakBytes) {
+                    peakBytes = currentBytes
+                }
+                val nextLevel = determineLevel(currentBytes)
+                val previous = currentLevel
+                currentLevel = nextLevel
+                val stats = BitmapMemoryStats(
+                    currentBytes = currentBytes,
+                    peakBytes = peakBytes,
+                    warnThresholdBytes = warnThresholdBytes,
+                    criticalThresholdBytes = criticalThresholdBytes,
+                    level = nextLevel,
+                )
+                stats to previous
+            }
+            _bitmapMemoryStats.value = stats
+            if (
+                stats.level != BitmapMemoryLevel.NORMAL &&
+                severity(stats.level) > severity(previousLevel)
+            ) {
+                logBitmapMemoryThreshold(stats.level, stats)
+            }
+        }
+
+        private fun determineLevel(currentBytes: Long): BitmapMemoryLevel {
+            if (criticalThresholdBytes > 0L && currentBytes >= criticalThresholdBytes) {
+                return BitmapMemoryLevel.CRITICAL
+            }
+            if (warnThresholdBytes > 0L && currentBytes >= warnThresholdBytes) {
+                return BitmapMemoryLevel.WARNING
+            }
+            return BitmapMemoryLevel.NORMAL
+        }
+
+        private fun severity(level: BitmapMemoryLevel): Int = when (level) {
+            BitmapMemoryLevel.NORMAL -> 0
+            BitmapMemoryLevel.WARNING -> 1
+            BitmapMemoryLevel.CRITICAL -> 2
+        }
+    }
+
     private inner class BitmapPool(
         maxBytes: Long,
         private val reportInterval: Int,
@@ -1545,11 +1682,7 @@ class PdfDocumentRepository(
             if (evicted > 0) {
                 metrics.onEvict(evicted, totalBytes = 0L, poolSize = 0)
             }
-            drained.forEach { candidate ->
-                if (!candidate.isRecycled) {
-                    candidate.recycle()
-                }
-            }
+            drained.forEach(::destroyBitmap)
         }
 
         fun forceReport() {
@@ -1578,11 +1711,11 @@ class PdfDocumentRepository(
                     }
                     val candidateConfig = candidate.config ?: continue
                     if (!candidate.isMutable || candidateConfig == Bitmap.Config.HARDWARE) {
-                        candidate.recycle()
+                        destroyBitmap(candidate)
                         continue
                     }
                     if (candidateConfig != config) {
-                        candidate.recycle()
+                        destroyBitmap(candidate)
                         continue
                     }
                     try {
@@ -1592,7 +1725,7 @@ class PdfDocumentRepository(
                         candidate.eraseColor(Color.TRANSPARENT)
                         return candidate
                     } catch (error: Throwable) {
-                        candidate.recycle()
+                        destroyBitmap(candidate)
                     }
                 }
                 if (bucket.isEmpty()) {
