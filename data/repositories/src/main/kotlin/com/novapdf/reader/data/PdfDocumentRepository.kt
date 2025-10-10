@@ -93,6 +93,7 @@ private const val MAX_RENDER_FAILURES = 2
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
 private const val REMOTE_CONNECT_TIMEOUT_MS = 15_000
 private const val REMOTE_READ_TIMEOUT_MS = 30_000
+private const val PDF_MAGIC_SCAN_LIMIT = 16
 
 class PdfOpenException(
     val reason: Reason,
@@ -711,6 +712,11 @@ class PdfDocumentRepository(
             return false
         }
 
+        if (!hasPdfMagicHeader(uri)) {
+            Log.w(TAG, "Rejected document without PDF magic header: $uri")
+            return false
+        }
+
         return true
     }
 
@@ -753,6 +759,39 @@ class PdfDocumentRepository(
         }
 
         return normalized
+    }
+
+    private fun hasPdfMagicHeader(uri: Uri): Boolean {
+        val inputStream = try {
+            contentResolver.openInputStream(uri)
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to inspect header for $uri", error)
+            return false
+        }
+
+        if (inputStream == null) {
+            Log.w(TAG, "Unable to obtain input stream for header inspection: $uri")
+            return false
+        }
+
+        inputStream.use { stream ->
+            val buffer = ByteArray(PDF_MAGIC_SCAN_LIMIT)
+            var bytesRead = 0
+            while (bytesRead < buffer.size) {
+                val read = try {
+                    stream.read(buffer, bytesRead, buffer.size - bytesRead)
+                } catch (error: IOException) {
+                    Log.w(TAG, "Unable to read header bytes for $uri", error)
+                    return false
+                }
+                if (read <= 0) {
+                    break
+                }
+                bytesRead += read
+            }
+
+            return hasPdfMagic(buffer, bytesRead)
+        }
     }
 
 
@@ -2243,4 +2282,43 @@ fun normalizedMimeType(
     } else {
         reported
     }
+}
+
+@VisibleForTesting
+fun hasPdfMagic(buffer: ByteArray, bytesRead: Int): Boolean {
+    if (bytesRead <= 0) {
+        return false
+    }
+
+    val limit = min(bytesRead, buffer.size)
+    var offset = 0
+
+    if (limit >= 3 &&
+        buffer[0] == 0xEF.toByte() &&
+        buffer[1] == 0xBB.toByte() &&
+        buffer[2] == 0xBF.toByte()
+    ) {
+        offset = 3
+    }
+
+    while (offset < limit) {
+        val current = buffer[offset]
+        if (!(current == 0x00.toByte() || current.toInt().toChar().isWhitespace())) {
+            break
+        }
+        offset++
+    }
+
+    val magic = byteArrayOf('%'.code.toByte(), 'P'.code.toByte(), 'D'.code.toByte(), 'F'.code.toByte())
+    if (limit - offset < magic.size) {
+        return false
+    }
+
+    for (index in magic.indices) {
+        if (buffer[offset + index] != magic[index]) {
+            return false
+        }
+    }
+
+    return true
 }
