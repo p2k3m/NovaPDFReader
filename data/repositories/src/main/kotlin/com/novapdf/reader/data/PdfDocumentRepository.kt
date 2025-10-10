@@ -70,6 +70,7 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
+private const val MAX_BITMAP_DIMENSION = 8_192
 private const val PRE_REPAIR_MIN_SIZE_BYTES = 2L * 1024L * 1024L
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
@@ -84,6 +85,16 @@ class PdfOpenException(
         UNSUPPORTED,
         ACCESS_DENIED,
         CORRUPTED,
+    }
+}
+
+class PdfRenderException(
+    val reason: Reason,
+    val suggestedWidth: Int? = null,
+    val suggestedScale: Float? = null,
+) : Exception(reason.name) {
+    enum class Reason {
+        PAGE_TOO_LARGE,
     }
 }
 
@@ -326,6 +337,20 @@ class PdfDocumentRepository(
         val tileHeight = ((clampedBottom - clampedTop) * request.scale).roundToInt().coerceAtLeast(1)
         val targetWidth = max(1, (pageWidth * request.scale).roundToInt())
         val targetHeight = max(1, (pageHeight * request.scale).roundToInt())
+        val maxDimension = max(max(tileWidth, tileHeight), max(targetWidth, targetHeight))
+        if (maxDimension > MAX_BITMAP_DIMENSION) {
+            val adjustedScale = ((request.scale.toDouble() * MAX_BITMAP_DIMENSION.toDouble()) /
+                (maxDimension.toDouble() + 1.0)).coerceAtLeast(0.01).toFloat()
+            Log.w(
+                TAG,
+                "Requested tile exceeds bitmap dimension cap ($tileWidth x $tileHeight); " +
+                    "falling back to scale $adjustedScale"
+            )
+            throw PdfRenderException(
+                PdfRenderException.Reason.PAGE_TOO_LARGE,
+                suggestedScale = adjustedScale
+            )
+        }
         val offsetX = (-clampedLeft * request.scale).roundToInt()
         val offsetY = (-clampedTop * request.scale).roundToInt()
 
@@ -385,7 +410,15 @@ class PdfDocumentRepository(
             indices.forEach { index ->
                 if (index in 0 until session.pageCount) {
                     // Avoid blocking foreground renders if decoding is already busy.
-                    ensurePageBitmap(index, targetWidth, allowSkippingIfBusy = true)
+                    try {
+                        ensurePageBitmap(index, targetWidth, allowSkippingIfBusy = true)
+                    } catch (render: PdfRenderException) {
+                        if (render.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
+                            Log.w(TAG, "Skipping oversized page prefetch for index $index")
+                        } else {
+                            throw render
+                        }
+                    }
                 }
             }
         }
@@ -405,6 +438,12 @@ class PdfDocumentRepository(
                     requests.forEach { request ->
                         try {
                             renderTile(request)?.let { bitmap -> recycleBitmap(bitmap) }
+                        } catch (render: PdfRenderException) {
+                            if (render.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
+                                Log.w(TAG, "Skipping oversized tile preload for page ${request.pageIndex}")
+                            } else {
+                                throw render
+                            }
                         } catch (_: CancellationException) {
                             return@launch
                         }
@@ -668,6 +707,20 @@ class PdfDocumentRepository(
             }
             val aspect = pageSize.height.toDouble() / pageSize.width.toDouble()
             val targetHeight = max(1, (aspect * targetWidth.toDouble()).roundToInt())
+            val maxDimension = max(targetWidth, targetHeight)
+            if (maxDimension > MAX_BITMAP_DIMENSION) {
+                val suggestedWidth = ((targetWidth.toLong() * MAX_BITMAP_DIMENSION) / maxDimension)
+                    .toInt().coerceAtLeast(1)
+                Log.w(
+                    TAG,
+                    "Requested page exceeds bitmap dimension cap ($targetWidth x $targetHeight); " +
+                        "suggesting width $suggestedWidth"
+                )
+                throw PdfRenderException(
+                    PdfRenderException.Reason.PAGE_TOO_LARGE,
+                    suggestedWidth = suggestedWidth
+                )
+            }
             updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0f))
             Trace.beginSection("PdfiumRender#$pageIndex")
             try {
