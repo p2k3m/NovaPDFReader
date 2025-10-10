@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
+import com.novapdf.reader.data.PdfRenderException
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.domain.usecase.BuildSearchIndexRequest
 import com.novapdf.reader.domain.usecase.OpenDocumentRequest
@@ -45,6 +46,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
@@ -147,6 +149,7 @@ open class PdfViewerViewModel @Inject constructor(
     private var remoteDownloadJob: Job? = null
     private var viewportWidthPx: Int = 1080
     private var prefetchEnabled: Boolean = true
+    private val pageTooLargeNotified = AtomicBoolean(false)
 
     private suspend fun setLoadingState(
         isLoading: Boolean,
@@ -306,6 +309,7 @@ open class PdfViewerViewModel @Inject constructor(
 
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
         searchJob?.cancel()
+        pageTooLargeNotified.set(false)
         setLoadingState(
             isLoading = true,
             progress = 0f,
@@ -386,8 +390,21 @@ open class PdfViewerViewModel @Inject constructor(
                 RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
                 signal,
             )
-            result.exceptionOrNull()?.let { throwable ->
-                if (throwable is CancellationException) throw throwable
+            val throwable = result.exceptionOrNull()
+            if (throwable is CancellationException) throw throwable
+            if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
+                notifyPageTooLarge()
+                val fallbackWidth = throwable.suggestedWidth?.takeIf { it > 0 }
+                if (fallbackWidth != null) {
+                    val fallbackSignal = CancellationSignal()
+                    val fallbackResult = renderPageUseCase(
+                        RenderPageRequest(pageIndex = 0, targetWidth = fallbackWidth),
+                        fallbackSignal,
+                    )
+                    fallbackResult.exceptionOrNull()?.let { error ->
+                        if (error is CancellationException) throw error
+                    }
+                }
             }
         }
         setLoadingState(
@@ -488,13 +505,31 @@ open class PdfViewerViewModel @Inject constructor(
         return renderQueue.submit(priority) {
             val signal = CancellationSignal()
             val result = renderPageUseCase(RenderPageRequest(index, targetWidth), signal)
-            result.fold(
-                onSuccess = { it.bitmap },
-                onFailure = { throwable ->
-                    if (throwable is CancellationException) throw throwable
+            result.getOrNull()?.bitmap ?: run {
+                val throwable = result.exceptionOrNull()
+                if (throwable is CancellationException) throw throwable
+                if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
+                    notifyPageTooLarge()
+                    val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
+                        suggestion in 1 until targetWidth
+                    }
+                    if (fallbackWidth != null) {
+                        val fallbackSignal = CancellationSignal()
+                        val fallbackResult = renderPageUseCase(
+                            RenderPageRequest(index, fallbackWidth),
+                            fallbackSignal
+                        )
+                        fallbackResult.exceptionOrNull()?.let { error ->
+                            if (error is CancellationException) throw error
+                        }
+                        fallbackResult.getOrNull()?.bitmap
+                    } else {
+                        null
+                    }
+                } else {
                     null
                 }
-            )
+            }
         }
     }
 
@@ -502,13 +537,31 @@ open class PdfViewerViewModel @Inject constructor(
         return withContext(renderDispatcher) {
             val signal = CancellationSignal()
             val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
-            result.fold(
-                onSuccess = { it.bitmap },
-                onFailure = { throwable ->
-                    if (throwable is CancellationException) throw throwable
+            result.getOrNull()?.bitmap ?: run {
+                val throwable = result.exceptionOrNull()
+                if (throwable is CancellationException) throw throwable
+                if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
+                    notifyPageTooLarge()
+                    val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
+                        suggestion in 0f..scale && suggestion < scale
+                    }
+                    if (fallbackScale != null) {
+                        val fallbackSignal = CancellationSignal()
+                        val fallbackResult = renderTileUseCase(
+                            RenderTileRequest(index, rect, fallbackScale),
+                            fallbackSignal
+                        )
+                        fallbackResult.exceptionOrNull()?.let { error ->
+                            if (error is CancellationException) throw error
+                        }
+                        fallbackResult.getOrNull()?.bitmap
+                    } else {
+                        null
+                    }
+                } else {
                     null
                 }
-            )
+            }
         }
     }
 
@@ -605,6 +658,12 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun enqueueMessage(@StringRes messageRes: Int) {
         _messageEvents.tryEmit(UiMessage(messageRes = messageRes))
+    }
+
+    private fun notifyPageTooLarge() {
+        if (pageTooLargeNotified.compareAndSet(false, true)) {
+            enqueueMessage(R.string.error_page_too_large)
+        }
     }
 
     fun search(query: String) {
