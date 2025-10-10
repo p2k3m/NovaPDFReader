@@ -230,6 +230,13 @@ android {
             "\"${thousandPageFixtureUrl.asJavaStringLiteral()}\""
         )
 
+        ndk {
+            // Restrict packaged ABIs to the architectures required for release devices and the CI
+            // emulator. Trimming unused native libraries keeps the debug APK small enough to avoid
+            // exhausting the emulator's virtual storage during installation.
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+
     }
 
     signingConfigs {
