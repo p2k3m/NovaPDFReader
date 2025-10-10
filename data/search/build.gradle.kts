@@ -31,6 +31,7 @@ android {
 dependencies {
     api(project(":domain:model"))
     implementation(project(":data:repositories"))
+    implementation(project(":core:cache"))
     api(libs.kotlinx.coroutines.core)
 
     implementation(libs.androidx.annotation)
