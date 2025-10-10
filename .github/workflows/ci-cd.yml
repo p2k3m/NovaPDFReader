@@ -969,6 +969,7 @@ jobs:
           set -euo pipefail
           patterns=(
             '*/release/*'
+            '*/nonMinifiedRelease/*'
             '*/benchmarkRelease/*'
             '*/benchmark/*'
           )
