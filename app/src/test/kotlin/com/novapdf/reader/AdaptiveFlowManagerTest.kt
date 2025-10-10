@@ -99,7 +99,7 @@ class AdaptiveFlowManagerTest {
         val baseline = manager.preloadTargets.value
         assertTrue(baseline.isNotEmpty())
 
-        manager.updateFrameMetrics(40f)
+        repeat(6) { manager.updateFrameMetrics(40f) }
         manager.trackPageChange(2, 10)
         advanceUntilIdle()
         assertTrue(manager.preloadTargets.value.isEmpty())
@@ -111,6 +111,40 @@ class AdaptiveFlowManagerTest {
 
         assertTrue(manager.preloadTargets.value.isNotEmpty())
         assertTrue(!manager.uiUnderLoad.value)
+    }
+
+    @Test
+    fun uiPressureWatchdogRequiresConsistentSlowFrames() = runTest {
+        var now = 0L
+        val dispatchers = testDispatchers()
+        val manager = DefaultAdaptiveFlowManager(
+            context = context,
+            dispatchers = dispatchers,
+            wallClock = { now },
+            coroutineScopeProvider = { this }
+        )
+
+        manager.trackPageChange(0, 10)
+        now += 1_000
+        manager.trackPageChange(1, 10)
+        advanceUntilIdle()
+        assertTrue(manager.preloadTargets.value.isNotEmpty())
+
+        repeat(3) { manager.updateFrameMetrics(34f) }
+        manager.updateFrameMetrics(16f)
+        repeat(2) { manager.updateFrameMetrics(34f) }
+        manager.trackPageChange(2, 10)
+        advanceUntilIdle()
+
+        assertTrue(manager.preloadTargets.value.isNotEmpty())
+        assertTrue(!manager.uiUnderLoad.value)
+
+        repeat(6) { manager.updateFrameMetrics(34f) }
+        manager.trackPageChange(3, 10)
+        advanceUntilIdle()
+
+        assertTrue(manager.preloadTargets.value.isEmpty())
+        assertTrue(manager.uiUnderLoad.value)
     }
 
     @Test
