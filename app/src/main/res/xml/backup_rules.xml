@@ -2,5 +2,5 @@
 <full-backup-content>
     <!-- Exclude caches and remote PDFs that can be re-downloaded. -->
     <exclude domain="root" path="cache/" />
-    <exclude domain="file" path="remote_pdfs/" />
+    <exclude domain="file" path="pdf-cache/" />
 </full-backup-content>

@@ -5,6 +5,7 @@ import android.util.Base64
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.hilt.work.HiltWorker
+import com.novapdf.reader.cache.PdfCacheRoot
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.engine.AdaptiveFlowManager
@@ -31,6 +32,11 @@ class DocumentMaintenanceWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         if (adaptiveFlowManager.isUiUnderLoad()) {
             return Result.retry()
+        }
+
+        withContext(dispatchers.io) {
+            PdfCacheRoot.ensureSubdirectories(applicationContext)
+            PdfCacheRoot.purge(applicationContext)
         }
 
         val explicitTargets = inputData.getStringArray(KEY_DOCUMENT_IDS)

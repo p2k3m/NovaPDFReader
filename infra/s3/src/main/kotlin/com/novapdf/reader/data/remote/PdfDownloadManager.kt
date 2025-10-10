@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.core.content.FileProvider
+import com.novapdf.reader.cache.PdfCacheRoot
 import coil3.ImageLoader
 import coil3.request.ErrorResult
 import coil3.request.ImageRequest
@@ -22,13 +23,17 @@ class PdfDownloadManager(
     private val authority: String = "${context.packageName}.fileprovider",
 ) {
     private val appContext = context.applicationContext
-    private val downloadDirectory = File(appContext.cacheDir, "remote_pdfs").apply { mkdirs() }
+    private val downloadDirectory = File(PdfCacheRoot.documents(appContext), "remote").apply { mkdirs() }
     private val imageLoader: ImageLoader = ImageLoader.Builder(appContext)
         .components {
             add(PdfDownloadDecoder.Factory())
         }
         .build()
     private val pdfiumCore = PdfiumCore(appContext)
+
+    init {
+        PdfCacheRoot.ensureSubdirectories(appContext)
+    }
 
     suspend fun download(url: String): Result<Uri> = withContext(Dispatchers.IO) {
         val destination = File(downloadDirectory, buildFileName())

@@ -4,14 +4,12 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 plugins {
     id("com.android.library")
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.ksp)
-    alias(libs.plugins.hilt.android)
 }
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
 
 android {
-    namespace = "com.novapdf.reader.integration.aws"
+    namespace = "com.novapdf.reader.cache"
     compileSdk = versionCatalog.findVersion("androidCompileSdk").get().requiredVersion.toInt()
 
     defaultConfig {
@@ -29,14 +27,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":core:cache"))
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.coil.android)
-    implementation(libs.coil.network.okhttp)
-    implementation(libs.pdfium.android)
-    implementation(libs.hilt.android)
-    ksp(libs.hilt.compiler)
+    implementation(libs.androidx.annotation)
+
+    testImplementation(libs.junit4)
 }
 
 kotlin {

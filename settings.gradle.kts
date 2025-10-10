@@ -36,6 +36,7 @@ include(
     ":app",
     ":domain:model",
     ":domain:usecases",
+    ":core:cache",
     ":data:repositories",
     ":data:search",
     ":data:annotations",
