@@ -94,6 +94,9 @@ fun detectTextRegions(bitmap: Bitmap): List<RectSnapshot> {
     if (targetPixels <= 0L) {
         return emptyList()
     }
+    if (targetPixels > Long.MAX_VALUE / Int.SIZE_BYTES) {
+        return emptyList()
+    }
     val targetWidthHeightBytes = targetPixels * Int.SIZE_BYTES
     if (targetPixels > Int.MAX_VALUE.toLong() || targetWidthHeightBytes > Int.MAX_VALUE.toLong()) {
         return emptyList()
@@ -109,6 +112,9 @@ fun detectTextRegions(bitmap: Bitmap): List<RectSnapshot> {
         val scaledHeight = scaled.height
         val widthHeight = scaledWidth.toLong() * scaledHeight.toLong()
         if (widthHeight <= 0L) {
+            return emptyList()
+        }
+        if (widthHeight > Long.MAX_VALUE / Int.SIZE_BYTES) {
             return emptyList()
         }
         val widthHeightBytes = widthHeight * Int.SIZE_BYTES
