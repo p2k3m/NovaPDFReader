@@ -2547,10 +2547,12 @@ private fun ThumbnailItem(
         .clickable(onClick = onSelect)
 
     Box(modifier = baseModifier) {
-        val bitmap = thumbnail
-        if (bitmap != null && !bitmap.isRecycled) {
+        val imageBitmap = remember(thumbnail) {
+            thumbnail?.takeUnless(Bitmap::isRecycled)?.asImageBitmap()
+        }
+        if (imageBitmap != null) {
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = imageBitmap,
                 contentDescription = stringResource(
                     id = R.string.thumbnail_page_content_description,
                     pageIndex + 1
@@ -2607,10 +2609,13 @@ private fun PageTransitionScrim(modifier: Modifier, reverse: Boolean = false) {
             listOf(surface.copy(alpha = 0.92f), Color.Transparent)
         }
     }
+    val gradientBrush = remember(gradient) {
+        Brush.verticalGradient(colors = gradient)
+    }
 
     Box(
         modifier = modifier.background(
-            brush = Brush.verticalGradient(colors = gradient)
+            brush = gradientBrush
         )
     )
 }
@@ -2635,14 +2640,15 @@ private fun PdfPageItem(
     val latestRender by rememberUpdatedState(renderPage)
     val latestRequest by rememberUpdatedState(requestPageSize)
     val latestStroke by rememberUpdatedState(onStrokeFinished)
-    var pageBitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(null) }
-    var pageSize by remember(pageIndex) { mutableStateOf<Size?>(null) }
-    var isLoading by remember(pageIndex) { mutableStateOf(false) }
+    val documentId = state.documentId
+    var pageBitmap by remember(documentId, pageIndex) { mutableStateOf<Bitmap?>(null) }
+    var pageSize by remember(documentId, pageIndex) { mutableStateOf<Size?>(null) }
+    var isLoading by remember(documentId, pageIndex) { mutableStateOf(false) }
     val isMalformed by remember(state.malformedPages, pageIndex) {
         derivedStateOf { pageIndex in state.malformedPages }
     }
 
-    DisposableEffect(pageIndex) {
+    DisposableEffect(documentId, pageIndex) {
         onDispose {
             // Avoid explicitly recycling the bitmap here. When the composable leaves the
             // composition Compose can still issue a final draw pass, and calling
@@ -2660,8 +2666,8 @@ private fun PdfPageItem(
         contentAlignment = Alignment.Center
     ) {
         val widthPx = with(density) { maxWidth.roundToPx().coerceAtLeast(1) }
-        LaunchedEffect(state.documentId, state.malformedPages, pageIndex, widthPx) {
-            if (state.documentId == null) {
+        LaunchedEffect(documentId, state.malformedPages, pageIndex, widthPx) {
+            if (documentId == null) {
                 pageBitmap = null
                 pageSize = null
                 isLoading = false
@@ -2753,10 +2759,12 @@ private fun PdfPageItem(
                     )
                 )
         ) {
-            val bitmap = pageBitmap
-            if (bitmap != null && !bitmap.isRecycled) {
+            val imageBitmap = remember(pageBitmap) {
+                pageBitmap?.takeUnless(Bitmap::isRecycled)?.asImageBitmap()
+            }
+            if (imageBitmap != null) {
                 Image(
-                    bitmap = bitmap.asImageBitmap(),
+                    bitmap = imageBitmap,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2786,10 +2794,13 @@ private fun PdfPageItem(
                 }
             }
 
+            val gradientBrush = remember(gradientColors) {
+                Brush.verticalGradient(colors = gradientColors)
+            }
             Canvas(modifier = Modifier.fillMaxSize()) {
                 if (gradientAlpha > 0.01f) {
                     drawRect(
-                        brush = Brush.verticalGradient(colors = gradientColors),
+                        brush = gradientBrush,
                         alpha = gradientAlpha * 0.35f
                     )
                 }
