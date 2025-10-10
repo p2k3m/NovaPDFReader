@@ -167,8 +167,10 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -179,6 +181,7 @@ private const val PDF_REPAIR_URL = "https://www.ilovepdf.com/repair-pdf"
 private const val THUMBNAIL_TARGET_WIDTH = 320
 private const val PAGE_RENDER_PARALLELISM = 2
 private const val THUMBNAIL_PARALLELISM = 2
+private const val VIEWPORT_WIDTH_DEBOUNCE_MS = 120L
 
 @OptIn(ExperimentalCoroutinesApi::class)
 private val pageRenderDispatcher = Dispatchers.IO.limitedParallelism(PAGE_RENDER_PARALLELISM)
@@ -1876,6 +1879,7 @@ private fun OutlineRow(
         )
     }
 }
+@OptIn(FlowPreview::class)
 @Composable
 private fun PdfPager(
     modifier: Modifier,
@@ -1917,6 +1921,8 @@ private fun PdfPager(
             lazyListState.layoutInfo.viewportEndOffset - lazyListState.layoutInfo.viewportStartOffset
         }
             .distinctUntilChanged()
+            // Debounce layout changes to avoid rapid recomposition loops during rotations or animations.
+            .debounce(VIEWPORT_WIDTH_DEBOUNCE_MS)
             .collect { width ->
                 if (width > 0) {
                     latestViewportWidth(width)
