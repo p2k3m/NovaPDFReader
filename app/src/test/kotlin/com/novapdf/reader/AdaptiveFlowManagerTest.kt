@@ -142,10 +142,11 @@ class AdaptiveFlowManagerTest {
 
     @Test
     fun frameMetricsIgnoreInvalidSamples() {
+        val mainDispatcher = StandardTestDispatcher()
         val dispatchers = TestCoroutineDispatchers(
             io = Dispatchers.Default,
             default = Dispatchers.Default,
-            main = StandardTestDispatcher()
+            main = mainDispatcher.asTestMainDispatcher()
         )
         val manager = DefaultAdaptiveFlowManager(
             context = context,
@@ -182,6 +183,6 @@ private fun kotlinx.coroutines.test.TestScope.testDispatchers(): TestCoroutineDi
     return TestCoroutineDispatchers(
         io = dispatcher,
         default = dispatcher,
-        main = dispatcher
+        main = dispatcher.asTestMainDispatcher()
     )
 }

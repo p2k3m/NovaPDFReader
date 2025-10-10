@@ -3,6 +3,7 @@ package com.novapdf.reader.data
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.asTestMainDispatcher
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
@@ -90,6 +91,6 @@ private fun kotlinx.coroutines.test.TestScope.testDispatchers(): TestCoroutineDi
     return TestCoroutineDispatchers(
         io = dispatcher,
         default = dispatcher,
-        main = dispatcher
+        main = dispatcher.asTestMainDispatcher()
     )
 }
