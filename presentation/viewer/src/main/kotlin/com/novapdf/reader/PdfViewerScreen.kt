@@ -216,7 +216,9 @@ fun PdfViewerRoute(
         onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
         onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
         onExportDocument = { viewModel.exportDocument(context) },
-        renderPage = { index, width -> viewModel.renderPage(index, width) },
+        renderPage = { index, width, priority ->
+            viewModel.renderPage(index, width, priority)
+        },
         requestPageSize = { viewModel.pageSize(it) },
         onViewportWidthChanged = { viewModel.updateViewportWidth(it) },
         onPrefetchPages = { indices, width -> viewModel.prefetchPages(indices, width) },
@@ -245,7 +247,7 @@ fun PdfViewerScreen(
     onToggleBookmark: (Int) -> Unit,
     onOutlineDestinationSelected: (Int) -> Unit,
     onExportDocument: () -> Boolean,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
@@ -1012,7 +1014,7 @@ private fun ReaderContent(
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onToggleBookmark: (Int) -> Unit,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
@@ -1887,7 +1889,7 @@ private fun PdfPager(
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onToggleBookmark: (Int) -> Unit,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit
@@ -2025,7 +2027,7 @@ private fun PdfPager(
 private fun ThumbnailStrip(
     state: PdfViewerUiState,
     lazyListState: LazyListState,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     onToggleBookmark: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2127,7 +2129,7 @@ private fun ThumbnailItem(
     pageIndex: Int,
     isSelected: Boolean,
     isBookmarked: Boolean,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     onSelect: () -> Unit,
     onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
@@ -2141,7 +2143,7 @@ private fun ThumbnailItem(
             return@LaunchedEffect
         }
         val rendered = withContext(thumbnailDispatcher) {
-            latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH)
+            latestRender(pageIndex, THUMBNAIL_TARGET_WIDTH, RenderWorkQueue.Priority.THUMBNAIL)
         }
         // As with the main page bitmaps we avoid recycling the previous thumbnail here to
         // keep the draw pipeline stable. The DisposableEffect below cleans up once the
@@ -2254,7 +2256,7 @@ private data class PrefetchSnapshot(
 private fun PdfPageItem(
     pageIndex: Int,
     state: PdfViewerUiState,
-    renderPage: suspend (Int, Int) -> Bitmap?,
+    renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
     onStrokeFinished: (AnnotationCommand) -> Unit
 ) {
@@ -2294,7 +2296,12 @@ private fun PdfPageItem(
             isLoading = true
             val (size, rendered) = withContext(pageRenderDispatcher) {
                 val requested = latestRequest(pageIndex)
-                val bitmap = latestRender(pageIndex, widthPx)
+                val priority = when {
+                    pageIndex == state.currentPage -> RenderWorkQueue.Priority.VISIBLE_PAGE
+                    kotlin.math.abs(pageIndex - state.currentPage) == 1 -> RenderWorkQueue.Priority.NEARBY_PAGE
+                    else -> RenderWorkQueue.Priority.THUMBNAIL
+                }
+                val bitmap = latestRender(pageIndex, widthPx, priority)
                 requested to bitmap
             }
             pageSize = size
