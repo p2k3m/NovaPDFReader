@@ -25,6 +25,7 @@ import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.domain.usecase.RenderPageRequest
 import com.novapdf.reader.domain.usecase.RenderTileRequest
 import com.novapdf.reader.model.AnnotationCommand
+import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchResult
@@ -125,6 +126,8 @@ open class PdfViewerViewModel @Inject constructor(
     private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
 
     private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, RENDER_POOL_PARALLELISM)
+
+    private val thumbnailRenderProfile = resolveThumbnailRenderProfile()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
@@ -504,7 +507,8 @@ open class PdfViewerViewModel @Inject constructor(
     ): Bitmap? {
         return renderQueue.submit(priority) {
             val signal = CancellationSignal()
-            val result = renderPageUseCase(RenderPageRequest(index, targetWidth), signal)
+            val profile = renderProfileFor(priority)
+            val result = renderPageUseCase(RenderPageRequest(index, targetWidth, profile), signal)
             result.getOrNull()?.bitmap ?: run {
                 val throwable = result.exceptionOrNull()
                 if (throwable is CancellationException) throw throwable
@@ -516,7 +520,7 @@ open class PdfViewerViewModel @Inject constructor(
                     if (fallbackWidth != null) {
                         val fallbackSignal = CancellationSignal()
                         val fallbackResult = renderPageUseCase(
-                            RenderPageRequest(index, fallbackWidth),
+                            RenderPageRequest(index, fallbackWidth, profile),
                             fallbackSignal
                         )
                         fallbackResult.exceptionOrNull()?.let { error ->
@@ -531,6 +535,17 @@ open class PdfViewerViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun renderProfileFor(priority: RenderWorkQueue.Priority): PageRenderProfile = when (priority) {
+        RenderWorkQueue.Priority.THUMBNAIL -> thumbnailRenderProfile
+        RenderWorkQueue.Priority.NEARBY_PAGE,
+        RenderWorkQueue.Priority.VISIBLE_PAGE -> PageRenderProfile.HIGH_DETAIL
+    }
+
+    private fun resolveThumbnailRenderProfile(): PageRenderProfile {
+        // Hook for device-specific overrides. Defaults to memory-saving RGB_565 rendering.
+        return PageRenderProfile.LOW_DETAIL
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {

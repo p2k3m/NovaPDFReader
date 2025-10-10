@@ -28,6 +28,7 @@ import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
 import com.novapdf.reader.download.S3RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
@@ -261,7 +262,7 @@ class PdfViewerViewModelSearchTest {
         )
         whenever(pdfRepository.open(any(), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
-        whenever(pdfRepository.renderPage(eq(0), any(), anyOrNull())).thenReturn(
+        whenever(pdfRepository.renderPage(eq(0), any(), any<PageRenderProfile>(), anyOrNull())).thenReturn(
             Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888)
         )
 
@@ -312,7 +313,7 @@ class PdfViewerViewModelSearchTest {
         whenever(downloadManager.download(eq(downloadUri.toString()))).thenReturn(Result.success(downloadUri))
         whenever(pdfRepository.open(eq(downloadUri), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
-        whenever(pdfRepository.renderPage(eq(0), any(), anyOrNull())).thenReturn(
+        whenever(pdfRepository.renderPage(eq(0), any(), any<PageRenderProfile>(), anyOrNull())).thenReturn(
             Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
         )
 
