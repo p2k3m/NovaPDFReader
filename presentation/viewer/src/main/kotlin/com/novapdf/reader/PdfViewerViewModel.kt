@@ -178,9 +178,39 @@ open class PdfViewerViewModel @Inject constructor(
     private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
     private val pageBitmapCache = object : LruCache<PageCacheKey, Bitmap>(pageCacheMaxBytes) {
         override fun sizeOf(key: PageCacheKey, value: Bitmap): Int = bitmapSize(value)
+
+        fun trimToFraction(fraction: Float) {
+            val clamped = fraction.coerceIn(0f, 1f)
+            when {
+                clamped <= 0f -> evictAll()
+                clamped >= 1f -> Unit
+                else -> {
+                    val currentSize = size()
+                    if (currentSize > 0) {
+                        val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
+                        trimToSize(target)
+                    }
+                }
+            }
+        }
     }
     private val tileBitmapCache = object : LruCache<TileCacheKey, Bitmap>(tileCacheMaxBytes) {
         override fun sizeOf(key: TileCacheKey, value: Bitmap): Int = bitmapSize(value)
+
+        fun trimToFraction(fraction: Float) {
+            val clamped = fraction.coerceIn(0f, 1f)
+            when {
+                clamped <= 0f -> evictAll()
+                clamped >= 1f -> Unit
+                else -> {
+                    val currentSize = size()
+                    if (currentSize > 0) {
+                        val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
+                        trimToSize(target)
+                    }
+                }
+            }
+        }
     }
     @Volatile
     private var activeDocumentId: String? = null
@@ -195,8 +225,10 @@ open class PdfViewerViewModel @Inject constructor(
         @Suppress("OVERRIDE_DEPRECATION")
         override fun onTrimMemory(level: Int) {
             @Suppress("DEPRECATION")
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-                clearRenderCaches()
+            when {
+                level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> trimRenderCaches(0.5f)
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> clearRenderCaches()
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> trimRenderCaches(0.5f)
             }
         }
     }
@@ -919,6 +951,16 @@ open class PdfViewerViewModel @Inject constructor(
         }
         synchronized(tileCacheLock) {
             tileBitmapCache.evictAll()
+        }
+    }
+
+    private fun trimRenderCaches(fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        synchronized(pageCacheLock) {
+            pageBitmapCache.trimToFraction(clamped)
+        }
+        synchronized(tileCacheLock) {
+            tileBitmapCache.trimToFraction(clamped)
         }
     }
 

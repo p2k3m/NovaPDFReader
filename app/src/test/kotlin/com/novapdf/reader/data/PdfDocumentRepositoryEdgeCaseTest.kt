@@ -42,6 +42,7 @@ class PdfDocumentRepositoryEdgeCaseTest {
         oversized.delete()
     }
 
+    @Suppress("DEPRECATION")
     @Test
     fun clearsBitmapCacheWhenStorageLow() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -63,6 +64,41 @@ class PdfDocumentRepositoryEdgeCaseTest {
         val callbacks = callbacksField.get(repository) as ComponentCallbacks2
         @Suppress("DEPRECATION")
         callbacks.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
+
+        advanceUntilIdle()
+
+        val getMethod = bitmapCache.javaClass.getDeclaredMethod("getBitmap", String::class.java).apply {
+            isAccessible = true
+        }
+        val cached = getMethod.invoke(bitmapCache, "sample") as? Bitmap
+
+        assertNull(cached)
+        assertTrue(bitmap.isRecycled)
+
+        repository.dispose()
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun trimsBitmapCacheWhenMemoryModerate() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(context, dispatcher)
+
+        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+            isAccessible = true
+        }
+        val bitmapCache = bitmapCacheField.get(repository)
+        val putMethod = bitmapCache.javaClass.getDeclaredMethod("putBitmap", String::class.java, Bitmap::class.java).apply {
+            isAccessible = true
+        }
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        putMethod.invoke(bitmapCache, "sample", bitmap)
+
+        val callbacksField = PdfDocumentRepository::class.java.getDeclaredField("componentCallbacks").apply {
+            isAccessible = true
+        }
+        val callbacks = callbacksField.get(repository) as ComponentCallbacks2
+        callbacks.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE)
 
         advanceUntilIdle()
 

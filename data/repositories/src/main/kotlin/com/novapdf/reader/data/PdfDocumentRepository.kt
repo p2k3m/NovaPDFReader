@@ -224,8 +224,10 @@ class PdfDocumentRepository(
 
         @Suppress("DEPRECATION")
         override fun onTrimMemory(level: Int) {
-            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-                scheduleCacheClear()
+            when {
+                level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> scheduleCacheTrim(0.5f)
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> scheduleCacheClear()
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> scheduleCacheTrim(0.5f)
             }
         }
     }
@@ -1362,6 +1364,23 @@ class PdfDocumentRepository(
         }
     }
 
+    private fun scheduleCacheTrim(fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        if (clamped >= 1f) {
+            return
+        }
+        renderScope.launch {
+            cacheLock.withLock {
+                if (clamped <= 0f) {
+                    clearBitmapCacheLocked()
+                } else {
+                    bitmapCache.trimToFraction(clamped)
+                    bitmapPool.clear()
+                }
+            }
+        }
+    }
+
     private fun reportNonFatal(throwable: Throwable, metadata: Map<String, String> = emptyMap()) {
         crashReporter?.recordNonFatal(throwable, metadata)
     }
@@ -1499,6 +1518,15 @@ class PdfDocumentRepository(
             cleanUpInternal()
         }
 
+        fun trimToFraction(fraction: Float) {
+            val clamped = fraction.coerceIn(0f, 1f)
+            when {
+                clamped <= 0f -> clearAll()
+                clamped >= 1f -> Unit
+                else -> trimInternal(clamped)
+            }
+        }
+
         @Suppress("unused")
         fun putBitmap(name: String, bitmap: Bitmap) {
             val aliasKey = aliasMutex.withLockBlocking(this) {
@@ -1523,6 +1551,7 @@ class PdfDocumentRepository(
         protected abstract fun valuesInternal(): Collection<Bitmap>
         protected abstract fun clearInternal()
         protected abstract fun cleanUpInternal()
+        protected abstract fun trimInternal(fraction: Float)
     }
 
     private inner class BitmapMemoryTracker(
@@ -1833,6 +1862,7 @@ class PdfDocumentRepository(
     }
 
     private inner class CaffeineBitmapCache(maxCacheBytes: Long) : BitmapCache() {
+        private val maximumWeight = maxCacheBytes.coerceAtLeast(0L)
         private val delegate = Caffeine.newBuilder()
             .maximumWeight(maxCacheBytes)
             .weigher<PageBitmapKey, Bitmap> { _, bitmap -> safeByteCount(bitmap) }
@@ -1858,6 +1888,18 @@ class PdfDocumentRepository(
 
         override fun cleanUpInternal() {
             delegate.cleanUp()
+        }
+
+        override fun trimInternal(fraction: Float) {
+            val eviction = delegate.policy().eviction().orElse(null) ?: return
+            val currentSize = eviction.weightedSize().orElse(0L)
+            if (currentSize <= 0L) {
+                return
+            }
+            val target = (currentSize.toDouble() * fraction.toDouble()).toLong().coerceAtLeast(0L)
+            eviction.setMaximum(target)
+            delegate.cleanUp()
+            eviction.setMaximum(maximumWeight)
         }
     }
 
@@ -1899,6 +1941,17 @@ class PdfDocumentRepository(
 
         override fun cleanUpInternal() {
             // LruCache does not require explicit cleanup.
+        }
+
+        override fun trimInternal(fraction: Float) {
+            mutex.withLockBlocking(this) {
+                val currentSize = delegate.size()
+                if (currentSize <= 0) {
+                    return@withLockBlocking
+                }
+                val target = (currentSize.toDouble() * fraction.toDouble()).toInt().coerceAtLeast(0)
+                delegate.trimToSize(target)
+            }
         }
     }
 
