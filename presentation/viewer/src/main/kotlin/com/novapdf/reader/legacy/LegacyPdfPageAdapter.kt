@@ -38,6 +38,10 @@ class LegacyPdfPageAdapter(
     private val bitmaps = SparseArray<Bitmap>()
     private var currentDocumentId: String? = null
 
+    init {
+        setHasStableIds(true)
+    }
+
     fun onDocumentChanged(documentId: String?, pageCount: Int) {
         if (documentId == null) {
             clear()
@@ -67,6 +71,14 @@ class LegacyPdfPageAdapter(
         pageIndices.clear()
         currentDocumentId = null
         notifyDataSetChanged()
+    }
+
+    override fun getItemId(position: Int): Long {
+        if (position !in pageIndices.indices) return RecyclerView.NO_ID
+        val pageIndex = pageIndices[position]
+        val documentHash = ((currentDocumentId?.hashCode() ?: 0).toLong()) and 0xFFFFFFFFL
+        val pageComponent = pageIndex.toLong() and 0xFFFFFFFFL
+        return (documentHash shl 32) or pageComponent
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): LegacyPdfPageViewHolder {
