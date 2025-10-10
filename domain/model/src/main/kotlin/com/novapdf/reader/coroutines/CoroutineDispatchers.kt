@@ -1,6 +1,5 @@
 package com.novapdf.reader.coroutines
 
-import javax.inject.Inject
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainCoroutineDispatcher
@@ -16,7 +15,7 @@ interface CoroutineDispatchers {
     val main: MainCoroutineDispatcher
 }
 
-class DefaultCoroutineDispatchers @Inject constructor() : CoroutineDispatchers {
+class DefaultCoroutineDispatchers : CoroutineDispatchers {
     override val io: CoroutineDispatcher get() = Dispatchers.IO
     override val default: CoroutineDispatcher get() = Dispatchers.Default
     override val main: MainCoroutineDispatcher get() = Dispatchers.Main
