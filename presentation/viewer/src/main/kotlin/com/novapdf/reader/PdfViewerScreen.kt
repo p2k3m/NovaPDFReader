@@ -498,77 +498,77 @@ fun PdfViewerScreen(
             )
         }
 
-    if (showSourceDialog) {
-        DocumentSourceDialog(
-            onDismiss = { showSourceDialog = false },
-            onSelectDevice = {
-                showSourceDialog = false
-                onOpenLocalDocument()
-            },
-            onSelectCloud = {
-                showSourceDialog = false
-                onOpenCloudDocument()
-            },
-            onSelectRemote = {
-                showSourceDialog = false
-                showUrlDialog = true
-            }
-        )
-    }
+        if (showSourceDialog) {
+            DocumentSourceDialog(
+                onDismiss = { showSourceDialog = false },
+                onSelectDevice = {
+                    showSourceDialog = false
+                    onOpenLocalDocument()
+                },
+                onSelectCloud = {
+                    showSourceDialog = false
+                    onOpenCloudDocument()
+                },
+                onSelectRemote = {
+                    showSourceDialog = false
+                    showUrlDialog = true
+                }
+            )
+        }
 
-    if (showUrlDialog) {
-        DocumentUrlDialog(
-            onDismiss = { showUrlDialog = false },
-            onConfirm = { url ->
-                showUrlDialog = false
-                onOpenRemoteDocument(url)
-            }
-        )
-    }
+        if (showUrlDialog) {
+            DocumentUrlDialog(
+                onDismiss = { showUrlDialog = false },
+                onConfirm = { url ->
+                    showUrlDialog = false
+                    onOpenRemoteDocument(url)
+                }
+            )
+        }
 
-    if (showOutlineSheet) {
-        OutlineSheet(
-            outline = state.outline,
-            onSelect = {
-                onOutlineDestinationSelected(it)
-                showOutlineSheet = false
-            },
-            onDismiss = { showOutlineSheet = false }
-        )
-    }
+        if (showOutlineSheet) {
+            OutlineSheet(
+                outline = state.outline,
+                onSelect = {
+                    onOutlineDestinationSelected(it)
+                    showOutlineSheet = false
+                },
+                onDismiss = { showOutlineSheet = false }
+            )
+        }
 
-    if (showAccessibilitySheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { showAccessibilitySheet = false },
-            sheetState = sheetState,
-            modifier = Modifier.fillMaxHeight()
-        ) {
-            val sheetTitle = stringResource(id = R.string.accessibility_sheet_title)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { paneTitle = sheetTitle }
+        if (showAccessibilitySheet) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showAccessibilitySheet = false },
+                sheetState = sheetState,
+                modifier = Modifier.fillMaxHeight()
             ) {
-                BottomSheetDefaults.DragHandle()
-                AccessibilitySettingsSheet(
-                    dynamicColorEnabled = state.dynamicColorEnabled,
-                    highContrastEnabled = state.highContrastEnabled,
-                    talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
-                    fontScale = state.fontScale,
-                    dynamicColorSupported = dynamicColorSupported,
-                    accessibilityManager = accessibilityManager,
-                    hapticFeedbackManager = hapticManager,
-                    onDynamicColorChanged = onToggleDynamicColor,
-                    onHighContrastChanged = onToggleHighContrast,
-                    onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
-                    onFontScaleChanged = onFontScaleChanged,
-                    layoutAnimationsEnabled = layoutAnimationsEnabled,
-                    modifier = Modifier.fillMaxHeight(0.95f)
-                )
+                val sheetTitle = stringResource(id = R.string.accessibility_sheet_title)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { paneTitle = sheetTitle }
+                ) {
+                    BottomSheetDefaults.DragHandle()
+                    AccessibilitySettingsSheet(
+                        dynamicColorEnabled = state.dynamicColorEnabled,
+                        highContrastEnabled = state.highContrastEnabled,
+                        talkBackIntegrationEnabled = state.talkBackIntegrationEnabled,
+                        fontScale = state.fontScale,
+                        dynamicColorSupported = dynamicColorSupported,
+                        accessibilityManager = accessibilityManager,
+                        hapticFeedbackManager = hapticManager,
+                        onDynamicColorChanged = onToggleDynamicColor,
+                        onHighContrastChanged = onToggleHighContrast,
+                        onTalkBackIntegrationChanged = onToggleTalkBackIntegration,
+                        onFontScaleChanged = onFontScaleChanged,
+                        layoutAnimationsEnabled = layoutAnimationsEnabled,
+                        modifier = Modifier.fillMaxHeight(0.95f)
+                    )
+                }
             }
         }
-    }
     }
 }
 
