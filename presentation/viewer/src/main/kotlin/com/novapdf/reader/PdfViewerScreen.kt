@@ -141,6 +141,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
@@ -2394,7 +2395,29 @@ private fun PdfPager(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    val pageAnnouncement = if (state.pageCount > 0) {
+        val totalPages = state.pageCount
+        val currentPageNumber = (state.currentPage + 1).coerceIn(1, totalPages)
+        stringResource(
+            id = R.string.reader_page_announcement,
+            currentPageNumber,
+            totalPages
+        )
+    } else {
+        null
+    }
+    val pagerSemantics = pageAnnouncement?.let { announcement ->
+        Modifier.semantics {
+            liveRegion = LiveRegionMode.Polite
+            contentDescription = announcement
+        }
+    } ?: Modifier
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .then(pagerSemantics)
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = lazyListState,
@@ -2495,14 +2518,24 @@ private fun ThumbnailStrip(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val filterLabel = stringResource(id = R.string.thumbnail_strip_filter_label)
+                    val filterState = if (showBookmarksOnly) {
+                        stringResource(id = R.string.accessibility_state_on)
+                    } else {
+                        stringResource(id = R.string.accessibility_state_off)
+                    }
                     Text(
-                        text = stringResource(id = R.string.thumbnail_strip_filter_label),
+                        text = filterLabel,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Switch(
                         checked = showBookmarksOnly,
-                        onCheckedChange = { showBookmarksOnly = it }
+                        onCheckedChange = { showBookmarksOnly = it },
+                        modifier = Modifier.semantics {
+                            contentDescription = filterLabel
+                            stateDescription = filterState
+                        }
                     )
                 }
             }
@@ -2794,10 +2827,17 @@ private fun PdfPageItem(
             }
         }
 
+        val totalPages = state.pageCount.takeIf { it > 0 } ?: (pageIndex + 1)
+        val pageDescription = stringResource(
+            id = R.string.reader_page_content_description,
+            (pageIndex + 1).coerceAtLeast(1),
+            totalPages
+        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspect.coerceIn(0.2f, 5f))
+                .semantics { contentDescription = pageDescription }
                 .shadow(
                     elevation = 18.dp,
                     shape = pageShape,
