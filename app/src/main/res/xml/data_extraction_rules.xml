@@ -4,12 +4,12 @@
         <include domain="sharedpref" path="." />
         <include domain="database" path="." />
         <exclude domain="root" path="cache/" />
-        <exclude domain="file" path="remote_pdfs/" />
+        <exclude domain="file" path="pdf-cache/" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="." />
         <include domain="database" path="." />
         <exclude domain="root" path="cache/" />
-        <exclude domain="file" path="remote_pdfs/" />
+        <exclude domain="file" path="pdf-cache/" />
     </device-transfer>
 </data-extraction-rules>

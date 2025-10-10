@@ -35,6 +35,7 @@ android {
 dependencies {
     api(project(":domain:model"))
     api(project(":infra:logging"))
+    implementation(project(":core:cache"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.annotation)

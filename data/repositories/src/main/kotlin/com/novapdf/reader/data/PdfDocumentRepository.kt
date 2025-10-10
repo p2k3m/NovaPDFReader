@@ -23,6 +23,7 @@ import androidx.annotation.WorkerThread
 import androidx.core.net.toUri
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
+import com.novapdf.reader.cache.PdfCacheRoot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -154,21 +155,13 @@ class PdfDocumentRepository(
     private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val repairedDocumentDir by lazy {
-        File(appContext.cacheDir, "pdf-repairs").apply {
-            if (!exists() && !mkdirs()) {
-                Log.w(TAG, "Unable to create PDF repair cache at ${absolutePath}")
-            } else if (exists() && !isDirectory) {
-                Log.w(TAG, "PDF repair cache path is not a directory: ${absolutePath}")
-            }
+        File(PdfCacheRoot.documents(appContext), "repairs").apply {
+            ensureCacheDirectory("PDF repair cache")
         }
     }
     private val remoteDocumentDir by lazy {
-        File(appContext.cacheDir, "remote-pdfs").apply {
-            if (!exists() && !mkdirs()) {
-                Log.w(TAG, "Unable to create remote PDF cache at ${absolutePath}")
-            } else if (exists() && !isDirectory) {
-                Log.w(TAG, "Remote PDF cache path is not a directory: ${absolutePath}")
-            }
+        File(PdfCacheRoot.documents(appContext), "remote").apply {
+            ensureCacheDirectory("remote PDF cache")
         }
     }
     private val cacheLock = Mutex()
@@ -257,7 +250,24 @@ class PdfDocumentRepository(
         }
     }
 
+    init {
+        PdfCacheRoot.ensureSubdirectories(appContext)
+    }
+
     private var repairedDocumentFile: File? = null
+
+    private fun File.ensureCacheDirectory(label: String) {
+        if (!exists() && !mkdirs()) {
+            Log.w(TAG, "Unable to create $label at ${absolutePath}")
+        } else if (exists() && !isDirectory) {
+            Log.w(TAG, "$label path is not a directory: ${absolutePath}")
+        }
+    }
+
+    private fun isInCacheDirectory(path: String?, directory: File): Boolean {
+        if (path.isNullOrBlank()) return false
+        return File(path).absolutePath.startsWith(directory.absolutePath)
+    }
     private var repairedDocumentIsPersistent: Boolean = false
     private var cachedRemoteFile: File? = null
 
@@ -1086,8 +1096,7 @@ class PdfDocumentRepository(
     ): File? {
         cancellationSignal.throwIfCanceled()
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val path = uri.path
-            if (path != null && path.contains("/pdf-repairs/")) {
+            if (isInCacheDirectory(uri.path, repairedDocumentDir)) {
                 return null
             }
         }
@@ -1321,7 +1330,7 @@ class PdfDocumentRepository(
         return when (scheme) {
             ContentResolver.SCHEME_FILE -> {
                 val path = cacheKey.path ?: return null
-                if (path.contains("/pdf-repairs/")) {
+                if (isInCacheDirectory(path, repairedDocumentDir)) {
                     null
                 } else {
                     File(path).absolutePath
@@ -1375,8 +1384,7 @@ class PdfDocumentRepository(
         cancellationSignal: CancellationSignal? = null,
     ): File? {
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
-            val path = uri.path
-            if (path != null && path.contains("/pdf-repairs/")) {
+            if (isInCacheDirectory(uri.path, repairedDocumentDir)) {
                 return null
             }
         }
