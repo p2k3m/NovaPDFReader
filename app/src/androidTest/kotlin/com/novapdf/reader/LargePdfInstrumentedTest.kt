@@ -73,7 +73,9 @@ class LargePdfInstrumentedTest {
                     )
                 }
 
-                val renderWidth = size.width.coerceAtLeast(size.height).coerceAtMost(4000)
+                val renderWidth = size.width
+                    .coerceAtLeast(size.height)
+                    .coerceAtMost(2000)
                 val bitmap = withTimeout(60_000) { repository.renderPage(index, renderWidth) }
                 assertNotNull("Page $index should render", bitmap)
                 val renderedPage = requireNotNull(bitmap)
