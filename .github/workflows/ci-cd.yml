@@ -435,19 +435,28 @@ jobs:
           metadata_size=""
           metadata_checksum=""
           if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
-            readarray -t metadata_fields < <(python3 -c $'import base64\nimport json\nimport sys\n\n'\
-              'data = json.load(sys.stdin)\n\n'\
-              'etag = (data.get("ETag") or "").strip(\'"\')\n'\
-              'size = data.get("ContentLength")\n'\
-              'checksum = data.get("ChecksumSHA256") or ""\n\n'\
-              'if checksum:\n'\
-              '    try:\n'\
-              '        checksum = base64.b64decode(checksum).hex()\n'\
-              '    except Exception:\n'\
-              '        checksum = ""\n\n'\
-              'print(etag)\n'\
-              'print("" if size is None else size)\n'\
-              'print(checksum)\n' <<< "$metadata_json")
+            python_script=$(printf '%s\n' \
+              "import base64" \
+              "import json" \
+              "import sys" \
+              "" \
+              "data = json.load(sys.stdin)" \
+              "" \
+              "etag = (data.get(\"ETag\") or \"\").strip('\"')" \
+              "size = data.get(\"ContentLength\")" \
+              "checksum = data.get(\"ChecksumSHA256\") or \"\"" \
+              "" \
+              "if checksum:" \
+              "    try:" \
+              "        checksum = base64.b64decode(checksum).hex()" \
+              "    except Exception:" \
+              "        checksum = \"\"" \
+              "" \
+              "print(etag)" \
+              "print(\"\" if size is None else size)" \
+              "print(checksum)"
+            )
+            readarray -t metadata_fields < <(python3 -c "$python_script" <<< "$metadata_json")
             etag="${metadata_fields[0]:-}"
             metadata_size="${metadata_fields[1]:-}"
             metadata_checksum="${metadata_fields[2]:-}"
@@ -1512,17 +1521,25 @@ jobs:
 
           if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
               if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
-                python_script=$'import base64\nimport json\nimport sys\n\n'
-                python_script+=$'data = json.load(sys.stdin)\n'
-                python_script+=$'size = data.get("ContentLength")\n'
-                python_script+=$'checksum = data.get("ChecksumSHA256") or ""\n\n'
-                python_script+=$'if checksum:\n'
-                python_script+=$'    try:\n'
-                python_script+=$'        checksum = base64.b64decode(checksum).hex()\n'
-                python_script+=$'    except Exception:\n'
-                python_script+=$'        checksum = ""\n\n'
-                python_script+=$'print("" if size is None else size)\n'
-                python_script+=$'print(checksum)\n'
+                python_script=$(printf '%s\n' \
+                  "import base64" \
+                  "import json" \
+                  "import sys" \
+                  "" \
+                  "data = json.load(sys.stdin)" \
+                  "" \
+                  "size = data.get(\"ContentLength\")" \
+                  "checksum = data.get(\"ChecksumSHA256\") or \"\"" \
+                  "" \
+                  "if checksum:" \
+                  "    try:" \
+                  "        checksum = base64.b64decode(checksum).hex()" \
+                  "    except Exception:" \
+                  "        checksum = \"\"" \
+                  "" \
+                  "print(\"\" if size is None else size)" \
+                  "print(checksum)"
+                )
 
                 readarray -t metadata_fields < <(python3 -c "$python_script" <<< "$metadata_json")
               if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
