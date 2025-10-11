@@ -142,7 +142,10 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
@@ -310,6 +313,9 @@ fun PdfViewerScreen(
             (context.applicationContext.getSystemService(Context.ACCESSIBILITY_SERVICE)
                 as? AccessibilityManager)
         }
+        val accessibilityAnnouncementsEnabled = remember(state.talkBackIntegrationEnabled, accessibilityManager) {
+            state.talkBackIntegrationEnabled && accessibilityManager?.isEnabled == true
+        }
         MessageFlowHandler(
             messageFlow = messageFlow,
             snackbarHost = snackbarHost,
@@ -402,6 +408,26 @@ fun PdfViewerScreen(
             MainDestination.Settings
         } else {
             selectedDestination
+        }
+
+        LaunchedEffect(accessibilityAnnouncementsEnabled, state.currentPage, state.pageCount) {
+            if (!accessibilityAnnouncementsEnabled || state.pageCount <= 0) return@LaunchedEffect
+            val message = context.getString(
+                R.string.reader_page_announcement,
+                (state.currentPage + 1).coerceAtLeast(1),
+                state.pageCount
+            )
+            accessibilityManager.sendAnnouncement(message)
+        }
+
+        LaunchedEffect(accessibilityAnnouncementsEnabled, totalSearchResults, searchQuery) {
+            if (!accessibilityAnnouncementsEnabled || searchQuery.isBlank()) return@LaunchedEffect
+            val message = context.resources.getQuantityString(
+                R.plurals.search_results_announcement,
+                totalSearchResults,
+                totalSearchResults
+            )
+            accessibilityManager.sendAnnouncement(message)
         }
 
         Scaffold(
@@ -1302,7 +1328,10 @@ private fun SearchBar(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .padding(top = 8.dp)
-                    .semantics { contentDescription = resultsText }
+                    .semantics {
+                        contentDescription = resultsText
+                        liveRegion = LiveRegionMode.Polite
+                    }
             )
         }
     }
@@ -1908,6 +1937,19 @@ private fun OnboardingOverlay(
                     ) {
                         repeat(pages.size) { index ->
                             val isSelected = currentPageIndex == index
+                            val indicatorDescription = if (isSelected) {
+                                stringResource(
+                                    id = R.string.onboarding_page_indicator_selected,
+                                    index + 1,
+                                    pages.size
+                                )
+                            } else {
+                                stringResource(
+                                    id = R.string.onboarding_page_indicator,
+                                    index + 1,
+                                    pages.size
+                                )
+                            }
                             Box(
                                 modifier = Modifier
                                     .size(if (isSelected) 12.dp else 8.dp)
@@ -1916,6 +1958,11 @@ private fun OnboardingOverlay(
                                         if (isSelected) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.outline,
                                     )
+                                    .semantics {
+                                        contentDescription = indicatorDescription
+                                        role = Role.Button
+                                        selected = isSelected
+                                    }
                                     .clickable(onClick = { onPageChange(index) })
                             )
                             if (index != pages.lastIndex) {
@@ -2376,7 +2423,10 @@ private fun SearchHighlightOverlay(
     if (matches.isEmpty()) return
     val highlight = MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)
     val semanticsModifier = if (!contentDescription.isNullOrBlank()) {
-        modifier.semantics { this.contentDescription = contentDescription }
+        modifier.semantics {
+            this.contentDescription = contentDescription
+            liveRegion = LiveRegionMode.Polite
+        }
     } else {
         modifier
     }

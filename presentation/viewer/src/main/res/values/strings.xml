@@ -56,6 +56,11 @@
     <string name="reader_page_content_description">Page %1$d of %2$d</string>
     <string name="reader_page_announcement">Showing page %1$d of %2$d</string>
     <string name="search_results_count">Matches: %1$d</string>
+    <plurals name="search_results_announcement">
+        <item quantity="zero">No matches found.</item>
+        <item quantity="one">1 match found.</item>
+        <item quantity="other">%d matches found.</item>
+    </plurals>
     <string name="adaptive_flow_summary_title">Adaptive Flow</string>
     <string name="adaptive_flow_summary_description">Speed: %1$.0f pages/min · Sensitivity: %2$.1f</string>
     <string name="adaptive_flow_summary_button">Play summary</string>
@@ -78,6 +83,8 @@
     <string name="onboarding_skip">Skip</string>
     <string name="onboarding_next">Next</string>
     <string name="onboarding_get_started">Get started</string>
+    <string name="onboarding_page_indicator">Go to onboarding page %1$d of %2$d</string>
+    <string name="onboarding_page_indicator_selected">Current onboarding page %1$d of %2$d</string>
     <string name="onboarding_dialog_title">Getting started tips</string>
     <string name="navigation_home">Home</string>
     <string name="navigation_reader">Reader</string>
