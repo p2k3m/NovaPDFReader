@@ -14,7 +14,8 @@ import android.os.CancellationSignal
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Trace
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import android.util.LruCache
 import android.util.Size
 import android.util.SparseArray
@@ -258,9 +259,9 @@ class PdfDocumentRepository(
 
     private fun File.ensureCacheDirectory(label: String) {
         if (!exists() && !mkdirs()) {
-            Log.w(TAG, "Unable to create $label at ${absolutePath}")
+            NovaLog.w(TAG, "Unable to create $label at ${absolutePath}")
         } else if (exists() && !isDirectory) {
-            Log.w(TAG, "$label path is not a directory: ${absolutePath}")
+            NovaLog.w(TAG, "$label path is not a directory: ${absolutePath}")
         }
     }
 
@@ -283,7 +284,7 @@ class PdfDocumentRepository(
             releaseRepairedDocument(retainPersistent = true)
             cachedRemoteFile?.let { file ->
                 if (file.exists() && !file.delete()) {
-                    Log.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
+                    NovaLog.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
                 }
             }
             cachedRemoteFile = null
@@ -294,7 +295,12 @@ class PdfDocumentRepository(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Unable to cache remote PDF from $uri", error)
+                NovaLog.w(
+                    TAG,
+                    "Unable to cache remote PDF from $uri",
+                    throwable = error,
+                    field("uri", uri),
+                )
                 reportNonFatal(
                     error,
                     mapOf(
@@ -336,7 +342,7 @@ class PdfDocumentRepository(
                         activePfd.close()
                     } catch (_: IOException) {
                     }
-                    Log.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                    NovaLog.e(TAG, "Failed to open PDF via Pdfium", throwable)
                     reportNonFatal(
                         throwable,
                         mapOf(
@@ -360,7 +366,7 @@ class PdfDocumentRepository(
                             repairedPfd.close()
                         } catch (_: IOException) {
                         }
-                        Log.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                        NovaLog.e(TAG, "Failed to open repaired PDF via Pdfium", second)
                         reportNonFatal(
                             second,
                             mapOf(
@@ -395,7 +401,7 @@ class PdfDocumentRepository(
                     keepRemoteCache = remoteCacheFile != null
                 } else if (remoteCacheFile != null && remoteCacheFile != repairedDocumentFile) {
                     if (remoteCacheFile.exists() && !remoteCacheFile.delete()) {
-                        Log.w(TAG, "Unable to delete temporary remote PDF at ${remoteCacheFile.absolutePath}")
+                        NovaLog.w(TAG, "Unable to delete temporary remote PDF at ${remoteCacheFile.absolutePath}")
                     }
                     remoteCacheDeleted = true
                 }
@@ -404,7 +410,7 @@ class PdfDocumentRepository(
                 if (!keepRemoteCache && !remoteCacheDeleted) {
                     remoteCacheFile?.let { file ->
                         if (file.exists() && !file.delete()) {
-                            Log.w(TAG, "Unable to delete remote PDF cache at ${file.absolutePath}")
+                            NovaLog.w(TAG, "Unable to delete remote PDF cache at ${file.absolutePath}")
                         }
                     }
                 }
@@ -477,7 +483,7 @@ class PdfDocumentRepository(
         if (maxDimension > MAX_BITMAP_DIMENSION) {
             val adjustedScale = ((request.scale.toDouble() * MAX_BITMAP_DIMENSION.toDouble()) /
                 (maxDimension.toDouble() + 1.0)).coerceAtLeast(0.01).toFloat()
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Requested tile exceeds bitmap dimension cap ($tileWidth x $tileHeight); " +
                     "falling back to scale $adjustedScale"
@@ -522,7 +528,12 @@ class PdfDocumentRepository(
                     throw throwable
                 }
                 if (throwable is PdfRenderException) throw throwable
-                Log.e(TAG, "Failed to render tile for page ${request.pageIndex}", throwable)
+                NovaLog.e(
+                    TAG,
+                    "Failed to render tile for page ${request.pageIndex}",
+                    throwable = throwable,
+                    field("pageIndex", request.pageIndex),
+                )
                 val failureCount = pageFailureCounts.merge(request.pageIndex, 1) { previous, increment ->
                     previous + increment
                 } ?: 1
@@ -572,11 +583,11 @@ class PdfDocumentRepository(
                     } catch (render: PdfRenderException) {
                         when (render.reason) {
                             PdfRenderException.Reason.PAGE_TOO_LARGE -> {
-                                Log.w(TAG, "Skipping oversized page prefetch for index $index")
+                                NovaLog.w(TAG, "Skipping oversized page prefetch for index $index")
                             }
 
                             PdfRenderException.Reason.MALFORMED_PAGE -> {
-                                Log.w(TAG, "Skipping malformed page prefetch for index $index")
+                                NovaLog.w(TAG, "Skipping malformed page prefetch for index $index")
                             }
                         }
                     }
@@ -603,11 +614,11 @@ class PdfDocumentRepository(
                         } catch (render: PdfRenderException) {
                             when (render.reason) {
                                 PdfRenderException.Reason.PAGE_TOO_LARGE -> {
-                                    Log.w(TAG, "Skipping oversized tile preload for page ${request.pageIndex}")
+                                    NovaLog.w(TAG, "Skipping oversized tile preload for page ${request.pageIndex}")
                                 }
 
                                 PdfRenderException.Reason.MALFORMED_PAGE -> {
-                                    Log.w(TAG, "Skipping malformed tile preload for page ${request.pageIndex}")
+                                    NovaLog.w(TAG, "Skipping malformed tile preload for page ${request.pageIndex}")
                                 }
                             }
                         } catch (_: CancellationException) {
@@ -702,28 +713,28 @@ class PdfDocumentRepository(
 
     private fun validateDocumentUri(uri: Uri): Boolean {
         if (!isAllowedScheme(uri)) {
-            Log.w(TAG, "Rejected document with unsupported scheme: ${uri.scheme}")
+            NovaLog.w(TAG, "Rejected document with unsupported scheme: ${uri.scheme}")
             return false
         }
 
         val mimeType = resolveMimeType(uri)?.lowercase(Locale.US)
         if (mimeType != "application/pdf") {
-            Log.w(TAG, "Rejected document with unsupported MIME type: $mimeType")
+            NovaLog.w(TAG, "Rejected document with unsupported MIME type: $mimeType")
             return false
         }
 
         val size = resolveDocumentSize(uri)
         if (size == null || size <= 0L) {
-            Log.w(TAG, "Rejected document with unknown or empty size")
+            NovaLog.w(TAG, "Rejected document with unknown or empty size")
             return false
         }
         if (size > MAX_DOCUMENT_BYTES) {
-            Log.w(TAG, "Rejected document exceeding size limit: $size")
+            NovaLog.w(TAG, "Rejected document exceeding size limit: $size")
             return false
         }
 
         if (!hasPdfMagicHeader(uri)) {
-            Log.w(TAG, "Rejected document without PDF magic header: $uri")
+            NovaLog.w(TAG, "Rejected document without PDF magic header: $uri")
             return false
         }
 
@@ -756,16 +767,16 @@ class PdfDocumentRepository(
 
         if (normalized == null && uri.scheme == ContentResolver.SCHEME_FILE) {
             if (!extension.isNullOrEmpty()) {
-                Log.w(TAG, "Unknown MIME type for file extension .$extension from $uri")
+                NovaLog.w(TAG, "Unknown MIME type for file extension .$extension from $uri")
             } else {
-                Log.w(TAG, "Unable to resolve file extension for $uri")
+                NovaLog.w(TAG, "Unable to resolve file extension for $uri")
             }
         } else if (
             normalized == "application/pdf" &&
             reported?.lowercase(Locale.US)?.contains("pdf") != true &&
             extension == "pdf"
         ) {
-            Log.i(TAG, "Falling back to manual PDF MIME type detection for $uri")
+            NovaLog.i(TAG, "Falling back to manual PDF MIME type detection for $uri")
         }
 
         return normalized
@@ -775,12 +786,12 @@ class PdfDocumentRepository(
         val inputStream = try {
             contentResolver.openInputStream(uri)
         } catch (error: Exception) {
-            Log.w(TAG, "Unable to inspect header for $uri", error)
+            NovaLog.w(TAG, "Unable to inspect header for $uri", error)
             return false
         }
 
         if (inputStream == null) {
-            Log.w(TAG, "Unable to obtain input stream for header inspection: $uri")
+            NovaLog.w(TAG, "Unable to obtain input stream for header inspection: $uri")
             return false
         }
 
@@ -791,7 +802,7 @@ class PdfDocumentRepository(
                 val read = try {
                     stream.read(buffer, bytesRead, buffer.size - bytesRead)
                 } catch (error: IOException) {
-                    Log.w(TAG, "Unable to read header bytes for $uri", error)
+                    NovaLog.w(TAG, "Unable to read header bytes for $uri", error)
                     return false
                 }
                 if (read <= 0) {
@@ -852,7 +863,12 @@ class PdfDocumentRepository(
                     size
                 }
             } catch (throwable: Throwable) {
-                Log.e(TAG, "Failed to obtain page size for index $pageIndex", throwable)
+                NovaLog.e(
+                    TAG,
+                    "Failed to obtain page size for index $pageIndex",
+                    throwable = throwable,
+                    field("pageIndex", pageIndex),
+                )
                 reportNonFatal(
                     throwable,
                     mapOf(
@@ -915,7 +931,7 @@ class PdfDocumentRepository(
             if (maxDimension > MAX_BITMAP_DIMENSION) {
                 val suggestedWidth = ((targetWidth.toLong() * MAX_BITMAP_DIMENSION) / maxDimension)
                     .toInt().coerceAtLeast(1)
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Requested page exceeds bitmap dimension cap ($targetWidth x $targetHeight); " +
                         "suggesting width $suggestedWidth"
@@ -953,7 +969,12 @@ class PdfDocumentRepository(
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 if (throwable is PdfRenderException) throw throwable
-                Log.e(TAG, "Failed to render page $pageIndex", throwable)
+                NovaLog.e(
+                    TAG,
+                    "Failed to render page $pageIndex",
+                    throwable = throwable,
+                    field("pageIndex", pageIndex),
+                )
                 val failureCount = pageFailureCounts.merge(pageIndex, 1) { previous, increment ->
                     previous + increment
                 } ?: 1
@@ -991,7 +1012,7 @@ class PdfDocumentRepository(
         return try {
             source.copy(config, false).also(::recordBitmapAllocation)
         } catch (throwable: Throwable) {
-            Log.w(TAG, "Unable to copy bitmap", throwable)
+            NovaLog.w(TAG, "Unable to copy bitmap", throwable)
             reportNonFatal(
                 throwable,
                 mapOf(
@@ -1019,7 +1040,7 @@ class PdfDocumentRepository(
     private fun markPageMalformed(pageIndex: Int) {
         pageFailureCounts.remove(pageIndex)
         if (malformedPages.add(pageIndex)) {
-            Log.w(TAG, "Marking page $pageIndex as malformed; subsequent renders will be skipped")
+            NovaLog.w(TAG, "Marking page $pageIndex as malformed; subsequent renders will be skipped")
         }
     }
 
@@ -1077,7 +1098,7 @@ class PdfDocumentRepository(
         releaseRepairedDocument(retainPersistent = true)
         cachedRemoteFile?.let { file ->
             if (file.exists() && !file.delete()) {
-                Log.w(TAG, "Unable to delete cached remote PDF at ${file.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete cached remote PDF at ${file.absolutePath}")
             }
         }
         cachedRemoteFile = null
@@ -1111,7 +1132,7 @@ class PdfDocumentRepository(
             return null
         }
 
-        Log.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
+        NovaLog.i(TAG, "Detected oversized page tree for $uri; attempting pre-emptive repair")
         cancellationSignal.throwIfCanceled()
         return attemptPdfRepair(uri, cacheKey = originalUri, cancellationSignal = cancellationSignal)
     }
@@ -1128,14 +1149,14 @@ class PdfDocumentRepository(
             return null
         }
         if (!remoteDocumentDir.isDirectory) {
-            Log.w(TAG, "Remote PDF cache directory unavailable at ${remoteDocumentDir.absolutePath}")
+            NovaLog.w(TAG, "Remote PDF cache directory unavailable at ${remoteDocumentDir.absolutePath}")
             return null
         }
 
         val destination = try {
             File.createTempFile("remote-", ".pdf", remoteDocumentDir)
         } catch (error: IOException) {
-            Log.w(TAG, "Unable to create remote PDF cache file", error)
+            NovaLog.w(TAG, "Unable to create remote PDF cache file", error)
             return null
         }
 
@@ -1157,12 +1178,12 @@ class PdfDocumentRepository(
             destination
         } catch (cancelled: CancellationException) {
             if (destination.exists() && !destination.delete()) {
-                Log.w(TAG, "Unable to delete cancelled remote PDF cache at ${destination.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete cancelled remote PDF cache at ${destination.absolutePath}")
             }
             throw cancelled
         } catch (error: Exception) {
             if (destination.exists() && !destination.delete()) {
-                Log.w(TAG, "Unable to delete failed remote PDF cache at ${destination.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete failed remote PDF cache at ${destination.absolutePath}")
             } else {
                 destination.delete()
             }
@@ -1209,7 +1230,7 @@ class PdfDocumentRepository(
         val contents = try {
             String(buffer, Charsets.ISO_8859_1)
         } catch (error: Exception) {
-            Log.w(TAG, "Unable to decode PDF for page tree inspection", error)
+            NovaLog.w(TAG, "Unable to decode PDF for page tree inspection", error)
             return false
         }
 
@@ -1223,7 +1244,7 @@ class PdfDocumentRepository(
                 cancellationSignal.throwIfCanceled()
                 count++
                 if (count > PRE_REPAIR_MAX_KIDS_PER_ARRAY) {
-                    Log.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
+                    NovaLog.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
                     return true
                 }
             }
@@ -1264,13 +1285,13 @@ class PdfDocumentRepository(
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
-            Log.w(TAG, "Timed out while inspecting PDF for page tree analysis", timeout)
+            NovaLog.w(TAG, "Timed out while inspecting PDF for page tree analysis", timeout)
             null
         } catch (error: SecurityException) {
-            Log.w(TAG, "Unable to inspect PDF for page tree analysis", error)
+            NovaLog.w(TAG, "Unable to inspect PDF for page tree analysis", error)
             null
         } catch (error: IOException) {
-            Log.w(TAG, "I/O error while inspecting PDF for page tree analysis", error)
+            NovaLog.w(TAG, "I/O error while inspecting PDF for page tree analysis", error)
             null
         }
     }
@@ -1295,7 +1316,7 @@ class PdfDocumentRepository(
             return
         }
         if (file.exists() && !file.delete()) {
-            Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
+            NovaLog.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
         }
     }
 
@@ -1309,7 +1330,7 @@ class PdfDocumentRepository(
         if (file != null) {
             val shouldDelete = !repairedDocumentIsPersistent || !retainPersistent
             if (shouldDelete && file.exists() && !file.delete()) {
-                Log.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete repaired PDF at ${file.absolutePath}")
             }
         }
         repairedDocumentFile = null
@@ -1348,7 +1369,7 @@ class PdfDocumentRepository(
 
     private fun persistRepairedFile(tempFile: File, targetFile: File): File {
         if (targetFile.exists() && !targetFile.delete()) {
-            Log.w(TAG, "Unable to delete stale cached repair at ${targetFile.absolutePath}")
+            NovaLog.w(TAG, "Unable to delete stale cached repair at ${targetFile.absolutePath}")
         }
         if (tempFile.renameTo(targetFile)) {
             return targetFile
@@ -1356,12 +1377,12 @@ class PdfDocumentRepository(
         return try {
             tempFile.copyTo(targetFile, overwrite = true)
             if (tempFile.exists() && !tempFile.delete()) {
-                Log.w(TAG, "Unable to delete temporary repaired PDF at ${tempFile.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete temporary repaired PDF at ${tempFile.absolutePath}")
             }
             targetFile
         } catch (error: Exception) {
             if (targetFile.exists() && !targetFile.delete()) {
-                Log.w(TAG, "Unable to delete failed cached repair at ${targetFile.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete failed cached repair at ${targetFile.absolutePath}")
             }
             throw error
         }
@@ -1393,7 +1414,7 @@ class PdfDocumentRepository(
         val pdfBoxReady = try {
             PdfBoxInitializer.ensureInitialized(appContext)
         } catch (error: Throwable) {
-            Log.w(TAG, "Unable to initialise PDFBox resources for repair", error)
+            NovaLog.w(TAG, "Unable to initialise PDFBox resources for repair", error)
             false
         }
         if (!pdfBoxReady) {
@@ -1402,7 +1423,7 @@ class PdfDocumentRepository(
 
         val repairDir = repairedDocumentDir
         if (!repairDir.isDirectory) {
-            Log.w(TAG, "Cannot repair PDF; repair cache directory is unavailable at ${repairDir.absolutePath}")
+            NovaLog.w(TAG, "Cannot repair PDF; repair cache directory is unavailable at ${repairDir.absolutePath}")
             return null
         }
 
@@ -1413,14 +1434,14 @@ class PdfDocumentRepository(
                 crashReporter?.logBreadcrumb("pdfium repair cache hit: ${cacheKeyString}")
                 return persistentTarget
             } else if (!persistentTarget.delete()) {
-                Log.w(TAG, "Unable to delete empty cached repair at ${persistentTarget.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete empty cached repair at ${persistentTarget.absolutePath}")
             }
         }
 
         val input = try {
             contentResolver.openInputStream(uri)
         } catch (openError: Exception) {
-            Log.w(TAG, "Unable to open input stream for PDF repair", openError)
+            NovaLog.w(TAG, "Unable to open input stream for PDF repair", openError)
             null
         }
         if (input == null) {
@@ -1430,7 +1451,7 @@ class PdfDocumentRepository(
         val repairedFile = try {
             File.createTempFile("repaired-", ".pdf", repairDir)
         } catch (createError: IOException) {
-            Log.w(TAG, "Unable to create temporary file for PDF repair", createError)
+            NovaLog.w(TAG, "Unable to create temporary file for PDF repair", createError)
             try {
                 input.close()
             } catch (_: IOException) {
@@ -1456,21 +1477,21 @@ class PdfDocumentRepository(
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
-            Log.w(TAG, "Timed out while attempting PDF repair", timeout)
+            NovaLog.w(TAG, "Timed out while attempting PDF repair", timeout)
             if (repairedFile.exists() && !repairedFile.delete()) {
-                Log.w(TAG, "Unable to delete timed out repaired PDF at ${repairedFile.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete timed out repaired PDF at ${repairedFile.absolutePath}")
             }
             null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (repairError: Exception) {
-            Log.w(TAG, "Unable to repair PDF via PdfBox", repairError)
+            NovaLog.w(TAG, "Unable to repair PDF via PdfBox", repairError)
             if (repairedFile.exists() && !repairedFile.delete()) {
-                Log.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
+                NovaLog.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
             }
             persistentTarget?.let { target ->
                 if (target.exists() && !target.delete()) {
-                    Log.w(TAG, "Unable to delete failed cached repair at ${target.absolutePath}")
+                    NovaLog.w(TAG, "Unable to delete failed cached repair at ${target.absolutePath}")
                 }
             }
             null
@@ -1514,7 +1535,7 @@ class PdfDocumentRepository(
             snapshot.poolBytes,
             snapshot.maxPoolBytes,
         )
-        Log.d(TAG, message)
+        NovaLog.d(TAG, message)
         crashReporter?.logBreadcrumb(message)
     }
 
@@ -1530,9 +1551,9 @@ class PdfDocumentRepository(
             formatMemoryForLog(stats.criticalThresholdBytes),
         )
         when (level) {
-            BitmapMemoryLevel.WARNING -> Log.w(TAG, message)
-            BitmapMemoryLevel.CRITICAL -> Log.e(TAG, message)
-            BitmapMemoryLevel.NORMAL -> Log.i(TAG, message)
+            BitmapMemoryLevel.WARNING -> NovaLog.w(TAG, message)
+            BitmapMemoryLevel.CRITICAL -> NovaLog.e(TAG, message)
+            BitmapMemoryLevel.NORMAL -> NovaLog.i(TAG, message)
         }
         crashReporter?.logBreadcrumb(message)
     }
@@ -1627,7 +1648,7 @@ class PdfDocumentRepository(
                 closePage.invoke(pdfiumCore, pointer)
             } catch (error: Throwable) {
                 pages[pageIndex] = pointer
-                Log.w(TAG, "Failed to close Pdfium page $pageIndex", error)
+                NovaLog.w(TAG, "Failed to close Pdfium page $pageIndex", error)
             }
         }
     }
@@ -1667,7 +1688,7 @@ class PdfDocumentRepository(
     private fun createBitmapCache(): BitmapCache {
         val caffeinePreconditionError = caffeinePreconditionFailure()
         if (caffeinePreconditionError != null) {
-            Log.w(TAG, "Caffeine bitmap cache disabled; falling back to LruCache", caffeinePreconditionError)
+            NovaLog.w(TAG, "Caffeine bitmap cache disabled; falling back to LruCache", caffeinePreconditionError)
             reportNonFatal(
                 caffeinePreconditionError,
                 mapOf(
@@ -1683,7 +1704,7 @@ class PdfDocumentRepository(
         return try {
             CaffeineBitmapCache(maxCacheBytes)
         } catch (error: Throwable) {
-            Log.w(TAG, "Falling back to LruCache for bitmap caching", error)
+            NovaLog.w(TAG, "Falling back to LruCache for bitmap caching", error)
             reportNonFatal(
                 error,
                 mapOf(
@@ -2348,7 +2369,7 @@ class PdfDocumentRepository(
             synchronized(lock) {
                 val removed = activeDocuments.remove(document)
                 if (removed == null) {
-                    Log.w(TAG, "Pdfium document ${describe(document, null)} was not tracked by verifier on exit")
+                    NovaLog.w(TAG, "Pdfium document ${describe(document, null)} was not tracked by verifier on exit")
                 }
             }
         }

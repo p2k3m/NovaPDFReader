@@ -28,6 +28,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.annotation)
+    implementation(project(":infra:logging"))
 
     testImplementation(libs.junit4)
 }

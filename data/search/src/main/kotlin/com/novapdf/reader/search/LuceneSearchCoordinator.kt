@@ -7,7 +7,7 @@ import android.graphics.RectF
 import android.os.CancellationSignal
 import android.os.Process
 import android.util.Base64
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import android.system.ErrnoException
 import android.system.Os
 import com.google.mlkit.vision.common.InputImage
@@ -184,7 +184,7 @@ class LuceneSearchCoordinator(
     private val textRecognizer: TextRecognizer? = runCatching {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }.onFailure { error ->
-        Log.w(TAG, "Text recognition unavailable; OCR fallback disabled", error)
+        NovaLog.w(TAG, "Text recognition unavailable; OCR fallback disabled", error)
     }.getOrNull()
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
@@ -231,7 +231,7 @@ class LuceneSearchCoordinator(
                     try {
                         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                     } catch (error: Throwable) {
-                        Log.w(TAG, "Unable to set Lucene index thread priority", error)
+                        NovaLog.w(TAG, "Unable to set Lucene index thread priority", error)
                     }
                     runnable.run()
                 }, "LuceneIndex").apply {
@@ -244,11 +244,11 @@ class LuceneSearchCoordinator(
                 dispatcher.close()
             }
         } catch (error: Throwable) {
-            Log.w(TAG, "Unable to create dedicated dispatcher for Lucene indexing", error)
+            NovaLog.w(TAG, "Unable to create dedicated dispatcher for Lucene indexing", error)
             val fallback = try {
                 base.limitedParallelism(INDEX_POOL_PARALLELISM)
             } catch (unsupported: UnsupportedOperationException) {
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Unable to limit parallelism for provided dispatcher; falling back to Dispatchers.IO",
                     unsupported
@@ -263,7 +263,7 @@ class LuceneSearchCoordinator(
         prepareJob?.cancel()
         val documentId = session.documentId
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
-            Log.i(
+            NovaLog.i(
                 TAG,
                 "Skipping Lucene index preparation for large document " +
                     "(${session.pageCount} pages)"
@@ -283,7 +283,7 @@ class LuceneSearchCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                Log.w(TAG, "Failed to pre-build index", error)
+                NovaLog.w(TAG, "Failed to pre-build index", error)
             } finally {
                 clearIndexingState(documentId)
             }
@@ -302,7 +302,7 @@ class LuceneSearchCoordinator(
         val topDocs = try {
             searcher.search(luceneQuery, maxDocs)
         } catch (parse: Exception) {
-            Log.w(TAG, "Lucene search failed", parse)
+            NovaLog.w(TAG, "Lucene search failed", parse)
             return emptyList()
         }
         if (topDocs.scoreDocs.isEmpty()) return emptyList()
@@ -367,7 +367,7 @@ class LuceneSearchCoordinator(
             return
         }
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
-            Log.i(
+            NovaLog.i(
                 TAG,
                 "Skipping Lucene index rebuild for large document (${session.pageCount} pages)"
             )
@@ -415,7 +415,7 @@ class LuceneSearchCoordinator(
         }
         val pdfBoxReady = PdfBoxInitializer.ensureInitialized(context)
         if (!pdfBoxReady) {
-            Log.w(TAG, "PDFBox initialisation failed; skipping text extraction")
+            NovaLog.w(TAG, "PDFBox initialisation failed; skipping text extraction")
             return PageContentResult(emptyList(), fromCache = false)
         }
         emitIndexingState(documentId, progress = 0f, phase = SearchIndexingPhase.EXTRACTING_TEXT)
@@ -436,7 +436,7 @@ class LuceneSearchCoordinator(
                         for (page in 0 until pageCount) {
                             ensureActive()
                             val pdPage = runCatching { document.getPage(page) }
-                                .onFailure { Log.w(TAG, "Failed to read PDF page $page", it) }
+                                .onFailure { NovaLog.w(TAG, "Failed to read PDF page $page", it) }
                                 .getOrNull() ?: continue
                             try {
                                 val pageWidth = pdPage.mediaBox?.width?.toInt()?.takeIf { it > 0 } ?: 1
@@ -501,7 +501,7 @@ class LuceneSearchCoordinator(
                             } finally {
                                 if (pdPage is Closeable) {
                                     runCatching { pdPage.close() }
-                                        .onFailure { Log.w(TAG, "Failed to close PDFBox page $page", it) }
+                                        .onFailure { NovaLog.w(TAG, "Failed to close PDFBox page $page", it) }
                                 }
                             }
                         }
@@ -509,9 +509,9 @@ class LuceneSearchCoordinator(
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
-            Log.w(TAG, "Timed out while extracting text for search", timeout)
+            NovaLog.w(TAG, "Timed out while extracting text for search", timeout)
         } catch (io: IOException) {
-            Log.w(TAG, "Failed to extract text with PDFBox", io)
+            NovaLog.w(TAG, "Failed to extract text with PDFBox", io)
         }
         emitIndexingState(
             documentId,
@@ -565,7 +565,7 @@ class LuceneSearchCoordinator(
                 val fallback = runCatching {
                     performOcr(request.pageIndex, request.coordinateWidth, request.coordinateHeight)
                 }.onFailure {
-                    Log.w(TAG, "OCR fallback failed for page ${request.pageIndex}", it)
+                    NovaLog.w(TAG, "OCR fallback failed for page ${request.pageIndex}", it)
                 }.getOrNull() ?: continue
                 val existing = contents[request.pageIndex]
                 contents[request.pageIndex] = mergeOcrFallback(existing, fallback, request)
@@ -698,13 +698,13 @@ class LuceneSearchCoordinator(
             val seconds = stat.st_mtime
             java.lang.Math.multiplyExact(seconds, 1_000L)
         } catch (error: ErrnoException) {
-            Log.w(TAG, "Unable to stat document for OCR cache", error)
+            NovaLog.w(TAG, "Unable to stat document for OCR cache", error)
             null
         } catch (overflow: ArithmeticException) {
-            Log.w(TAG, "Document modification time overflow", overflow)
+            NovaLog.w(TAG, "Document modification time overflow", overflow)
             null
         } catch (unexpected: Throwable) {
-            Log.w(TAG, "Unexpected error while reading document mtime", unexpected)
+            NovaLog.w(TAG, "Unexpected error while reading document mtime", unexpected)
             null
         }
     }
@@ -748,7 +748,7 @@ class LuceneSearchCoordinator(
             }
         }
         if (!success) {
-            Log.w(TAG, "Skipping OCR cache metadata update for $documentId due to write failures")
+            NovaLog.w(TAG, "Skipping OCR cache metadata update for $documentId due to write failures")
             return
         }
         cleanupStalePageFiles(pagesDir, contents.size)
@@ -778,10 +778,10 @@ class LuceneSearchCoordinator(
                 DocumentCacheMetadata(version, pageCount, documentMtime)
             }
         } catch (error: IOException) {
-            Log.w(TAG, "Failed to read OCR cache metadata for $documentId", error)
+            NovaLog.w(TAG, "Failed to read OCR cache metadata for $documentId", error)
             null
         } catch (error: JSONException) {
-            Log.w(TAG, "Malformed OCR cache metadata for $documentId", error)
+            NovaLog.w(TAG, "Malformed OCR cache metadata for $documentId", error)
             null
         }
     }
@@ -793,7 +793,7 @@ class LuceneSearchCoordinator(
             .put("pageCount", metadata.pageCount)
             .put("documentMtimeMs", metadata.documentMtimeMs)
         if (!writeJsonSafely(file, json)) {
-            Log.w(TAG, "Failed to persist OCR cache metadata at ${file.absolutePath}")
+            NovaLog.w(TAG, "Failed to persist OCR cache metadata at ${file.absolutePath}")
         }
     }
 
@@ -806,12 +806,12 @@ class LuceneSearchCoordinator(
         if (!pagesDir.exists()) {
             if (!createIfMissing) return null
             if (!pagesDir.mkdirs() && !pagesDir.isDirectory) {
-                Log.w(TAG, "Unable to create OCR page cache at ${pagesDir.absolutePath}")
+                NovaLog.w(TAG, "Unable to create OCR page cache at ${pagesDir.absolutePath}")
                 return null
             }
         }
         if (!pagesDir.isDirectory) {
-            Log.w(TAG, "OCR page cache path is not a directory: ${pagesDir.absolutePath}")
+            NovaLog.w(TAG, "OCR page cache path is not a directory: ${pagesDir.absolutePath}")
             return null
         }
         return pagesDir
@@ -871,10 +871,10 @@ class LuceneSearchCoordinator(
                 fallbackRegions = fallback,
             )
         } catch (error: IOException) {
-            Log.w(TAG, "Failed to read OCR cache page at ${file.absolutePath}", error)
+            NovaLog.w(TAG, "Failed to read OCR cache page at ${file.absolutePath}", error)
             null
         } catch (error: JSONException) {
-            Log.w(TAG, "Malformed OCR cache page at ${file.absolutePath}", error)
+            NovaLog.w(TAG, "Malformed OCR cache page at ${file.absolutePath}", error)
             null
         }
     }
@@ -933,7 +933,7 @@ class LuceneSearchCoordinator(
                 if (temp.renameTo(file) || (file.delete() && temp.renameTo(file))) {
                     true
                 } else {
-                    Log.w(TAG, "Unable to move OCR cache file to ${file.absolutePath}")
+                    NovaLog.w(TAG, "Unable to move OCR cache file to ${file.absolutePath}")
                     temp.delete()
                     false
                 }
@@ -943,7 +943,7 @@ class LuceneSearchCoordinator(
                 }
             }
         } catch (error: IOException) {
-            Log.w(TAG, "Failed to write OCR cache file at ${file.absolutePath}", error)
+            NovaLog.w(TAG, "Failed to write OCR cache file at ${file.absolutePath}", error)
             false
         }
     }
@@ -951,13 +951,13 @@ class LuceneSearchCoordinator(
     private fun ensureDirectoryExists(directory: File): Boolean {
         if (directory.exists()) {
             if (!directory.isDirectory) {
-                Log.w(TAG, "OCR cache path is not a directory: ${directory.absolutePath}")
+                NovaLog.w(TAG, "OCR cache path is not a directory: ${directory.absolutePath}")
                 return false
             }
             return true
         }
         if (!directory.mkdirs()) {
-            Log.w(TAG, "Unable to create OCR cache directory at ${directory.absolutePath}")
+            NovaLog.w(TAG, "Unable to create OCR cache directory at ${directory.absolutePath}")
             return false
         }
         return true
@@ -966,14 +966,14 @@ class LuceneSearchCoordinator(
     private fun cleanupStalePageFiles(directory: File, expectedCount: Int) {
         val children = directory.listFiles()
         if (children == null) {
-            Log.w(TAG, "Unable to list OCR cache directory at ${directory.absolutePath}")
+            NovaLog.w(TAG, "Unable to list OCR cache directory at ${directory.absolutePath}")
             return
         }
         children.forEach { file ->
             val index = parsePageIndex(file.name)
             if (index == null || index < 0 || index >= expectedCount) {
                 if (file.exists() && !file.delete()) {
-                    Log.w(TAG, "Unable to delete stale OCR cache page at ${file.absolutePath}")
+                    NovaLog.w(TAG, "Unable to delete stale OCR cache page at ${file.absolutePath}")
                 }
             }
         }
@@ -1000,14 +1000,14 @@ class LuceneSearchCoordinator(
         createIfMissing: Boolean = true,
     ): File? {
         if (documentId.isBlank()) {
-            Log.w(TAG, "Document ID unavailable; skipping Lucene index persistence")
+            NovaLog.w(TAG, "Document ID unavailable; skipping Lucene index persistence")
             return null
         }
         val encodedId = encodeDocumentId(documentId)
         val directory = File(indexRoot, encodedId)
         if (directory.exists()) {
             if (!directory.isDirectory) {
-                Log.w(TAG, "Lucene index path is not a directory: ${directory.absolutePath}")
+                NovaLog.w(TAG, "Lucene index path is not a directory: ${directory.absolutePath}")
                 return null
             }
             return directory
@@ -1018,7 +1018,7 @@ class LuceneSearchCoordinator(
         return if (directory.mkdirs() || directory.isDirectory) {
             directory
         } else {
-            Log.w(TAG, "Unable to create Lucene index directory at ${directory.absolutePath}")
+            NovaLog.w(TAG, "Unable to create Lucene index directory at ${directory.absolutePath}")
             null
         }
     }
@@ -1049,11 +1049,11 @@ class LuceneSearchCoordinator(
         }
         val deleted = runCatching { directory.deleteRecursively() }
             .onFailure { error ->
-                Log.w(TAG, "Unable to delete Lucene index at ${directory.absolutePath}", error)
+                NovaLog.w(TAG, "Unable to delete Lucene index at ${directory.absolutePath}", error)
             }
             .getOrDefault(false)
         if (!deleted && directory.exists()) {
-            Log.w(TAG, "Failed to remove Lucene index directory at ${directory.absolutePath}")
+            NovaLog.w(TAG, "Failed to remove Lucene index directory at ${directory.absolutePath}")
         }
     }
 
@@ -1116,7 +1116,7 @@ class LuceneSearchCoordinator(
         )
         val luceneDirectory = runCatching { FSDirectory.open(indexDir.toPath()) }
             .onFailure { error ->
-                Log.w(TAG, "Unable to open Lucene directory at ${indexDir.absolutePath}", error)
+                NovaLog.w(TAG, "Unable to open Lucene directory at ${indexDir.absolutePath}", error)
             }
             .getOrNull()
         if (luceneDirectory == null) {
@@ -1151,7 +1151,7 @@ class LuceneSearchCoordinator(
             val searcher = IndexSearcher(reader)
             return DocumentIndexShard(documentId, luceneDirectory, reader, searcher, contents)
         } catch (error: Throwable) {
-            Log.w(TAG, "Unable to build Lucene index at ${indexDir.absolutePath}", error)
+            NovaLog.w(TAG, "Unable to build Lucene index at ${indexDir.absolutePath}", error)
             runCatching { reader?.close() }
             runCatching { luceneDirectory.close() }
             deleteIndexDirectory(documentId)
@@ -1241,7 +1241,7 @@ class LuceneSearchCoordinator(
                 )
             }
             .addOnFailureListener { error ->
-                Log.w(TAG, "ML Kit text recognition failed", error)
+                NovaLog.w(TAG, "ML Kit text recognition failed", error)
                 if (continuation.isActive) {
                     continuation.resume(
                         OcrPageResult(

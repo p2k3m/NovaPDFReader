@@ -8,7 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
@@ -464,7 +464,7 @@ class ScreenshotHarnessTest {
         val appContext = context.applicationContext
         runCatching { WorkManager.getInstance(appContext) }.onFailure {
             val configuration = Configuration.Builder()
-                .setMinimumLoggingLevel(Log.DEBUG)
+                .setMinimumLoggingLevel(android.util.Log.DEBUG)
                 .build()
             logHarnessInfo("Initialising test WorkManager for screenshot harness")
             WorkManagerTestInitHelper.initializeTestWorkManager(appContext, configuration)
@@ -777,29 +777,23 @@ class ScreenshotHarnessTest {
     }
 
     private fun logHarnessInfo(message: String) {
-        logHarness(Log.INFO, message, null)
+        NovaLog.i(TAG, message)
+        println("$TAG: $message")
     }
 
     private fun logHarnessWarn(message: String, error: Throwable? = null) {
-        logHarness(Log.WARN, message, error)
+        if (error != null) {
+            NovaLog.w(tag = TAG, message = message, throwable = error)
+            println("$TAG: $message\n${android.util.Log.getStackTraceString(error)}")
+        } else {
+            NovaLog.w(tag = TAG, message = message)
+            println("$TAG: $message")
+        }
     }
 
     private fun logHarnessError(message: String, error: Throwable) {
-        logHarness(Log.ERROR, message, error)
-    }
-
-    private fun logHarness(level: Int, message: String, error: Throwable?) {
-        when (level) {
-            Log.ERROR -> if (error != null) Log.e(TAG, message, error) else Log.e(TAG, message)
-            Log.WARN -> if (error != null) Log.w(TAG, message, error) else Log.w(TAG, message)
-            else -> Log.i(TAG, message)
-        }
-
-        if (error != null) {
-            println("$TAG: $message\n${Log.getStackTraceString(error)}")
-        } else {
-            println("$TAG: $message")
-        }
+        NovaLog.e(tag = TAG, message = message, throwable = error)
+        println("$TAG: $message\n${android.util.Log.getStackTraceString(error)}")
     }
 
     class HarnessTestWatcher(

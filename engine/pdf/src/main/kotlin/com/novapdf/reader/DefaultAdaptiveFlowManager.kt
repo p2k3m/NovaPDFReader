@@ -10,7 +10,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import android.view.Choreographer
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.FrameMetricsAggregator
@@ -151,7 +151,7 @@ class DefaultAdaptiveFlowManager(
                 isRegistered = true
             } else if (!sensorWarningLogged) {
                 sensorWarningLogged = true
-                Log.w(TAG, "Skipping accelerometer registration; sensor manager or accelerometer unavailable")
+                NovaLog.w(TAG, "Skipping accelerometer registration; sensor manager or accelerometer unavailable")
             }
         }
         registerFrameMetricsCallbacks()

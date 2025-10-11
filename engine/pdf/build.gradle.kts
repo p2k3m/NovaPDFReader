@@ -48,6 +48,7 @@ dependencies {
     api(libs.kotlinx.coroutines.core)
 
     implementation(libs.androidx.annotation)
+    implementation(project(":infra:logging"))
 
     runtimeOnly(libs.kotlinx.coroutines.android)
 

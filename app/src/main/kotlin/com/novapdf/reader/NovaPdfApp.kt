@@ -2,7 +2,6 @@ package com.novapdf.reader
 
 import android.app.Application
 import android.os.StrictMode
-import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.novapdf.reader.data.BookmarkManager
@@ -10,6 +9,8 @@ import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -95,6 +96,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
         if (BuildConfig.DEBUG) {
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
@@ -164,7 +166,16 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         error: Throwable,
         metadata: Map<String, String> = emptyMap(),
     ) {
-        Log.w(TAG, "Deferred initialisation failed for $stage", error)
+        val fields = buildList {
+            add(field("stage", stage))
+            metadata.forEach { (key, value) -> add(field(key, value)) }
+        }
+        NovaLog.w(
+            tag = TAG,
+            message = "Deferred initialisation failed for $stage",
+            throwable = error,
+            *fields.toTypedArray(),
+        )
         val crashMetadata = HashMap<String, String>(metadata.size + 1)
         crashMetadata["stage"] = stage
         crashMetadata.putAll(metadata)
@@ -172,7 +183,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private fun logDeferredInitializationWarning(stage: String, message: String) {
-        Log.w(TAG, message)
+        NovaLog.w(TAG, message, null, field("stage", stage))
         crashReporter.logBreadcrumb("$stage: $message")
     }
 
@@ -186,11 +197,17 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         context[CoroutineName]?.name?.let { coroutineName ->
             metadata["coroutine"] = coroutineName
         }
-        Log.e(
-            TAG,
-            "Unhandled coroutine exception on thread $threadName" +
-                (metadata["coroutine"]?.let { " (coroutine=$it)" } ?: ""),
-            error,
+        val coroutineName = metadata["coroutine"]
+        val logFields = buildList {
+            add(field("thread", threadName))
+            coroutineName?.let { add(field("coroutine", it)) }
+        }
+        NovaLog.e(
+            tag = TAG,
+            message = "Unhandled coroutine exception on thread $threadName" +
+                (coroutineName?.let { " (coroutine=$it)" } ?: ""),
+            throwable = error,
+            *logFields.toTypedArray(),
         )
         logDeferredInitializationFailure("uncaught", error, metadata)
     }

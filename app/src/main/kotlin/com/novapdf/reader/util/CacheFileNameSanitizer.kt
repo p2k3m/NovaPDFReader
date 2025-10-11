@@ -1,6 +1,6 @@
 package com.novapdf.reader.util
 
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 
 private const val TAG = "CacheFileNameSanitizer"
 private const val DEFAULT_SAFE_FALLBACK = "cache.bin"
@@ -22,7 +22,7 @@ fun sanitizeCacheFileName(
     val sanitizedCandidate = candidate.sanitized()
     if (sanitizedCandidate.isNotEmpty()) {
         if (sanitizedCandidate != candidate) {
-            Log.w(TAG, "Sanitized $label \"$raw\" to \"$sanitizedCandidate\"")
+            NovaLog.w(TAG, "Sanitized $label \"$raw\" to \"$sanitizedCandidate\"")
         }
         return sanitizedCandidate
     }
@@ -31,7 +31,7 @@ fun sanitizeCacheFileName(
     val sanitizedFallback = fallbackValue.sanitized()
     if (sanitizedFallback.isNotEmpty()) {
         if (candidate.isNotEmpty() && sanitizedFallback != candidate) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Sanitized $label \"$raw\" to \"$sanitizedFallback\" (fallback applied)",
             )
@@ -39,7 +39,7 @@ fun sanitizeCacheFileName(
         return sanitizedFallback
     }
 
-    Log.w(
+    NovaLog.w(
         TAG,
         "Unable to sanitize $label \"$raw\" or fallback \"$fallback\"; using $DEFAULT_SAFE_FALLBACK",
     )

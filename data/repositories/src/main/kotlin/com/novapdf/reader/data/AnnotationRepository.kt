@@ -3,7 +3,7 @@ package com.novapdf.reader.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Base64
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -28,7 +28,7 @@ class AnnotationRepository(
     private val preferences: SharedPreferences by lazy {
         runCatching { securePreferencesProvider(appContext) }
             .onFailure { error ->
-                Log.w(TAG, "Falling back to unencrypted annotation preferences", error)
+                NovaLog.w(TAG, "Falling back to unencrypted annotation preferences", error)
             }
             .getOrElse { fallbackPreferencesProvider(appContext) }
     }

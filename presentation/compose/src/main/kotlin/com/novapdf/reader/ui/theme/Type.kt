@@ -1,6 +1,6 @@
 package com.novapdf.reader.ui.theme
 
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -45,7 +45,7 @@ fun rememberNovaPdfTypography(): Typography {
             ResourcesCompat.getFont(context, R.font.roboto_flex_variable)
             robotoFlexFamily
         }.getOrElse { error ->
-            Log.w(TAG, "Unable to load Roboto Flex font; falling back to platform sans-serif.", error)
+            NovaLog.w(TAG, "Unable to load Roboto Flex font; falling back to platform sans-serif.", error)
             FontFamily.SansSerif
         }
 

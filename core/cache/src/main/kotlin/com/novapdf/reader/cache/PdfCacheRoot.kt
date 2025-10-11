@@ -1,7 +1,7 @@
 package com.novapdf.reader.cache
 
 import android.content.Context
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.annotation.VisibleForTesting
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -80,12 +80,12 @@ object PdfCacheRoot {
     private fun ensureDirectory(directory: File) {
         if (directory.exists()) {
             if (!directory.isDirectory) {
-                Log.w(TAG, "Cache path is not a directory: ${directory.absolutePath}")
+                NovaLog.w(TAG, "Cache path is not a directory: ${directory.absolutePath}")
             }
             return
         }
         if (!directory.mkdirs()) {
-            Log.w(TAG, "Unable to create cache directory at ${directory.absolutePath}")
+            NovaLog.w(TAG, "Unable to create cache directory at ${directory.absolutePath}")
         }
     }
 }
@@ -145,7 +145,7 @@ private object CachePurger {
         return if (file.delete()) {
             true
         } else {
-            Log.w(tag, "Unable to delete cache entry at ${file.absolutePath}")
+            NovaLog.w(tag, "Unable to delete cache entry at ${file.absolutePath}")
             false
         }
     }
@@ -156,11 +156,11 @@ private object CachePurger {
             .forEach { dir ->
                 val children = dir.list()
                 if (children == null) {
-                    Log.w(tag, "Unable to list contents of ${dir.absolutePath}")
+                    NovaLog.w(tag, "Unable to list contents of ${dir.absolutePath}")
                     return@forEach
                 }
                 if (children.isEmpty() && !dir.delete()) {
-                    Log.w(tag, "Unable to delete empty cache directory at ${dir.absolutePath}")
+                    NovaLog.w(tag, "Unable to delete empty cache directory at ${dir.absolutePath}")
                 }
             }
     }
