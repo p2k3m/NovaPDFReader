@@ -87,14 +87,17 @@ object NovaLog {
 
     @VisibleForTesting
     internal fun formatMessage(message: String, fields: Array<out LogField>): String {
-        if (fields.isEmpty()) return message
-        return buildString(message.length + 16 * fields.size) {
+        if (fields.isEmpty()) {
+            return SensitiveDataSanitizer.sanitize(message)
+        }
+        val combined = buildString(message.length + 16 * fields.size) {
             append(message)
             fields.forEach { field ->
                 append(" | ")
                 append(field.render())
             }
         }
+        return SensitiveDataSanitizer.sanitize(combined)
     }
 
     private fun log(

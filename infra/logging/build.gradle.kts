@@ -35,6 +35,8 @@ dependencies {
     implementation(libs.hilt.android)
     implementation(libs.timber)
     ksp(libs.hilt.compiler)
+
+    testImplementation(kotlin("test"))
 }
 
 kotlin {
