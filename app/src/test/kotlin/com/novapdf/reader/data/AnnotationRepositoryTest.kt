@@ -10,6 +10,7 @@ import com.novapdf.reader.model.PointSnapshot
 import com.novapdf.reader.model.RectSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,7 @@ class AnnotationRepositoryTest {
     @Test
     fun addAndPersistAnnotations() = runTest {
         AnnotationRepository.preferenceFile(context).delete()
+        AnnotationRepository.walDirectory(context).deleteRecursively()
         val repository = AnnotationRepository(context, dispatchers = testDispatchers())
         val documentId = "test-doc"
         val stroke = AnnotationCommand.Stroke(
@@ -40,6 +42,7 @@ class AnnotationRepositoryTest {
         )
 
         repository.addAnnotation(documentId, stroke)
+        advanceUntilIdle()
         val annotations = repository.annotationsForDocument(documentId)
         assertEquals(1, annotations.size)
         assertEquals(setOf(documentId), repository.trackedDocumentIds())
@@ -56,6 +59,7 @@ class AnnotationRepositoryTest {
     @Test
     fun fallsBackToUnencryptedPreferencesWhenSecureStorageUnavailable() = runTest {
         AnnotationRepository.preferenceFile(context).delete()
+        AnnotationRepository.walDirectory(context).deleteRecursively()
         var fallbackInvoked = false
         val repository = AnnotationRepository(
             context,
@@ -73,6 +77,7 @@ class AnnotationRepositoryTest {
             color = 0xff0000
         )
         repository.addAnnotation("doc", annotation)
+        advanceUntilIdle()
 
         val savedFile = repository.saveAnnotations("doc")
 
@@ -82,6 +87,76 @@ class AnnotationRepositoryTest {
             "fallback preferences file should exist",
             AnnotationRepository.preferenceFile(context).exists()
         )
+    }
+
+    @Test
+    fun recoversPersistedAnnotationsOnInitialization() = runTest {
+        AnnotationRepository.preferenceFile(context).delete()
+        AnnotationRepository.walDirectory(context).deleteRecursively()
+        val documentId = "persisted-doc"
+        val stroke = AnnotationCommand.Stroke(
+            pageIndex = 0,
+            points = listOf(PointSnapshot(2f, 2f), PointSnapshot(3f, 3f)),
+            color = 0xFF00FF00,
+            strokeWidth = 4f
+        )
+
+        val repository = AnnotationRepository(context, dispatchers = testDispatchers())
+        repository.addAnnotation(documentId, stroke)
+        advanceUntilIdle()
+        repository.saveAnnotations(documentId)
+
+        val recovered = AnnotationRepository(context, dispatchers = testDispatchers())
+
+        val annotations = recovered.annotationsForDocument(documentId)
+        assertEquals(1, annotations.size)
+        assertEquals(stroke, annotations.first())
+    }
+
+    @Test
+    fun recoversDraftsFromWriteAheadLog() = runTest {
+        AnnotationRepository.preferenceFile(context).delete()
+        AnnotationRepository.walDirectory(context).deleteRecursively()
+        val documentId = "draft-doc"
+        val highlight = AnnotationCommand.Highlight(
+            pageIndex = 2,
+            rect = RectSnapshot(5f, 5f, 10f, 10f),
+            color = 0xFFAA00FF
+        )
+
+        val first = AnnotationRepository(context, dispatchers = testDispatchers())
+        first.addAnnotation(documentId, highlight)
+        advanceUntilIdle()
+
+        val recovered = AnnotationRepository(context, dispatchers = testDispatchers())
+
+        val annotations = recovered.annotationsForDocument(documentId)
+        assertEquals(1, annotations.size)
+        assertEquals(highlight, annotations.first())
+    }
+
+    @Test
+    fun savingAnnotationsClearsWriteAheadLog() = runTest {
+        AnnotationRepository.preferenceFile(context).delete()
+        AnnotationRepository.walDirectory(context).deleteRecursively()
+        val documentId = "cleanup-doc"
+        val text = AnnotationCommand.Text(
+            pageIndex = 1,
+            text = "Draft",
+            position = PointSnapshot(1f, 1f),
+            color = 0xFF0000FF
+        )
+
+        val repository = AnnotationRepository(context, dispatchers = testDispatchers())
+        repository.addAnnotation(documentId, text)
+        advanceUntilIdle()
+
+        val walFile = AnnotationRepository.walFile(context, documentId)
+        assertTrue("write-ahead log should be created", walFile.exists())
+
+        repository.saveAnnotations(documentId)
+
+        assertFalse("write-ahead log should be cleared after saving", walFile.exists())
     }
 }
 
