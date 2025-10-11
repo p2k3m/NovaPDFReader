@@ -1,10 +1,12 @@
 import com.android.build.gradle.BaseExtension
 import com.android.build.gradle.internal.tasks.DeviceProviderInstrumentTestTask
+import com.android.build.gradle.internal.tasks.InstallVariantTask
 import com.diffplug.gradle.spotless.SpotlessExtension
 import io.gitlab.arturbosch.detekt.Detekt
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.StartParameter
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.logging.Logger
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.dependencies
 import org.gradle.kotlin.dsl.getByType
@@ -162,6 +164,99 @@ fun queryDeviceApiLevel(serial: String): Int? {
         )
         null
     }
+}
+
+fun runAdbCommand(
+    serial: String,
+    logger: Logger,
+    timeoutSeconds: Long = 30,
+    vararg arguments: String
+): String? {
+    val executable = adbExecutable
+    if (executable == null || !executable.exists()) {
+        logger.warn(
+            "Unable to execute adb command ${arguments.joinToString(" ")} for device $serial because the adb executable was not found."
+        )
+        return null
+    }
+
+    val command = buildList {
+        add(executable.absolutePath)
+        add("-s")
+        add(serial)
+        addAll(arguments)
+    }
+
+    return runCatching {
+        val process = ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .start()
+
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            process.destroy()
+            process.destroyForcibly()
+            logger.warn(
+                "Timed out while executing adb command ${arguments.joinToString(" ")} for device $serial."
+            )
+            null
+        } else {
+            process.inputStream.bufferedReader().use { reader ->
+                reader.readText()
+            }
+        }
+    }.getOrElse { error ->
+        logger.warn(
+            "Failed to execute adb command ${arguments.joinToString(" ")} for device $serial.",
+            error
+        )
+        null
+    }
+}
+
+fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
+    val waitResult = runAdbCommand(serial, logger, timeoutSeconds = 120, "wait-for-device")
+    if (waitResult == null) {
+        logger.warn(
+            "Android device $serial did not respond to wait-for-device before APK installation."
+        )
+        return false
+    }
+
+    val attempts = 10
+    repeat(attempts) { attempt ->
+        val bootCompleted = runAdbCommand(
+            serial,
+            logger,
+            timeoutSeconds = 15,
+            "shell",
+            "getprop",
+            "sys.boot_completed"
+        )?.trim()
+        val devBootCompleted = runAdbCommand(
+            serial,
+            logger,
+            timeoutSeconds = 15,
+            "shell",
+            "getprop",
+            "dev.bootcomplete"
+        )?.trim()
+
+        if (bootCompleted == "1" || devBootCompleted == "1") {
+            return true
+        }
+
+        if (attempt < attempts - 1) {
+            logger.info(
+                "Android device $serial has not reported sys.boot_completed=1 (attempt ${attempt + 1} of $attempts). Retrying before APK installation."
+            )
+            Thread.sleep(5_000)
+        }
+    }
+
+    logger.warn(
+        "Android device $serial did not report sys.boot_completed=1 before APK installation."
+    )
+    return false
 }
 
 fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
@@ -413,6 +508,33 @@ subprojects {
         }
     }
 
+    @Suppress("UnstableApiUsage")
+    tasks.withType(InstallVariantTask::class.java).configureEach {
+        doFirst {
+            val executable = adbExecutable
+            if (executable == null || !executable.exists()) {
+                logger.warn(
+                    "Skipping device readiness checks for task $name because the adb executable was not found."
+                )
+                return@doFirst
+            }
+
+            val devices = connectedDeviceCheck.readyDevices
+            if (devices.isEmpty()) {
+                val message = connectedDeviceCheck.warningMessage
+                    ?: "Skipping task $name because no connected Android devices/emulators were detected."
+                logger.warn(message)
+                throw StopExecutionException("No responsive Android devices available for APK installation.")
+            }
+
+            devices.forEach { serial ->
+                if (!ensureDeviceReadyForApkInstall(serial, logger)) {
+                    throw StopExecutionException("Android device $serial is not ready for APK installation.")
+                }
+            }
+        }
+    }
+
     tasks.withType<DeviceProviderInstrumentTestTask>().configureEach {
         doFirst {
             if (requireConnectedDevice == true) {
@@ -470,6 +592,13 @@ subprojects {
                         "Ensure an emulator is fully booted before running connected tests."
                 logSkip(message)
                 throw StopExecutionException("No responsive Android devices available for connected tests.")
+            }
+
+            if (!ensureDeviceReadyForApkInstall(responsiveSerial, logger)) {
+                val message =
+                    "Skipping task $name because Android device $responsiveSerial is not ready for APK installation."
+                logSkip(message)
+                throw StopExecutionException("Android device $responsiveSerial is not ready for APK installation.")
             }
         }
     }
