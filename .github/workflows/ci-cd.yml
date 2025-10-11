@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: android-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-test:
@@ -280,6 +280,11 @@ jobs:
           set -euo pipefail
           ./gradlew testDebugUnitTest --info
           echo "UNIT_TESTS_PASSED=true" >> "$GITHUB_ENV"
+      - name: Abort workflow after failure
+        if: ${{ failure() }}
+        run: |
+          echo "::error::A previous step failed. Stopping remaining workflow steps."
+          exit 1
       - name: Start emulator
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
