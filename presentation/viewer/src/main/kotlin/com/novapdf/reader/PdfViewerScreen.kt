@@ -372,7 +372,10 @@ fun PdfViewerScreen(
                 NavigationItem(MainDestination.Settings, Icons.Outlined.Settings, R.string.navigation_settings)
             )
         }
-        val echoSummary by remember(state) { derivedStateOf { state.echoSummary() } }
+        val echoSummaryStrings = remember(context) { ResourceEchoModeSummaryStrings(context.resources) }
+        val echoSummary by remember(state, echoSummaryStrings) {
+            derivedStateOf { state.echoSummary(echoSummaryStrings) }
+        }
         val playAdaptiveSummary = remember(echoSummary, echoModeController, fallbackHaptics) {
             {
                 val summary = echoSummary
