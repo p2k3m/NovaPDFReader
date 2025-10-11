@@ -35,6 +35,7 @@ class PdfViewerScreenTest {
                     onConfirmLargeDownload = {},
                     onDismissLargeDownload = {},
                     onPageChange = {},
+                    onPageCommit = {},
                     onStrokeFinished = {},
                     onSaveAnnotations = {},
                     onSearch = {},

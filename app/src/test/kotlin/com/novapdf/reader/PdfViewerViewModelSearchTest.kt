@@ -108,6 +108,7 @@ class PdfViewerViewModelSearchTest {
         val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)
         val buildIndexUseCase = DefaultBuildSearchIndexUseCase(searchCoordinator)
 
+        val preferencesUseCase = TestUserPreferencesUseCase()
         val useCases = DefaultPdfViewerUseCases(
             document = DefaultPdfDocumentUseCase(pdfRepository),
             openDocument = openDocumentUseCase,
@@ -120,7 +121,8 @@ class PdfViewerViewModelSearchTest {
             remoteDocuments = DefaultRemoteDocumentUseCase(documentSourceGateway),
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
             crashReporting = DefaultCrashReportingUseCase(crashReporter),
-            adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
+            adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager),
+            preferences = preferencesUseCase,
         )
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
         return PdfViewerViewModel(

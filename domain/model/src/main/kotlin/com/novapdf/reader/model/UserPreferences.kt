@@ -11,8 +11,15 @@ package com.novapdf.reader.model
 data class UserPreferences(
     val nightMode: Boolean?,
     val lastDocumentUri: String?,
+    val lastDocumentPageIndex: Int?,
+    val lastDocumentZoom: Float?,
 ) {
     companion object {
-        val EMPTY = UserPreferences(nightMode = null, lastDocumentUri = null)
+        val EMPTY = UserPreferences(
+            nightMode = null,
+            lastDocumentUri = null,
+            lastDocumentPageIndex = null,
+            lastDocumentZoom = null,
+        )
     }
 }

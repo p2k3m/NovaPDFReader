@@ -241,6 +241,7 @@ fun PdfViewerRoute(
             onConfirmLargeDownload = { viewModel.confirmLargeRemoteDownload() },
             onDismissLargeDownload = { viewModel.dismissLargeRemoteDownload() },
             onPageChange = { viewModel.onPageFocused(it) },
+            onPageCommit = { viewModel.onPageSettled(it) },
             onStrokeFinished = { viewModel.addAnnotation(it) },
             onSaveAnnotations = { viewModel.persistAnnotations() },
             onSearch = { viewModel.search(it) },
@@ -277,6 +278,7 @@ fun PdfViewerScreen(
     onConfirmLargeDownload: () -> Unit,
     onDismissLargeDownload: () -> Unit,
     onPageChange: (Int) -> Unit,
+    onPageCommit: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onSaveAnnotations: () -> Unit,
     onSearch: (String) -> Unit,
@@ -299,6 +301,7 @@ fun PdfViewerScreen(
     var showUrlDialog by remember { mutableStateOf(false) }
     val requestDocument: () -> Unit = { showSourceDialog = true }
     val latestOnPageChange by rememberUpdatedState(onPageChange)
+    val latestOnPageCommit by rememberUpdatedState(onPageCommit)
     val baseDensity = LocalDensity.current
     val adjustedDensity = remember(baseDensity, state.fontScale) {
         Density(density = baseDensity.density, fontScale = state.fontScale)
@@ -485,14 +488,15 @@ fun PdfViewerScreen(
                         onSearch(query)
                     },
                     totalSearchResults = totalSearchResults,
-            onOpenDocument = requestDocument,
-            onOpenLastDocument = onOpenLastDocument,
-            onPlayAdaptiveSummary = playAdaptiveSummary,
+                    onOpenDocument = requestDocument,
+                    onOpenLastDocument = onOpenLastDocument,
+                    onPlayAdaptiveSummary = playAdaptiveSummary,
                     onOpenAccessibilityOptions = { showAccessibilitySheet = true },
                     focusRequester = searchFocusRequester,
                     requestFocus = requestSearchFocus,
                     onFocusHandled = { requestSearchFocus = false },
                     onPageChange = latestOnPageChange,
+                    onPageCommit = latestOnPageCommit,
                     onStrokeFinished = onStrokeFinished,
                     onToggleBookmark = onToggleBookmark,
                     renderPage = renderPage,
@@ -781,6 +785,7 @@ private fun PdfViewerDestinationContainer(
     requestFocus: Boolean,
     onFocusHandled: () -> Unit,
     onPageChange: (Int) -> Unit,
+    onPageCommit: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
@@ -823,6 +828,7 @@ private fun PdfViewerDestinationContainer(
                 requestFocus = requestFocus,
                 onFocusHandled = onFocusHandled,
                 onPageChange = onPageChange,
+                onPageCommit = onPageCommit,
                 onStrokeFinished = onStrokeFinished,
                 onToggleBookmark = onToggleBookmark,
                 renderPage = renderPage,
@@ -1363,6 +1369,7 @@ private fun ReaderContent(
     requestFocus: Boolean,
     onFocusHandled: () -> Unit,
     onPageChange: (Int) -> Unit,
+    onPageCommit: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
@@ -1376,6 +1383,7 @@ private fun ReaderContent(
         modifier = modifier.fillMaxSize(),
         state = state,
         onPageChange = onPageChange,
+        onPageCommit = onPageCommit,
         onStrokeFinished = onStrokeFinished,
         onToggleBookmark = onToggleBookmark,
         renderPage = renderPage,
@@ -2655,6 +2663,7 @@ private fun PdfPager(
     modifier: Modifier,
     state: PdfViewerUiState,
     onPageChange: (Int) -> Unit,
+    onPageCommit: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
@@ -2667,6 +2676,7 @@ private fun PdfPager(
 ) {
     val lazyListState = rememberLazyListState()
     val latestOnPageChange by rememberUpdatedState(onPageChange)
+    val latestOnPageCommit by rememberUpdatedState(onPageCommit)
     val latestRenderPage by rememberUpdatedState(renderPage)
     val latestRequestPageSize by rememberUpdatedState(requestPageSize)
     val latestStrokeFinished by rememberUpdatedState(onStrokeFinished)
@@ -2706,6 +2716,20 @@ private fun PdfPager(
             .filterNotNull()
             .distinctUntilChanged()
             .collect { latestOnPageChange(it) }
+    }
+
+    LaunchedEffect(lazyListState, state.pageCount, headerCount) {
+        if (state.pageCount <= 0) return@LaunchedEffect
+        snapshotFlow { lazyListState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { isScrolling ->
+                if (!isScrolling) {
+                    val settled = lazyListState.firstVisiblePageIndex(headerCount)
+                    if (settled != null) {
+                        latestOnPageCommit(settled)
+                    }
+                }
+            }
     }
 
     LaunchedEffect(lazyListState) {

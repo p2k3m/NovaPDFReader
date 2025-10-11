@@ -46,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -67,6 +68,7 @@ private const val MAX_PAGE_CACHE_BYTES = 32 * 1024 * 1024
 private const val MAX_TILE_CACHE_BYTES = 24 * 1024 * 1024
 private const val MIN_CACHE_BYTES = 1 * 1024 * 1024
 private const val REMOTE_PDF_SAFE_SIZE_BYTES = 256L * 1024L * 1024L
+private const val VIEWPORT_PERSIST_THROTTLE_MS = 750L
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -91,6 +93,8 @@ data class PendingLargeDownload(
 data class PdfViewerUiState(
     val documentId: String? = null,
     val lastOpenedDocumentUri: String? = null,
+    val lastOpenedDocumentPageIndex: Int? = null,
+    val lastOpenedDocumentZoom: Float? = null,
     val pageCount: Int = 0,
     val currentPage: Int = 0,
     val documentStatus: DocumentStatus = DocumentStatus.Idle,
@@ -130,6 +134,12 @@ private data class DocumentContext(
 private data class PrefetchRequest(
     val indices: List<Int>,
     val widthPx: Int
+)
+
+private data class ViewportCommit(
+    val documentId: String,
+    val pageIndex: Int,
+    val zoom: Float,
 )
 
 private data class PageCacheKey(
@@ -195,6 +205,9 @@ open class PdfViewerViewModel @Inject constructor(
         capacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+
+    private var viewportCommitJob: Job? = null
+    private var pendingViewportCommit: ViewportCommit? = null
 
     private val pageCacheLock = Any()
     private val tileCacheLock = Any()
@@ -317,6 +330,8 @@ open class PdfViewerViewModel @Inject constructor(
                         current.copy(
                             isNightMode = resolvedNightMode,
                             lastOpenedDocumentUri = prefs.lastDocumentUri,
+                            lastOpenedDocumentPageIndex = prefs.lastDocumentPageIndex,
+                            lastOpenedDocumentZoom = prefs.lastDocumentZoom,
                             preferencesReady = true
                         )
                     }
@@ -545,6 +560,8 @@ open class PdfViewerViewModel @Inject constructor(
         pageTooLargeNotified.set(false)
         activeDocumentId = null
         clearRenderCaches()
+        viewportCommitJob?.cancel()
+        pendingViewportCommit = null
         setLoadingState(
             isLoading = true,
             progress = 0f,
@@ -563,6 +580,7 @@ open class PdfViewerViewModel @Inject constructor(
         val session = sessionResult.session
         runCatching {
             preferencesUseCase.setLastOpenedDocument(session.uri.toString())
+            preferencesUseCase.setLastDocumentViewport(pageIndex = 0, zoom = 1f)
         }
         annotationUseCase.clear(session.documentId)
         setLoadingState(
@@ -799,6 +817,22 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
+    fun onPageSettled(index: Int, zoom: Float = 1f) {
+        val session = documentUseCase.session.value ?: return
+        if (index !in 0 until session.pageCount) return
+        val documentId = session.documentId
+        pendingViewportCommit = ViewportCommit(documentId = documentId, pageIndex = index, zoom = zoom)
+        viewportCommitJob?.cancel()
+        viewportCommitJob = viewModelScope.launch {
+            delay(VIEWPORT_PERSIST_THROTTLE_MS)
+            val pending = pendingViewportCommit ?: return@launch
+            if (pending.documentId != documentUseCase.session.value?.documentId) {
+                return@launch
+            }
+            runCatching { preferencesUseCase.setLastDocumentViewport(pending.pageIndex, pending.zoom) }
+        }
+    }
+
     suspend fun renderPage(
         index: Int,
         targetWidth: Int,
@@ -949,6 +983,7 @@ open class PdfViewerViewModel @Inject constructor(
         val session = documentUseCase.session.value ?: return
         if (index !in 0 until session.pageCount) return
         _uiState.value = _uiState.value.copy(currentPage = index)
+        onPageSettled(index)
     }
 
     fun updateViewportWidth(widthPx: Int) {

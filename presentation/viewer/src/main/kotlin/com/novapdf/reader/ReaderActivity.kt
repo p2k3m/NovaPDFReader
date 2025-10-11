@@ -205,17 +205,15 @@ open class ReaderActivity : ComponentActivity() {
         recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 super.onScrolled(recyclerView, dx, dy)
-                notifyVisiblePage()
+                notifyVisiblePage(commit = false)
             }
 
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                 super.onScrollStateChanged(recyclerView, newState)
-                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
-                    notifyVisiblePage()
-                }
+                notifyVisiblePage(commit = newState == RecyclerView.SCROLL_STATE_IDLE)
             }
 
-            private fun notifyVisiblePage() {
+            private fun notifyVisiblePage(commit: Boolean) {
                 val manager = legacyLayoutManager ?: return
                 val firstComplete = manager.findFirstCompletelyVisibleItemPosition()
                 val candidate = if (firstComplete != RecyclerView.NO_POSITION) {
@@ -223,9 +221,13 @@ open class ReaderActivity : ComponentActivity() {
                 } else {
                     manager.findFirstVisibleItemPosition()
                 }
-                if (candidate != RecyclerView.NO_POSITION && candidate != legacyLastFocusedPage) {
+                if (candidate == RecyclerView.NO_POSITION) return
+                if (candidate != legacyLastFocusedPage) {
                     legacyLastFocusedPage = candidate
                     viewModel.onPageFocused(candidate)
+                }
+                if (commit) {
+                    viewModel.onPageSettled(candidate)
                 }
             }
         })
