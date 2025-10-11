@@ -17,6 +17,9 @@ private const val READER_ACTIVITY_CLASS_NAME = "com.novapdf.reader.ReaderActivit
 
 internal fun MacrobenchmarkScope.launchReaderAndAwait() {
     pressHome()
+    // Warm up SystemUI to make sure UIAutomator interactions are responsive before launch
+    device.wait(Until.hasObject(By.pkg("com.android.systemui").depth(0)), 3_000)
+    device.waitForIdle()
     startActivityAndWait()
     device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 5_000)
     device.waitForIdle()
