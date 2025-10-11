@@ -18,6 +18,10 @@ import com.novapdf.reader.cache.PdfCacheRoot
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.data.PIPELINE_PROGRESS_TIMEOUT_MS
+import com.novapdf.reader.data.PipelineType
+import com.novapdf.reader.data.signalPipelineProgress
+import com.novapdf.reader.data.withPipelineWatchdog
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchIndexingPhase
@@ -197,6 +201,7 @@ class LuceneSearchCoordinator(
         progress: Float?,
         phase: SearchIndexingPhase,
     ) {
+        runCatching { signalPipelineProgress() }
         val normalized = progress?.coerceIn(0f, 1f)
         val current = indexingStateFlow.value
         if (current is SearchIndexingState.InProgress && current.documentId != documentId) {
@@ -381,10 +386,22 @@ class LuceneSearchCoordinator(
     }
 
     private suspend fun rebuildIndex(session: PdfDocumentSession) = withContext(indexDispatcher) {
-        val documentMtime = readDocumentMtime(session)
-        val shard = obtainShard(session, documentMtime = documentMtime)
-        applyActiveShard(session.documentId, shard)
-        emitIndexingState(session.documentId, progress = 1f, phase = SearchIndexingPhase.WRITING_INDEX)
+        withPipelineWatchdog(
+            pipeline = PipelineType.INDEX,
+            timeoutMillis = PIPELINE_PROGRESS_TIMEOUT_MS,
+            onTimeout = { timeout ->
+                NovaLog.w(
+                    TAG,
+                    "Index pipeline timed out for ${session.documentId}",
+                    throwable = timeout,
+                )
+            },
+        ) {
+            val documentMtime = readDocumentMtime(session)
+            val shard = obtainShard(session, documentMtime = documentMtime)
+            applyActiveShard(session.documentId, shard)
+            emitIndexingState(session.documentId, progress = 1f, phase = SearchIndexingPhase.WRITING_INDEX)
+        }
     }
 
     private suspend fun extractPageContent(
