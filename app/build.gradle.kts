@@ -546,7 +546,7 @@ if (requireConnectedDevice != true) {
                         }
 
                         fun packageServiceReady(): Boolean {
-                            val output = executeAdbCommand(
+                            val packageOutput = executeAdbCommand(
                                 serial,
                                 "shell",
                                 "cmd",
@@ -555,15 +555,38 @@ if (requireConnectedDevice != true) {
                                 "packages"
                             )?.trim()
 
-                            if (output.isNullOrEmpty()) {
+                            if (packageOutput.isNullOrEmpty()) {
                                 return false
                             }
 
-                            val lowered = output.lowercase()
+                            val loweredPackageOutput = packageOutput.lowercase()
                             if (
-                                "can't find service: package" in lowered ||
-                                "failure calling service package" in lowered ||
-                                "cmd: not found" in lowered
+                                "can't find service: package" in loweredPackageOutput ||
+                                "failure calling service package" in loweredPackageOutput ||
+                                "cmd: not found" in loweredPackageOutput
+                            ) {
+                                return false
+                            }
+
+                            val settingsOutput = executeAdbCommand(
+                                serial,
+                                "shell",
+                                "cmd",
+                                "settings",
+                                "get",
+                                "global",
+                                "device_provisioned"
+                            )?.trim()
+
+                            if (settingsOutput.isNullOrEmpty()) {
+                                return false
+                            }
+
+                            val loweredSettingsOutput = settingsOutput.lowercase()
+                            if (
+                                "cannot access system provider" in loweredSettingsOutput ||
+                                "illegalstateexception" in loweredSettingsOutput ||
+                                "failure calling service settings" in loweredSettingsOutput
                             ) {
                                 return false
                             }
