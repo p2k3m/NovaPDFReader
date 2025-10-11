@@ -15,13 +15,22 @@ import kotlin.system.measureTimeMillis
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
 private const val READER_ACTIVITY_CLASS_NAME = "com.novapdf.reader.ReaderActivity"
 
+private const val SYSTEM_UI_BOOT_TIMEOUT_MS = 30_000L
+private const val APP_LAUNCH_TIMEOUT_MS = 60_000L
+
 internal fun MacrobenchmarkScope.launchReaderAndAwait() {
     pressHome()
     // Warm up SystemUI to make sure UIAutomator interactions are responsive before launch
-    device.wait(Until.hasObject(By.pkg("com.android.systemui").depth(0)), 3_000)
+    device.wait(
+        Until.hasObject(By.pkg("com.android.systemui").depth(0)),
+        SYSTEM_UI_BOOT_TIMEOUT_MS
+    )
     device.waitForIdle()
     startActivityAndWait()
-    device.wait(Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)), 5_000)
+    device.wait(
+        Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)),
+        APP_LAUNCH_TIMEOUT_MS
+    )
     device.waitForIdle()
 }
 
