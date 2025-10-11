@@ -757,6 +757,8 @@ jobs:
         id: validate_required_secrets
         env:
           AWS_S3_READ_ROLE_ARN_SECRET: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
+          AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
@@ -772,10 +774,27 @@ jobs:
           set -e
           missing=false
           firebase_missing=false
+          aws_auth_mode=none
+          has_access_keys=false
+
+          if [ -n "${AWS_ACCESS_KEY_ID_SECRET:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+            has_access_keys=true
+          fi
+
+          if [ -n "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
+            aws_auth_mode=role
+          elif [ "$has_access_keys" = true ]; then
+            aws_auth_mode=access_keys
+          fi
 
           if [ -z "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
-            echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role."
-            missing=true
+            if [ "$has_access_keys" = false ]; then
+              echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role, and AWS access key credentials were not supplied as a fallback."
+              echo "Remediation: Either provide an IAM role ARN via the AWS_S3_READ_ROLE_ARN repository secret, or configure long-lived credentials by storing an access key ID and secret access key as the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY repository secrets (double-check the secret names for typos)."
+              missing=true
+            else
+              echo "::notice::AWS_S3_READ_ROLE_ARN secret not provided; will fall back to AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY credentials."
+            fi
           fi
 
           if [ -z "${S3_BUCKET_NAME_SECRET:-}" ]; then
@@ -837,6 +856,8 @@ jobs:
             firebase_missing=true
           fi
 
+          echo "aws_auth_mode=${aws_auth_mode}" >> "$GITHUB_OUTPUT"
+
           if [ "$firebase_missing" = true ]; then
             echo "::notice::Firebase secrets missing; Firebase Test Lab jobs will be skipped."
             echo "firebase_configured=false" >> "$GITHUB_OUTPUT"
@@ -851,6 +872,8 @@ jobs:
         if: ${{ steps.validate_required_secrets.outcome == 'success' }}
         env:
           AWS_S3_READ_ROLE_ARN: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
           AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
@@ -866,6 +889,8 @@ jobs:
           set +e
           for var in \
             AWS_S3_READ_ROLE_ARN \
+            AWS_ACCESS_KEY_ID \
+            AWS_SECRET_ACCESS_KEY \
             STRESS_PDF_S3_KEY \
             THOUSAND_PAGE_PDF_S3_KEY \
             AI_PDF_SHA256 \
@@ -963,7 +988,8 @@ jobs:
           done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-      - name: Assume read-only S3 role
+      - name: Configure AWS credentials (assume role)
+        if: ${{ steps.validate_required_secrets.outputs.aws_auth_mode == 'role' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
@@ -991,7 +1017,14 @@ jobs:
                 }
               ]
             }
-      - name: Validate AWS role assumption
+      - name: Configure AWS credentials (access keys)
+        if: ${{ steps.validate_required_secrets.outputs.aws_auth_mode == 'access_keys' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Validate AWS credentials
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
