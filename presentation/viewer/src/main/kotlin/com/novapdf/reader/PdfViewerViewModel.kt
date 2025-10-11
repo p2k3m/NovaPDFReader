@@ -925,6 +925,8 @@ open class PdfViewerViewModel @Inject constructor(
         if (remote != null) {
             return when (remote.reason) {
                 RemotePdfException.Reason.CORRUPTED -> R.string.error_pdf_corrupted
+                RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED ->
+                    R.string.error_remote_open_failed_after_retries
                 RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
             }
         }
