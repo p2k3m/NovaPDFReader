@@ -14,6 +14,8 @@ import android.os.CancellationSignal
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Trace
+import com.novapdf.reader.logging.LogContext
+import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.field
 import android.util.LruCache
@@ -231,6 +233,24 @@ class PdfDocumentRepository(
     private val renderProgressState = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
     val renderProgress: StateFlow<PdfRenderProgress> = renderProgressState.asStateFlow()
     private val renderMutex = Mutex()
+
+    private fun logFields(
+        operation: String,
+        documentId: String? = openSession.value?.documentId,
+        pageIndex: Int? = null,
+        sizeBytes: Long? = null,
+        durationMs: Long? = null,
+        vararg extras: LogField,
+    ): Array<LogField> {
+        return LogContext(
+            module = LOG_MODULE,
+            operation = operation,
+            documentId = documentId,
+            pageIndex = pageIndex,
+            sizeBytes = sizeBytes,
+            durationMs = durationMs,
+        ).fields(*extras)
+    }
     private val malformedPages = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
     private val pageFailureCounts = ConcurrentHashMap<Int, Int>()
     private val componentCallbacks = object : ComponentCallbacks2 {
@@ -299,7 +319,14 @@ class PdfDocumentRepository(
                     TAG,
                     "Unable to cache remote PDF from $uri",
                     throwable = error,
-                    field("uri", uri),
+                    *logFields(
+                        operation = "cacheRemote",
+                        documentId = uri.toString(),
+                        pageIndex = null,
+                        sizeBytes = null,
+                        durationMs = null,
+                        field("uri", uri),
+                    ),
                 )
                 reportNonFatal(
                     error,
@@ -477,6 +504,7 @@ class PdfDocumentRepository(
 
         val tileWidth = ((clampedRight - clampedLeft) * request.scale).roundToInt().coerceAtLeast(1)
         val tileHeight = ((clampedBottom - clampedTop) * request.scale).roundToInt().coerceAtLeast(1)
+        val tileSizeBytes = tileWidth.toLong() * tileHeight.toLong() * 4L
         val targetWidth = max(1, (pageWidth * request.scale).roundToInt())
         val targetHeight = max(1, (pageHeight * request.scale).roundToInt())
         val maxDimension = max(max(tileWidth, tileHeight), max(targetWidth, targetHeight))
@@ -532,7 +560,12 @@ class PdfDocumentRepository(
                     TAG,
                     "Failed to render tile for page ${request.pageIndex}",
                     throwable = throwable,
-                    field("pageIndex", request.pageIndex),
+                    *logFields(
+                        operation = "renderTile",
+                        documentId = activeSession.documentId,
+                        pageIndex = request.pageIndex,
+                        sizeBytes = tileSizeBytes,
+                    ),
                 )
                 val failureCount = pageFailureCounts.merge(request.pageIndex, 1) { previous, increment ->
                     previous + increment
@@ -867,7 +900,11 @@ class PdfDocumentRepository(
                     TAG,
                     "Failed to obtain page size for index $pageIndex",
                     throwable = throwable,
-                    field("pageIndex", pageIndex),
+                    *logFields(
+                        operation = "getPageSize",
+                        documentId = session.documentId,
+                        pageIndex = pageIndex,
+                    ),
                 )
                 reportNonFatal(
                     throwable,
@@ -914,6 +951,7 @@ class PdfDocumentRepository(
             return null
         }
 
+        var estimatedBytes: Long? = null
         return try {
             bitmapCache.get(key)?.let { cached ->
                 if (!cached.isRecycled) {
@@ -947,6 +985,7 @@ class PdfDocumentRepository(
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.2f))
                 cancellationSignal.throwIfCanceled()
                 val config = bitmapConfigFor(profile)
+                estimatedBytes = targetWidth.toLong() * targetHeight.toLong() * bytesPerPixel(config).toLong()
                 val bitmap = obtainBitmap(targetWidth, targetHeight, config)
                 updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 0.6f))
                 cancellationSignal.throwIfCanceled()
@@ -973,7 +1012,12 @@ class PdfDocumentRepository(
                     TAG,
                     "Failed to render page $pageIndex",
                     throwable = throwable,
-                    field("pageIndex", pageIndex),
+                    *logFields(
+                        operation = "renderPage",
+                        documentId = session.documentId,
+                        pageIndex = pageIndex,
+                        sizeBytes = estimatedBytes,
+                    ),
                 )
                 val failureCount = pageFailureCounts.merge(pageIndex, 1) { previous, increment ->
                     previous + increment
@@ -1860,6 +1904,7 @@ class PdfDocumentRepository(
     }
 
     companion object {
+        private const val LOG_MODULE = "PdfDocumentRepository"
         private const val DEFAULT_PRINT_BUFFER_SIZE = 16 * 1024
         private val KIDS_ARRAY_PATTERN: Pattern = Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
         private val KID_REFERENCE_PATTERN: Pattern = Pattern.compile("\\d+\\s+\\d+\\s+R")
