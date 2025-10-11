@@ -329,6 +329,10 @@ android {
 
         val enableNoStreaming = when {
             explicitNoStreaming != null -> explicitNoStreaming
+            // Hosted CI emulators occasionally return a null PackageManagerInternal while
+            // streaming the APK, leading to install failures. Falling back to the legacy
+            // non-streaming path avoids the allocation call that triggers the crash.
+            isCiEnvironment -> true
             else -> false
         }
 
