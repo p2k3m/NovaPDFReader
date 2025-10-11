@@ -21,6 +21,7 @@ import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.data.PdfRenderException
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.data.remote.RemotePdfTooLargeException
 import com.novapdf.reader.data.remote.RemoteSourceDiagnostics
 import com.novapdf.reader.domain.usecase.BuildSearchIndexRequest
 import com.novapdf.reader.domain.usecase.OpenDocumentRequest
@@ -65,6 +66,7 @@ private const val INDEX_POOL_PARALLELISM = 1
 private const val MAX_PAGE_CACHE_BYTES = 32 * 1024 * 1024
 private const val MAX_TILE_CACHE_BYTES = 24 * 1024 * 1024
 private const val MIN_CACHE_BYTES = 1 * 1024 * 1024
+private const val REMOTE_PDF_SAFE_SIZE_BYTES = 256L * 1024L * 1024L
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -78,6 +80,12 @@ sealed interface DocumentStatus {
 data class UiMessage(
     val id: Long = System.currentTimeMillis(),
     @StringRes val messageRes: Int
+)
+
+data class PendingLargeDownload(
+    val source: DocumentSource,
+    val sizeBytes: Long,
+    val maxBytes: Long,
 )
 
 data class PdfViewerUiState(
@@ -103,7 +111,8 @@ data class PdfViewerUiState(
     val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
     val bitmapMemory: BitmapMemoryStats = BitmapMemoryStats(),
     val renderQueueStats: RenderQueueStats = RenderQueueStats(),
-    val malformedPages: Set<Int> = emptySet()
+    val malformedPages: Set<Int> = emptySet(),
+    val pendingLargeDownload: PendingLargeDownload? = null,
 )
 
 private data class DocumentContext(
@@ -405,6 +414,7 @@ open class PdfViewerViewModel @Inject constructor(
         val previousJob = remoteDownloadJob
         val newJob = viewModelScope.launch(dispatchers.io) {
             previousJob?.cancelAndJoin()
+            clearPendingLargeDownload()
             setLoadingState(
                 isLoading = true,
                 progress = 0f,
@@ -438,6 +448,22 @@ open class PdfViewerViewModel @Inject constructor(
                     )
                     throw throwable
                 }
+                val remoteFailure = throwable.findCause<RemotePdfException>()
+                if (remoteFailure?.reason == RemotePdfException.Reason.FILE_TOO_LARGE) {
+                    val sizeInfo = throwable.findCause<RemotePdfTooLargeException>()
+                    setLoadingState(
+                        isLoading = false,
+                        progress = null,
+                        messageRes = null,
+                        resetError = false
+                    )
+                    promptLargeRemoteDownload(
+                        source = source,
+                        sizeBytes = sizeInfo?.sizeBytes ?: 0L,
+                        maxBytes = sizeInfo?.maxBytes ?: REMOTE_PDF_SAFE_SIZE_BYTES,
+                    )
+                    return@onFailure
+                }
                 reportRemoteOpenFailure(throwable, source)
             }
         }
@@ -461,6 +487,17 @@ open class PdfViewerViewModel @Inject constructor(
 
     fun cancelRemoteDocumentLoad() {
         remoteDownloadJob?.cancel()
+    }
+
+    fun confirmLargeRemoteDownload() {
+        val pending = _uiState.value.pendingLargeDownload ?: return
+        updateUiState { current -> current.copy(pendingLargeDownload = null) }
+        enqueueMessage(R.string.remote_pdf_download_started)
+        openRemoteDocument(pending.source.withLargeFileConsentFlag())
+    }
+
+    fun dismissLargeRemoteDownload() {
+        clearPendingLargeDownload()
     }
 
     fun cancelIndexing() {
@@ -676,6 +713,8 @@ open class PdfViewerViewModel @Inject constructor(
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> R.string.remote_failure_reason_network_retry
             RemotePdfException.Reason.CORRUPTED -> R.string.remote_failure_reason_corrupted
             RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.remote_failure_reason_circuit_open
+            RemotePdfException.Reason.UNSAFE -> R.string.remote_failure_reason_unsafe
+            RemotePdfException.Reason.FILE_TOO_LARGE -> R.string.remote_failure_reason_large
         }
         return app.getString(resId)
     }
@@ -961,6 +1000,36 @@ open class PdfViewerViewModel @Inject constructor(
         _messageEvents.tryEmit(UiMessage(messageRes = messageRes))
     }
 
+    private fun promptLargeRemoteDownload(source: DocumentSource, sizeBytes: Long, maxBytes: Long) {
+        updateUiState { current ->
+            current.copy(
+                pendingLargeDownload = PendingLargeDownload(
+                    source = source,
+                    sizeBytes = sizeBytes,
+                    maxBytes = maxBytes,
+                )
+            )
+        }
+    }
+
+    private fun clearPendingLargeDownload() {
+        updateUiState { current ->
+            if (current.pendingLargeDownload == null) {
+                current
+            } else {
+                current.copy(pendingLargeDownload = null)
+            }
+        }
+    }
+
+    private fun DocumentSource.withLargeFileConsentFlag(): DocumentSource {
+        return when (this) {
+            is DocumentSource.RemoteUrl -> this.withLargeFileConsent()
+            is DocumentSource.GoogleDrive -> this.withLargeFileConsent()
+            is DocumentSource.Dropbox -> this.withLargeFileConsent()
+        }
+    }
+
     private fun isPageMalformed(pageIndex: Int): Boolean {
         return pageIndex in _uiState.value.malformedPages
     }
@@ -1007,6 +1076,8 @@ open class PdfViewerViewModel @Inject constructor(
                     R.string.error_remote_open_failed_after_retries
                 RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
                 RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.error_remote_open_disabled
+                RemotePdfException.Reason.UNSAFE -> R.string.error_remote_pdf_unsafe
+                RemotePdfException.Reason.FILE_TOO_LARGE -> R.string.error_remote_pdf_too_large
             }
         }
 

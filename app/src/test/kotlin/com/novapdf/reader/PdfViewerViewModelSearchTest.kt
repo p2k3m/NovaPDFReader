@@ -140,6 +140,8 @@ class PdfViewerViewModelSearchTest {
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> R.string.remote_failure_reason_network_retry
             RemotePdfException.Reason.CORRUPTED -> R.string.remote_failure_reason_corrupted
             RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.remote_failure_reason_circuit_open
+            RemotePdfException.Reason.UNSAFE -> R.string.remote_failure_reason_unsafe
+            RemotePdfException.Reason.FILE_TOO_LARGE -> R.string.remote_failure_reason_large
         }
         return getString(resId)
     }

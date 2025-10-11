@@ -17,7 +17,7 @@ interface RemotePdfDownloader {
     /**
      * Attempts to download the given [url] and returns the resolved [Uri] when successful.
      */
-    suspend fun download(url: String): Result<Uri>
+    suspend fun download(url: String, allowLargeFile: Boolean = false): Result<Uri>
 }
 
 /**
@@ -27,13 +27,13 @@ class S3RemotePdfDownloader @Inject constructor(
     private val downloadManager: PdfDownloadManager,
 ) : RemotePdfDownloader {
 
-    override suspend fun download(url: String): Result<Uri> {
+    override suspend fun download(url: String, allowLargeFile: Boolean): Result<Uri> {
         var lastFailure: RemotePdfException? = null
 
         repeat(MAX_ATTEMPTS) { attemptIndex ->
             val attemptNumber = attemptIndex + 1
             val result = try {
-                downloadManager.download(url)
+                downloadManager.download(url, allowLargeFile)
             } catch (throwable: Throwable) {
                 when (throwable) {
                     is CancellationException -> throw throwable
@@ -80,6 +80,8 @@ class S3RemotePdfDownloader @Inject constructor(
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> false
             RemotePdfException.Reason.CORRUPTED -> false
             RemotePdfException.Reason.CIRCUIT_OPEN -> false
+            RemotePdfException.Reason.UNSAFE -> false
+            RemotePdfException.Reason.FILE_TOO_LARGE -> false
         }
     }
 
