@@ -1001,6 +1001,15 @@ jobs:
 
           print("Logcat is free from ANR/crash signatures")
           PY
+      - name: Stage post-test logcat snippet
+        if: always()
+        run: |
+          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
+          if [ -f logcat-after-tests.txt ]; then
+            cp logcat-after-tests.txt "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/logcat-after-tests.txt"
+          else
+            echo "No post-test logcat snippet captured" >&2
+          fi
       - name: Run macrobenchmark regression suite
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
@@ -1224,6 +1233,8 @@ jobs:
           HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
           HARNESS_LOG="$base_dir/screenshot-harness.log"
           HARNESS_LOGCAT="$base_dir/screenshot-harness-logcat.log"
+          PERFORMANCE_DIR="${ARTIFACTS_DIR}/performance/api${{ matrix.api }}/${{ matrix.device_label }}"
+          METRICS_FILE_NAME="performance_metrics.csv"
 
           HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
           APP_RUN_AS_PACKAGE="${PACKAGE_NAME}"
@@ -1279,12 +1290,55 @@ jobs:
               fi
             done <<< "$listing"
           }
+          collect_performance_metrics() {
+            local package="$1"
+            local label="$2"
+
+            if [ -z "$package" ]; then
+              return
+            fi
+
+            if ! adb shell run-as "$package" sh -c "exit 0" >/dev/null 2>&1; then
+              echo "run-as unavailable for $package; skipping performance metrics collection" >&2
+              return
+            fi
+
+            local remote_files
+            if ! remote_files=$(adb shell run-as "$package" sh -c "find . -maxdepth 5 -type f -name '$METRICS_FILE_NAME' 2>/dev/null" | tr -d '\r'); then
+              echo "Failed to query performance metrics paths for $package" >&2
+              return
+            fi
+
+            remote_files=$(printf '%s\n' "$remote_files" | awk 'NF')
+            if [ -z "$remote_files" ]; then
+              echo "No performance metrics located for $package" >&2
+              return
+            fi
+
+            mkdir -p "$PERFORMANCE_DIR"
+            while IFS= read -r remote_path; do
+              remote_path=${remote_path#./}
+              if [ -z "$remote_path" ]; then
+                continue
+              fi
+              local sanitized="${remote_path//\//_}"
+              local dest="$PERFORMANCE_DIR/${label}-${sanitized}"
+              if adb shell run-as "$package" sh -c "cat '$remote_path'" > "$dest"; then
+                echo "Exported performance metrics from $package:$remote_path to $dest" >&2
+              else
+                echo "Failed to export performance metrics from $package:$remote_path" >&2
+                rm -f "$dest"
+              fi
+            done <<< "$remote_files"
+          }
           finish_harness() {
             if [ -n "${harness_pid:-}" ] && kill -0 "$harness_pid" >/dev/null 2>&1; then
               echo "Stopping screenshot harness instrumentation" >&2
               kill "$harness_pid" >/dev/null 2>&1 || true
               wait "$harness_pid" >/dev/null 2>&1 || true
             fi
+            collect_performance_metrics "$HARNESS_RUN_AS_PACKAGE" "harness"
+            collect_performance_metrics "$APP_RUN_AS_PACKAGE" "app"
             cleanup_flags
           }
           trap finish_harness EXIT
