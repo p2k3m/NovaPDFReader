@@ -1,4 +1,7 @@
+import pathlib
+import tempfile
 import unittest
+import zipfile
 
 from tools import check_logcat_for_crashes
 
@@ -26,6 +29,25 @@ class CrashSignatureTests(unittest.TestCase):
         self.assertIn(
             "AndroidRuntime reported a fatal exception while instrumentation tests were running",
             issues,
+        )
+
+    def test_sigsegv_detected_in_bugreport_archive(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_path = pathlib.Path(tmpdir) / "bugreport.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(
+                    "FS/data/anr/traces.txt",
+                    "Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0\n",
+                )
+
+            issues = check_logcat_for_crashes._scan_logs_for_issues(
+                [archive_path],
+                self.signatures,
+            )
+
+        self.assertTrue(
+            any("SIGSEGV" in issue for issue in issues),
+            msg=f"Expected SIGSEGV detection in {issues}",
         )
 
 

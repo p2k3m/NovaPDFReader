@@ -140,15 +140,16 @@ without being skipped so regressions cannot silently avoid the heavy document co
 reproduce the checks locally, run `./gradlew connectedAndroidTest` on an emulator or device
 and inspect `adb logcat` for `ANR in com.novapdf.reader` or fatal exception entries.
 The helper script `tools/check_logcat_for_crashes.py` mirrors the CI check and can be
-run locally with a captured logcat dump to confirm that no ANR or crash signatures were
-recorded:
+run locally with captured logcat or bugreport dumps to confirm that no ANR or crash
+signatures were recorded:
 
 ```bash
 adb logcat -d > logcat-after-tests.txt
 tools/check_logcat_for_crashes.py
 ```
 
-Pass a different log path or package name if needed:
+Pass different log or bugreport paths (compressed archives are supported) or a
+custom package name if needed:
 
 ```bash
 tools/check_logcat_for_crashes.py path/to/log.txt --package com.example.app
