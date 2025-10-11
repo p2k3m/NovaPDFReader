@@ -11,7 +11,9 @@ class NovaPdfInitializer : Initializer<Unit> {
                 "NovaPdfInitializer requires NovaPdfApp as the application context"
             )
 
-        application.beginStartupInitialization()
+        FirstDrawListener.register(application) {
+            application.beginStartupInitialization()
+        }
     }
 
     override fun dependencies(): List<Class<out Initializer<*>>> = emptyList()
