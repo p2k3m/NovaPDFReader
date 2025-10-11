@@ -28,6 +28,8 @@ import com.novapdf.reader.domain.usecase.RenderPageRequest
 import com.novapdf.reader.domain.usecase.RenderTileRequest
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.BitmapMemoryStats
+import com.novapdf.reader.model.DomainErrorCode
+import com.novapdf.reader.model.DomainException
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
@@ -586,15 +588,11 @@ open class PdfViewerViewModel @Inject constructor(
             _uiState.value.documentId?.let { put("documentId", it) }
         }
         crashReportingUseCase.recordNonFatal(throwable, metadata)
-        val message = when (throwable) {
-            is PdfOpenException -> when (throwable.reason) {
-                PdfOpenException.Reason.CORRUPTED -> app.getString(R.string.error_pdf_corrupted)
-                PdfOpenException.Reason.UNSUPPORTED -> app.getString(R.string.error_pdf_unsupported)
-                PdfOpenException.Reason.ACCESS_DENIED -> app.getString(R.string.error_pdf_permission)
-            }
-            else -> app.getString(R.string.error_document_open_generic)
-        }
-        showError(message)
+        val messageRes = resolveErrorMessageRes(
+            throwable = throwable,
+            pdfFallback = R.string.error_document_open_generic,
+        )
+        showError(app.getString(messageRes))
     }
 
     fun reportRemoteOpenFailure(throwable: Throwable, sourceUrl: String? = null) {
@@ -610,13 +608,10 @@ open class PdfViewerViewModel @Inject constructor(
                 }
                 crashReportingUseCase.recordNonFatal(throwable, metadata)
             }
-            val messageRes = when (throwable) {
-                is RemotePdfException -> when (throwable.reason) {
-                    RemotePdfException.Reason.CORRUPTED -> R.string.error_pdf_corrupted
-                    RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
-                }
-                else -> R.string.error_remote_open_failed
-            }
+            val messageRes = resolveErrorMessageRes(
+                throwable = throwable,
+                pdfFallback = R.string.error_remote_open_failed,
+            )
             showError(app.getString(messageRes))
         }
     }
@@ -910,6 +905,54 @@ open class PdfViewerViewModel @Inject constructor(
         if (pageTooLargeNotified.compareAndSet(false, true)) {
             enqueueMessage(R.string.error_page_too_large)
         }
+    }
+
+    @StringRes
+    private fun resolveErrorMessageRes(
+        throwable: Throwable,
+        @StringRes pdfFallback: Int,
+    ): Int {
+        val pdfOpen = throwable.findCause<PdfOpenException>()
+        if (pdfOpen != null) {
+            return when (pdfOpen.reason) {
+                PdfOpenException.Reason.CORRUPTED -> R.string.error_pdf_corrupted
+                PdfOpenException.Reason.UNSUPPORTED -> R.string.error_pdf_unsupported
+                PdfOpenException.Reason.ACCESS_DENIED -> R.string.error_pdf_permission
+            }
+        }
+
+        val remote = throwable.findCause<RemotePdfException>()
+        if (remote != null) {
+            return when (remote.reason) {
+                RemotePdfException.Reason.CORRUPTED -> R.string.error_pdf_corrupted
+                RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
+            }
+        }
+
+        val domainError = throwable.findCause<DomainException>()?.code
+        if (domainError != null) {
+            return messageForDomainError(domainError)
+        }
+
+        return pdfFallback
+    }
+
+    @StringRes
+    private fun messageForDomainError(code: DomainErrorCode): Int {
+        return when (code) {
+            DomainErrorCode.IO_TIMEOUT -> R.string.error_document_io_issue
+            DomainErrorCode.PDF_MALFORMED -> R.string.error_pdf_corrupted
+            DomainErrorCode.RENDER_OOM -> R.string.error_document_render_limit
+        }
+    }
+
+    private inline fun <reified T : Throwable> Throwable.findCause(): T? {
+        var current: Throwable? = this
+        while (current != null) {
+            if (current is T) return current
+            current = current.cause
+        }
+        return null
     }
 
     fun search(query: String) {

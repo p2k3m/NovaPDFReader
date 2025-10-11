@@ -50,7 +50,7 @@
     <string name="search_indexing_phase_ocr">Refining with OCR…</string>
     <string name="search_indexing_phase_writing">Finalizing index…</string>
     <string name="legacy_select_document">Open a PDF to start reading.</string>
-    <string name="legacy_error_loading">Something went wrong while opening the PDF.</string>
+    <string name="legacy_error_loading">We couldn\'t open the PDF. Check your connection or file permissions and try again.</string>
     <string name="legacy_retry">Try again</string>
     <string name="legacy_pdf_page">Page %1$d</string>
     <string name="reader_page_content_description">Page %1$d of %2$d</string>
@@ -107,6 +107,8 @@
     <string name="error_pdf_corrupted">The PDF appears to be corrupted and can\'t be opened.</string>
     <string name="error_pdf_unsupported">This file isn\'t a supported PDF document. Make sure you\'re opening a PDF file or convert it to PDF and try again.</string>
     <string name="error_pdf_permission">NovaPDF Reader doesn\'t have permission to read this file.</string>
+    <string name="error_document_io_issue">We couldn\'t access the document. Check your connection or file permissions and try again.</string>
+    <string name="error_document_render_limit">NovaPDF Reader ran out of memory while loading this PDF. Close other apps or restart the device, then try again.</string>
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_page_too_large">This page is too large to render at full resolution. Zoom reset to fit the screen.</string>
