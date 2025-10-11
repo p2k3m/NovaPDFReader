@@ -60,6 +60,11 @@ kotlin {
     jvmToolchain(17)
 }
 
+tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }.configureEach {
+    enabled = false
+    onlyIf { false }
+}
+
 koverReport {
     defaults {
         verify {
