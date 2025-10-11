@@ -282,29 +282,32 @@ open class PdfViewerViewModel @Inject constructor(
             dynamicColorEnabled = supportsDynamicColor
         )
         viewModelScope.launch {
-            combine(
-                combine(
-                    adaptiveFlowUseCase.readingSpeed,
-                    adaptiveFlowUseCase.swipeSensitivity,
-                    adaptiveFlowUseCase.frameIntervalMillis,
-                    documentUseCase.session,
-                    documentUseCase.outline,
-                    documentUseCase.renderProgress,
-                ) { speed, sensitivity, frameInterval, session, outline, renderProgress ->
-                    DocumentContext(
-                        speed = speed,
-                        sensitivity = sensitivity,
-                        frameIntervalMillis = frameInterval,
-                        isUiUnderLoad = false,
-                        session = session,
-                        outline = outline,
-                        renderProgress = renderProgress,
-                    )
-                },
-                adaptiveFlowUseCase.uiUnderLoad
-            ) { context, uiUnderLoad ->
+            val contextFlow = combine(
+                adaptiveFlowUseCase.readingSpeed,
+                adaptiveFlowUseCase.swipeSensitivity,
+            ) { speed, sensitivity ->
+                speed to sensitivity
+            }.combine(adaptiveFlowUseCase.frameIntervalMillis) { (speed, sensitivity), frameInterval ->
+                DocumentContext(
+                    speed = speed,
+                    sensitivity = sensitivity,
+                    frameIntervalMillis = frameInterval,
+                    isUiUnderLoad = false,
+                    session = null,
+                    outline = emptyList(),
+                    renderProgress = PdfRenderProgress.Idle,
+                )
+            }.combine(documentUseCase.session) { context, session ->
+                context.copy(session = session)
+            }.combine(documentUseCase.outline) { context, outline ->
+                context.copy(outline = outline)
+            }.combine(documentUseCase.renderProgress) { context, renderProgress ->
+                context.copy(renderProgress = renderProgress)
+            }.combine(adaptiveFlowUseCase.uiUnderLoad) { context, uiUnderLoad ->
                 context.copy(isUiUnderLoad = uiUnderLoad)
-            }.combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
+            }
+
+            contextFlow.combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
                 context to bitmapMemory
             }.collect { (context, bitmapMemory) ->
                 val session = context.session
