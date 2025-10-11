@@ -39,6 +39,12 @@ internal object CacheFileNames {
         label = "screenshot done flag",
     )
 
+    val PERFORMANCE_METRICS_FILE: String = sanitizeCacheFileName(
+        raw = "performance_metrics.csv",
+        fallback = "performance_metrics.csv",
+        label = "performance metrics file",
+    )
+
     val SAMPLE_PDF_CACHE: String = sanitizeCacheFileName(
         raw = "sample.pdf",
         fallback = "sample.pdf",
