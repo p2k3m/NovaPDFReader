@@ -6,7 +6,7 @@
         tools:replace="android:debuggable" />
 
     <instrumentation
-        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:name="dagger.hilt.android.testing.HiltTestRunner"
         android:targetPackage="${novapdfAppId}"
         android:targetProcesses="${novapdfAppId}"
         android:functionalTest="false"
