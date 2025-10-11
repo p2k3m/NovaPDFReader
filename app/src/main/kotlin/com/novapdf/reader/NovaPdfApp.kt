@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.novapdf.reader.anr.installDebugAnrDetector
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
@@ -98,6 +99,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         super.onCreate()
         NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
         if (BuildConfig.DEBUG) {
+            installDebugAnrDetector()
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
                     .detectDiskReads()
