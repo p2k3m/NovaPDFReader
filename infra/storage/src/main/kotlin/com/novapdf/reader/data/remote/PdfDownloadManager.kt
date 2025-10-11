@@ -5,30 +5,22 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.core.content.FileProvider
 import com.novapdf.reader.cache.PdfCacheRoot
-import coil3.ImageLoader
-import coil3.request.ErrorResult
-import coil3.request.ImageRequest
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import java.io.File
 import java.io.IOException
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PdfDownloadManager(
     context: Context,
+    private val storageClient: StorageClient,
     private val authority: String = "${context.packageName}.fileprovider",
 ) {
     private val appContext = context.applicationContext
     private val downloadDirectory = File(PdfCacheRoot.documents(appContext), "remote").apply { mkdirs() }
-    private val imageLoader: ImageLoader = ImageLoader.Builder(appContext)
-        .components {
-            add(PdfDownloadDecoder.Factory())
-        }
-        .build()
     private val pdfiumCore = PdfiumCore(appContext)
 
     init {
@@ -37,53 +29,33 @@ class PdfDownloadManager(
 
     suspend fun download(url: String): Result<Uri> = withContext(Dispatchers.IO) {
         val destination = File(downloadDirectory, buildFileName())
-        val deferred = CompletableDeferred<File>()
-        val payload = PdfDownloadDecoder.Payload(
-            destination = destination,
-            onDownloaded = { file ->
-                if (!deferred.isCompleted) {
-                    deferred.complete(file)
-                }
-            },
-            onDownloadFailed = { error ->
-                if (!deferred.isCompleted) {
-                    deferred.completeExceptionally(error.asNetworkFailure())
-                }
-            }
-        )
-        val request = ImageRequest.Builder(appContext)
-            .data(url)
-            .apply {
-                extras.set(PdfDownloadDecoder.PAYLOAD_KEY, payload)
-            }
-            .listener(
-                onError = { _: ImageRequest, result: ErrorResult ->
-                    if (!deferred.isCompleted) {
-                        deferred.completeExceptionally(result.throwable.asNetworkFailure())
-                    }
-                }
+        val parsedUri = try {
+            Uri.parse(url)
+        } catch (_: Throwable) {
+            null
+        }
+        if (parsedUri == null || parsedUri.scheme.isNullOrBlank()) {
+            destination.delete()
+            return@withContext Result.failure(
+                RemotePdfException(
+                    RemotePdfException.Reason.NETWORK,
+                    IllegalArgumentException("Invalid remote URI: $url"),
+                )
             )
-            .build()
+        }
 
-        val executeResult = imageLoader.execute(request)
         val outcome = try {
-            val file = deferred.await()
-            validateDownloadedPdf(file)
-            val uri = FileProvider.getUriForFile(appContext, authority, file)
+            storageClient.copyTo(parsedUri, destination)
+            validateDownloadedPdf(destination)
+            val uri = FileProvider.getUriForFile(appContext, authority, destination)
             Result.success(uri)
         } catch (error: Throwable) {
             destination.delete()
             if (error is CancellationException) {
                 throw error
             }
-            val failure = if (error is RemotePdfException) error else error.asNetworkFailure()
-            Result.failure(failure)
+            Result.failure(error.asNetworkFailure())
         }
-
-        if (executeResult is ErrorResult) {
-            destination.delete()
-        }
-
         return@withContext outcome
     }
 
@@ -129,10 +101,10 @@ class PdfDownloadManager(
     }
 
     private fun Throwable.asNetworkFailure(): RemotePdfException {
-        return if (this is RemotePdfException) {
-            this
-        } else {
-            RemotePdfException(RemotePdfException.Reason.NETWORK, this)
+        return when (this) {
+            is RemotePdfException -> this
+            is UnsupportedStorageUriException -> RemotePdfException(RemotePdfException.Reason.NETWORK, this)
+            else -> RemotePdfException(RemotePdfException.Reason.NETWORK, this)
         }
     }
 }

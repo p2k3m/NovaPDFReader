@@ -7,6 +7,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
+import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import dagger.Module
@@ -33,10 +34,12 @@ object RepositoryModule {
         @ApplicationContext context: Context,
         crashReporter: CrashReporter,
         dispatchers: CoroutineDispatchers,
+        storageClient: StorageClient,
     ): PdfDocumentRepository = PdfDocumentRepository(
         context,
         ioDispatcher = dispatchers.io,
         crashReporter = crashReporter,
+        storageClient = storageClient,
     )
 
     @Provides

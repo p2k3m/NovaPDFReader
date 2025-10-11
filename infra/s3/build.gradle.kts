@@ -29,12 +29,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":core:cache"))
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.coil.android)
-    implementation(libs.coil.network.okhttp)
-    implementation(libs.pdfium.android)
+    api(project(":infra:storage"))
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.okhttp)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 }

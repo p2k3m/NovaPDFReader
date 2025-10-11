@@ -25,6 +25,7 @@ import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
 import com.novapdf.reader.cache.PdfCacheRoot
 import com.novapdf.reader.logging.LogContext
+import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.field
@@ -154,7 +155,8 @@ private data class PageBitmapKey(
 class PdfDocumentRepository(
     private val context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val crashReporter: CrashReporter? = null
+    private val crashReporter: CrashReporter? = null,
+    private val storageClient: StorageClient? = null,
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
@@ -384,8 +386,7 @@ class PdfDocumentRepository(
                 cachedRemoteFile = null
                 cancellationSignal.throwIfCanceled()
                 signalPipelineProgress()
-                var remoteCacheFile: File? = null
-                remoteCacheFile = try {
+                val remoteCacheFile = try {
                     cacheRemoteUriIfNeeded(uri, cancellationSignal).also { signalPipelineProgress() }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -1390,7 +1391,7 @@ class PdfDocumentRepository(
         }
     }
 
-    private fun openRemoteInputStream(uri: Uri): InputStream {
+    private suspend fun openRemoteInputStream(uri: Uri): InputStream {
         val scheme = uri.scheme?.lowercase(Locale.US)
         return when (scheme) {
             "http", "https" -> {
@@ -1413,8 +1414,8 @@ class PdfDocumentRepository(
                 }
             }
 
-            "s3" -> contentResolver.openInputStream(uri)
-                ?: throw IOException("Unable to open remote input stream for $uri")
+            "s3" -> storageClient?.openInputStream(uri)
+                ?: throw IOException("Unable to resolve storage client for $uri")
 
             else -> throw IOException("Unsupported remote URI scheme: $scheme")
         }
