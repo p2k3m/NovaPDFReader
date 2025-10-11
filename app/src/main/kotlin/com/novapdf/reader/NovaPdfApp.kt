@@ -169,12 +169,12 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         val fields = buildList {
             add(field("stage", stage))
             metadata.forEach { (key, value) -> add(field(key, value)) }
-        }
+        }.toTypedArray()
         NovaLog.w(
             tag = TAG,
             message = "Deferred initialisation failed for $stage",
             throwable = error,
-            *fields.toTypedArray(),
+            fields = fields,
         )
         val crashMetadata = HashMap<String, String>(metadata.size + 1)
         crashMetadata["stage"] = stage
@@ -201,13 +201,13 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         val logFields = buildList {
             add(field("thread", threadName))
             coroutineName?.let { add(field("coroutine", it)) }
-        }
+        }.toTypedArray()
         NovaLog.e(
             tag = TAG,
             message = "Unhandled coroutine exception on thread $threadName" +
                 (coroutineName?.let { " (coroutine=$it)" } ?: ""),
             throwable = error,
-            *logFields.toTypedArray(),
+            fields = logFields,
         )
         logDeferredInitializationFailure("uncaught", error, metadata)
     }

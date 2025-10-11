@@ -285,11 +285,15 @@ class PdfDocumentRepository(
                     pageIndex = pageIndex,
                     sizeBytes = sizeBytes,
                 )
-                NovaLog.d(TAG, "Begin $operation", *baseContext.fields(field("event", "begin")))
                 NovaLog.d(
-                    TAG,
-                    "End $operation",
-                    *baseContext.copy(durationMs = elapsedMs).fields(
+                    tag = TAG,
+                    message = "Begin $operation",
+                    fields = baseContext.fields(field("event", "begin")),
+                )
+                NovaLog.d(
+                    tag = TAG,
+                    message = "End $operation",
+                    fields = baseContext.copy(durationMs = elapsedMs).fields(
                         field("event", "end"),
                         field("status", status),
                     ),
@@ -371,7 +375,7 @@ class PdfDocumentRepository(
                     TAG,
                     "Unable to cache remote PDF from $uri",
                     throwable = error,
-                    *logFields(
+                    fields = logFields(
                         operation = "cacheRemote",
                         documentId = uri.toString(),
                         pageIndex = null,
@@ -622,7 +626,7 @@ class PdfDocumentRepository(
                         TAG,
                         "Failed to render tile for page ${request.pageIndex}",
                         throwable = throwable,
-                        *logFields(
+                        fields = logFields(
                             operation = "renderTile",
                             documentId = activeSession.documentId,
                             pageIndex = request.pageIndex,
@@ -969,7 +973,7 @@ class PdfDocumentRepository(
                         TAG,
                         "Failed to obtain page size for index $pageIndex",
                         throwable = throwable,
-                        *logFields(
+                        fields = logFields(
                             operation = "getPageSize",
                             documentId = session.documentId,
                             pageIndex = pageIndex,
@@ -1087,7 +1091,7 @@ class PdfDocumentRepository(
                         TAG,
                         "Failed to render page $pageIndex",
                         throwable = throwable,
-                        *logFields(
+                        fields = logFields(
                             operation = "renderPage",
                             documentId = session.documentId,
                             pageIndex = pageIndex,

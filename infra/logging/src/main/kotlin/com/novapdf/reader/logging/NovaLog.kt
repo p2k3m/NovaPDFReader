@@ -28,6 +28,14 @@ object NovaLog {
         log(LogLevel.DEBUG, tag, throwable, message, fields)
     }
 
+    fun d(tag: String, message: String, fields: Array<out LogField>) {
+        log(LogLevel.DEBUG, tag, null, message, fields)
+    }
+
+    fun d(tag: String, message: String, throwable: Throwable, fields: Array<out LogField>) {
+        log(LogLevel.DEBUG, tag, throwable, message, fields)
+    }
+
     fun i(tag: String, message: String, vararg fields: LogField) {
         log(LogLevel.INFO, tag, null, message, fields)
     }
@@ -36,11 +44,35 @@ object NovaLog {
         log(LogLevel.INFO, tag, throwable, message, fields)
     }
 
+    fun i(tag: String, message: String, fields: Array<out LogField>) {
+        log(LogLevel.INFO, tag, null, message, fields)
+    }
+
+    fun i(tag: String, message: String, throwable: Throwable, fields: Array<out LogField>) {
+        log(LogLevel.INFO, tag, throwable, message, fields)
+    }
+
     fun w(tag: String, message: String, throwable: Throwable? = null, vararg fields: LogField) {
         log(LogLevel.WARN, tag, throwable, message, fields)
     }
 
+    fun w(tag: String, message: String, fields: Array<out LogField>) {
+        log(LogLevel.WARN, tag, null, message, fields)
+    }
+
+    fun w(tag: String, message: String, throwable: Throwable?, fields: Array<out LogField>) {
+        log(LogLevel.WARN, tag, throwable, message, fields)
+    }
+
     fun e(tag: String, message: String, throwable: Throwable? = null, vararg fields: LogField) {
+        log(LogLevel.ERROR, tag, throwable, message, fields)
+    }
+
+    fun e(tag: String, message: String, fields: Array<out LogField>) {
+        log(LogLevel.ERROR, tag, null, message, fields)
+    }
+
+    fun e(tag: String, message: String, throwable: Throwable?, fields: Array<out LogField>) {
         log(LogLevel.ERROR, tag, throwable, message, fields)
     }
 
