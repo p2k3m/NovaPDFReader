@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -52,9 +53,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -113,6 +111,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -343,7 +342,7 @@ fun PdfViewerScreen(
                 )
             )
         }
-        val pagerState = rememberPagerState(pageCount = { onboardingPages.size })
+        var onboardingPageIndex by rememberSaveable { mutableIntStateOf(0) }
         val totalSearchResults by remember(state.searchResults) {
             derivedStateOf { state.searchResults.sumOf { it.matches.size } }
         }
@@ -372,6 +371,7 @@ fun PdfViewerScreen(
         }
         val completeOnboarding = {
             onboardingPreferences.edit().putBoolean(ONBOARDING_COMPLETE_KEY, true).apply()
+            onboardingPageIndex = 0
             showOnboarding = false
         }
 
@@ -514,7 +514,10 @@ fun PdfViewerScreen(
         if (showOnboarding) {
             OnboardingOverlay(
                 pages = onboardingPages,
-                pagerState = pagerState,
+                currentPageIndex = onboardingPageIndex,
+                onPageChange = { index ->
+                    onboardingPageIndex = index.coerceIn(0, onboardingPages.lastIndex)
+                },
                 onSkip = completeOnboarding,
                 onFinish = completeOnboarding
             )
@@ -1782,11 +1785,11 @@ private fun MemoryStatRow(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun OnboardingOverlay(
     pages: List<OnboardingPage>,
-    pagerState: PagerState,
+    currentPageIndex: Int,
+    onPageChange: (Int) -> Unit,
     onSkip: () -> Unit,
     onFinish: () -> Unit,
     modifier: Modifier = Modifier
@@ -1809,7 +1812,6 @@ private fun OnboardingOverlay(
                     paneTitle = dialogTitle
                 }
         ) {
-            val coroutineScope = rememberCoroutineScope()
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1829,9 +1831,9 @@ private fun OnboardingOverlay(
                     }
                 }
 
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxWidth()
+                Crossfade(
+                    targetState = currentPageIndex,
+                    label = "OnboardingPage"
                 ) { pageIndex ->
                     val page = pages[pageIndex]
                     Column(
@@ -1877,7 +1879,7 @@ private fun OnboardingOverlay(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         repeat(pages.size) { index ->
-                            val isSelected = pagerState.currentPage == index
+                            val isSelected = currentPageIndex == index
                             Box(
                                 modifier = Modifier
                                     .size(if (isSelected) 12.dp else 8.dp)
@@ -1886,6 +1888,7 @@ private fun OnboardingOverlay(
                                         if (isSelected) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.outline,
                                     )
+                                    .clickable(onClick = { onPageChange(index) })
                             )
                             if (index != pages.lastIndex) {
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -1893,7 +1896,7 @@ private fun OnboardingOverlay(
                         }
                     }
 
-                    val isLastPage = pagerState.currentPage == pages.lastIndex
+                    val isLastPage = currentPageIndex == pages.lastIndex
                     val buttonText = if (isLastPage) {
                         stringResource(id = R.string.onboarding_get_started)
                     } else {
@@ -1904,9 +1907,7 @@ private fun OnboardingOverlay(
                             if (isLastPage) {
                                 onFinish()
                             } else {
-                                coroutineScope.launch {
-                                    pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                                }
+                                onPageChange(currentPageIndex + 1)
                             }
                         }
                     ) {
