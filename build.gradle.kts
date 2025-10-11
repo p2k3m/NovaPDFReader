@@ -151,7 +151,7 @@ fun queryDeviceApiLevel(serial: String): Int? {
             .redirectErrorStream(true)
             .start()
 
-        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+        if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroy()
             process.destroyForcibly()
             null
@@ -172,7 +172,7 @@ fun queryDeviceApiLevel(serial: String): Int? {
 fun runAdbCommand(
     serial: String,
     logger: Logger,
-    timeoutSeconds: Long = 30,
+    timeoutSeconds: Long = 45,
     vararg arguments: String
 ): String? {
     val executable = adbExecutable
@@ -294,7 +294,7 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
 }
 
 fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
-    val waitResult = runAdbCommand(serial, logger, timeoutSeconds = 120, "wait-for-device")
+    val waitResult = runAdbCommand(serial, logger, timeoutSeconds = 180, "wait-for-device")
     if (waitResult == null) {
         logger.warn(
             "Android device $serial did not respond to wait-for-device before APK installation."
@@ -302,12 +302,12 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
         return false
     }
 
-    val attempts = 10
+    val attempts = 20
     repeat(attempts) { attempt ->
         val bootCompleted = runAdbCommand(
             serial,
             logger,
-            timeoutSeconds = 15,
+            timeoutSeconds = 30,
             "shell",
             "getprop",
             "sys.boot_completed"
@@ -315,7 +315,7 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
         val devBootCompleted = runAdbCommand(
             serial,
             logger,
-            timeoutSeconds = 15,
+            timeoutSeconds = 30,
             "shell",
             "getprop",
             "dev.bootcomplete"
@@ -330,7 +330,7 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
             logger.info(
                 "Android device $serial has not reported sys.boot_completed=1 (attempt ${attempt + 1} of $attempts). Retrying before APK installation."
             )
-            Thread.sleep(5_000)
+            Thread.sleep(10_000)
         }
     }
 
@@ -460,7 +460,7 @@ subprojects {
     fun configureAdbTimeout() {
         val extension = extensions.findByName("android")
         if (extension is BaseExtension) {
-            val desiredTimeoutMs = 300_000
+            val desiredTimeoutMs = 600_000
             if (extension.adbOptions.timeOutInMs < desiredTimeoutMs) {
                 extension.adbOptions.timeOutInMs = desiredTimeoutMs
             }
