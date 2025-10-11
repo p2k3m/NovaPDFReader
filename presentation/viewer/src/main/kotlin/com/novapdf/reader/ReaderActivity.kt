@@ -91,6 +91,7 @@ open class ReaderActivity : ComponentActivity() {
                         snackbarHost = snackbarHost,
                         onOpenLocalDocument = { openDocumentLauncher.launch("application/pdf") },
                         onOpenCloudDocument = { launchCloudDocumentPicker() },
+                        onOpenLastDocument = { viewModel.openLastDocument() },
                         onOpenRemoteDocument = { source -> openRemoteDocument(source) },
                         onDismissError = { viewModel.dismissError() }
                     )

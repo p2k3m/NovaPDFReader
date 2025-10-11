@@ -85,6 +85,10 @@
     <string name="empty_state_supporting">Import a PDF or revisit your saved library to keep your learning streak alive.</string>
     <string name="home_welcome_title">Welcome to your PDF library</string>
     <string name="home_welcome_body">Organize your documents and jump back into recent reads with a single tap.</string>
+    <string name="home_continue_card_title">Resume reading</string>
+    <string name="home_continue_card_body">Jump back into %1$s right where you left off.</string>
+    <string name="home_continue_card_button">Continue</string>
+    <string name="home_continue_card_unknown">your previous document</string>
     <string name="annotations_title">Annotations at a glance</string>
     <string name="annotations_summary">You have %1$d in-document notes ready to review.</string>
     <string name="annotations_empty">Add highlights or drawings while reading to see them collected here.</string>

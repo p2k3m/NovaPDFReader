@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.util.Size
 import android.util.Patterns
@@ -128,6 +129,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.focus.FocusRequester
@@ -216,6 +218,7 @@ fun PdfViewerRoute(
     snackbarHost: SnackbarHostState,
     onOpenLocalDocument: () -> Unit,
     onOpenCloudDocument: () -> Unit,
+    onOpenLastDocument: () -> Unit,
     onOpenRemoteDocument: (DocumentSource) -> Unit,
     onDismissError: () -> Unit
 ) {
@@ -232,6 +235,7 @@ fun PdfViewerRoute(
             messageFlow = viewModel.messageEvents,
             onOpenLocalDocument = onOpenLocalDocument,
             onOpenCloudDocument = onOpenCloudDocument,
+            onOpenLastDocument = onOpenLastDocument,
             onOpenRemoteDocument = onOpenRemoteDocument,
             onDismissError = onDismissError,
             onConfirmLargeDownload = { viewModel.confirmLargeRemoteDownload() },
@@ -267,6 +271,7 @@ fun PdfViewerScreen(
     messageFlow: Flow<UiMessage>,
     onOpenLocalDocument: () -> Unit,
     onOpenCloudDocument: () -> Unit,
+    onOpenLastDocument: () -> Unit,
     onOpenRemoteDocument: (DocumentSource) -> Unit,
     onDismissError: () -> Unit,
     onConfirmLargeDownload: () -> Unit,
@@ -480,8 +485,9 @@ fun PdfViewerScreen(
                         onSearch(query)
                     },
                     totalSearchResults = totalSearchResults,
-                    onOpenDocument = requestDocument,
-                    onPlayAdaptiveSummary = playAdaptiveSummary,
+            onOpenDocument = requestDocument,
+            onOpenLastDocument = onOpenLastDocument,
+            onPlayAdaptiveSummary = playAdaptiveSummary,
                     onOpenAccessibilityOptions = { showAccessibilitySheet = true },
                     focusRequester = searchFocusRequester,
                     requestFocus = requestSearchFocus,
@@ -768,6 +774,7 @@ private fun PdfViewerDestinationContainer(
     onSearchQueryChange: (String) -> Unit,
     totalSearchResults: Int,
     onOpenDocument: () -> Unit,
+    onOpenLastDocument: () -> Unit,
     onPlayAdaptiveSummary: () -> Unit,
     onOpenAccessibilityOptions: () -> Unit,
     focusRequester: FocusRequester,
@@ -796,6 +803,9 @@ private fun PdfViewerDestinationContainer(
         MainDestination.Home -> {
             HomeContent(
                 onOpenDocument = onOpenDocument,
+                onOpenLastDocument = onOpenLastDocument,
+                preferencesReady = state.preferencesReady,
+                lastDocumentUri = state.lastOpenedDocumentUri,
                 modifier = modifier
             )
         }
@@ -1513,8 +1523,26 @@ private fun AdaptiveFlowStatusRow(
 @Composable
 private fun HomeContent(
     onOpenDocument: () -> Unit,
+    onOpenLastDocument: () -> Unit,
+    preferencesReady: Boolean,
+    lastDocumentUri: String?,
     modifier: Modifier = Modifier
 ) {
+    if (!preferencesReady) {
+        HomeSkeleton(modifier)
+        return
+    }
+
+    val parsedDocumentName = remember(lastDocumentUri) {
+        lastDocumentUri?.let { uriString ->
+            runCatching { Uri.parse(uriString) }
+                .getOrNull()
+                ?.lastPathSegment
+                ?.takeIf { it.isNotBlank() }
+        }
+    }
+    val hasLastDocument = lastDocumentUri != null
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1537,10 +1565,17 @@ private fun HomeContent(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier
-                .padding(bottom = 24.dp)
-                .semantics { contentDescription = bodyText }
+            modifier = Modifier.semantics { contentDescription = bodyText }
         )
+        Spacer(modifier = Modifier.height(24.dp))
+        if (hasLastDocument) {
+            ContinueReadingCard(
+                documentName = parsedDocumentName,
+                onOpenLastDocument = onOpenLastDocument,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+        }
         Button(
             onClick = onOpenDocument,
             modifier = Modifier.testTag(UiAutomatorTags.HOME_OPEN_DOCUMENT_BUTTON)
@@ -1552,6 +1587,92 @@ private fun HomeContent(
             )
         }
     }
+}
+
+@Composable
+private fun HomeSkeleton(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .height(28.dp),
+            shape = MaterialTheme.shapes.small
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(160.dp),
+            shape = MaterialTheme.shapes.large
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .height(48.dp),
+            shape = MaterialTheme.shapes.medium
+        )
+    }
+}
+
+@Composable
+private fun ContinueReadingCard(
+    documentName: String?,
+    onOpenLastDocument: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val title = stringResource(id = R.string.home_continue_card_title)
+    val fallbackName = stringResource(id = R.string.home_continue_card_unknown)
+    val resolvedName = documentName ?: fallbackName
+    val body = stringResource(id = R.string.home_continue_card_body, resolvedName)
+
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 6.dp,
+    ) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            FilledTonalButton(onClick = onOpenLastDocument) {
+                Text(text = stringResource(id = R.string.home_continue_card_button))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkeletonBlock(
+    modifier: Modifier,
+    shape: Shape = MaterialTheme.shapes.medium,
+) {
+    val color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(color)
+    )
 }
 
 @Composable
