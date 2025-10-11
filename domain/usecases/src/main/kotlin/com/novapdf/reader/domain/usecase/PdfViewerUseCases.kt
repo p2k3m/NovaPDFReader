@@ -3,19 +3,24 @@ package com.novapdf.reader.domain.usecase
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.CancellationSignal
 import android.net.Uri
+import android.os.CancellationSignal
 import android.print.PrintDocumentAdapter
 import android.util.Size
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
-import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
+import com.novapdf.reader.data.PdfDocumentRepository
+import com.novapdf.reader.data.PdfOpenException
+import com.novapdf.reader.data.PdfRenderException
 import com.novapdf.reader.download.RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.BitmapMemoryStats
+import com.novapdf.reader.model.DomainErrorCode
+import com.novapdf.reader.model.DomainException
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
@@ -24,6 +29,7 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import java.io.File
+import java.io.InterruptedIOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.coroutineContext
@@ -31,6 +37,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.job
 
 /**
@@ -206,7 +213,7 @@ class DefaultBuildSearchIndexUseCase @Inject constructor(
     override suspend fun invoke(
         request: BuildSearchIndexRequest,
         cancellationSignal: CancellationSignal?,
-    ): Result<BuildSearchIndexResult> = runCatching {
+    ): Result<BuildSearchIndexResult> = runDomainCatching {
         val job = coordinator.prepare(request.session)
         if (job == null) {
             BuildSearchIndexResult(job = null)
@@ -233,7 +240,7 @@ private suspend fun <T> withLinkedCancellation(
     block: suspend (CancellationSignal?) -> T,
 ): Result<T> {
     if (signal == null) {
-        return runCatching { block(null) }
+        return runDomainCatchingSuspend { block(null) }
     }
     if (signal.isCanceled) {
         return Result.failure(CancellationException("Operation cancelled"))
@@ -253,7 +260,11 @@ private suspend fun <T> withLinkedCancellation(
     return try {
         Result.success(block(signal))
     } catch (throwable: Throwable) {
-        Result.failure(throwable)
+        when (throwable) {
+            is TimeoutCancellationException -> Result.failure(throwable.toDomainException())
+            is CancellationException -> throw throwable
+            else -> Result.failure(throwable.toDomainException())
+        }
     } finally {
         detachHandle.dispose()
         signal.setOnCancelListener(null)
@@ -344,7 +355,8 @@ interface RemoteDocumentUseCase {
 class DefaultRemoteDocumentUseCase @Inject constructor(
     private val downloader: RemotePdfDownloader,
 ) : RemoteDocumentUseCase {
-    override suspend fun download(url: String): Result<Uri> = downloader.download(url)
+    override suspend fun download(url: String): Result<Uri> =
+        downloader.download(url).mapDomainFailure()
 }
 
 interface DocumentMaintenanceUseCase {
@@ -380,6 +392,73 @@ class DefaultCrashReportingUseCase @Inject constructor(
 
     override fun logBreadcrumb(message: String) {
         crashReporter.logBreadcrumb(message)
+    }
+}
+
+private suspend fun <T> runDomainCatchingSuspend(block: suspend () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (throwable: Throwable) {
+        when (throwable) {
+            is TimeoutCancellationException -> Result.failure(throwable.toDomainException())
+            is CancellationException -> throw throwable
+            is DomainException -> Result.failure(throwable)
+            else -> Result.failure(throwable.toDomainException())
+        }
+    }
+}
+
+private inline fun <T> runDomainCatching(block: () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (throwable: Throwable) {
+        when (throwable) {
+            is TimeoutCancellationException -> Result.failure(throwable.toDomainException())
+            is CancellationException -> throw throwable
+            is DomainException -> Result.failure(throwable)
+            else -> Result.failure(throwable.toDomainException())
+        }
+    }
+}
+
+private fun <T> Result<T>.mapDomainFailure(): Result<T> {
+    val error = exceptionOrNull() ?: return this
+    if (error is DomainException) return this
+    if (error is CancellationException && error !is TimeoutCancellationException) {
+        return this
+    }
+    return Result.failure(error.toDomainException())
+}
+
+private tailrec fun resolveDomainErrorCode(throwable: Throwable?): DomainErrorCode {
+    throwable ?: return DomainErrorCode.PDF_MALFORMED
+    return when (throwable) {
+        is DomainException -> throwable.code
+        is TimeoutCancellationException -> DomainErrorCode.IO_TIMEOUT
+        is InterruptedIOException -> DomainErrorCode.IO_TIMEOUT
+        is RemotePdfException -> when (throwable.reason) {
+            RemotePdfException.Reason.NETWORK -> DomainErrorCode.IO_TIMEOUT
+            RemotePdfException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED
+        }
+        is PdfOpenException -> when (throwable.reason) {
+            PdfOpenException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED
+            PdfOpenException.Reason.ACCESS_DENIED -> DomainErrorCode.IO_TIMEOUT
+            PdfOpenException.Reason.UNSUPPORTED -> DomainErrorCode.PDF_MALFORMED
+        }
+        is PdfRenderException -> when (throwable.reason) {
+            PdfRenderException.Reason.PAGE_TOO_LARGE -> DomainErrorCode.RENDER_OOM
+            PdfRenderException.Reason.MALFORMED_PAGE -> DomainErrorCode.PDF_MALFORMED
+        }
+        is OutOfMemoryError -> DomainErrorCode.RENDER_OOM
+        else -> resolveDomainErrorCode(throwable.cause)
+    }
+}
+
+private fun Throwable.toDomainException(): DomainException {
+    return if (this is DomainException) {
+        this
+    } else {
+        DomainException(resolveDomainErrorCode(this), this)
     }
 }
 
