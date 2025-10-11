@@ -133,8 +133,7 @@ jobs:
       - name: Validate required secrets
         id: validate_required_secrets
         env:
-          AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_READ_ROLE_ARN_SECRET: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
@@ -149,21 +148,15 @@ jobs:
           missing=false
           firebase_missing=false
 
-          if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ]; then
-            echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
-            echo "Remediation: Create an access key in AWS IAM (Users → Your deployment user → Security credentials → Create access key) with permissions for the target bucket, then add the value as the AWS_ACCESS_KEY_ID repository secret."
-            missing=true
-          fi
-
-          if [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
-            echo "::error::Missing AWS_SECRET_ACCESS_KEY secret required for S3 uploads."
-            echo "Remediation: Copy the secret key generated alongside the IAM access key above and store it as the AWS_SECRET_ACCESS_KEY repository secret. Regenerate the key if it is no longer visible."
+          if [ -z "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
+            echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role."
+            echo "Remediation: Create or identify an IAM role with permissions to read from the target bucket and configure its ARN as the AWS_S3_READ_ROLE_ARN repository secret."
             missing=true
           fi
 
           if [ -z "${S3_BUCKET_NAME_SECRET:-}" ]; then
-            echo "::error::Missing S3_BUCKET_NAME secret required for S3 uploads."
-            echo "Remediation: Provision an S3 bucket (e.g., nova-pdf-artifacts) in the AWS console, ensure the IAM user has s3:PutObject/s3:ListBucket permissions, then add the bucket name as the S3_BUCKET_NAME repository secret."
+            echo "::error::Missing S3_BUCKET_NAME secret required for S3 access."
+            echo "Remediation: Provision an S3 bucket (e.g., nova-pdf-artifacts) in the AWS console, ensure the IAM role grants s3:GetObject and s3:ListBucket permissions, then add the bucket name as the S3_BUCKET_NAME repository secret."
             missing=true
           fi
 
@@ -225,9 +218,7 @@ jobs:
       - name: Mask sensitive environment variables
         if: ${{ steps.validate_required_secrets.outcome == 'success' }}
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_S3_READ_ROLE_ARN: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -240,9 +231,7 @@ jobs:
         run: |
           set +e
           for var in \
-            AWS_ACCESS_KEY_ID \
-            AWS_SECRET_ACCESS_KEY \
-            AWS_SESSION_TOKEN \
+            AWS_S3_READ_ROLE_ARN \
             STRESS_PDF_S3_KEY \
             THOUSAND_PAGE_PDF_S3_KEY \
             ANDROID_KEYSTORE_BASE64 \
@@ -344,21 +333,36 @@ jobs:
           done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-      - name: Configure AWS credentials
+      - name: Assume read-only S3 role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
+          role-session-name: GitHubActionsS3ReadOnly
           aws-region: us-east-1
-      - name: Validate AWS credential scope
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
+          mask-aws-account-id: true
+          inline-session-policy: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadOnlyFixturesBucket",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}",
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*"
+                  ]
+                }
+              ]
+            }
+      - name: Validate AWS role assumption
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
-          aws iam get-user --query 'User.Arn' --output text >/dev/null 2>/dev/null || true
       - name: Run unit tests
         id: unit_tests
         run: |
@@ -493,8 +497,7 @@ jobs:
       - name: Validate required secrets
         id: validate_required_secrets
         env:
-          AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_READ_ROLE_ARN_SECRET: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
@@ -509,18 +512,13 @@ jobs:
           missing=false
           firebase_missing=false
 
-          if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ]; then
-            echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
-            missing=true
-          fi
-
-          if [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
-            echo "::error::Missing AWS_SECRET_ACCESS_KEY secret required for S3 uploads."
+          if [ -z "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
+            echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role."
             missing=true
           fi
 
           if [ -z "${S3_BUCKET_NAME_SECRET:-}" ]; then
-            echo "::error::Missing S3_BUCKET_NAME secret required for S3 uploads."
+            echo "::error::Missing S3_BUCKET_NAME secret required for S3 access."
             missing=true
           fi
 
@@ -577,9 +575,7 @@ jobs:
       - name: Mask sensitive environment variables
         if: ${{ steps.validate_required_secrets.outcome == 'success' }}
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_S3_READ_ROLE_ARN: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -592,9 +588,7 @@ jobs:
         run: |
           set +e
           for var in \
-            AWS_ACCESS_KEY_ID \
-            AWS_SECRET_ACCESS_KEY \
-            AWS_SESSION_TOKEN \
+            AWS_S3_READ_ROLE_ARN \
             STRESS_PDF_S3_KEY \
             THOUSAND_PAGE_PDF_S3_KEY \
             ANDROID_KEYSTORE_BASE64 \
@@ -690,21 +684,36 @@ jobs:
           done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-      - name: Configure AWS credentials
+      - name: Assume read-only S3 role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
+          role-session-name: GitHubActionsS3ReadOnly
           aws-region: us-east-1
-      - name: Validate AWS credential scope
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
+          mask-aws-account-id: true
+          inline-session-policy: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadOnlyFixturesBucket",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}",
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*"
+                  ]
+                }
+              ]
+            }
+      - name: Validate AWS role assumption
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
-          aws iam get-user --query 'User.Arn' --output text >/dev/null 2>/dev/null || true
       - name: Start emulator
         env:
           API_LEVEL: ${{ matrix.api }}
@@ -1163,9 +1172,6 @@ jobs:
         if: env.UNIT_TESTS_PASSED == 'true'
         id: fetch_pdfs
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
@@ -1977,9 +1983,6 @@ jobs:
       - name: Upload build outputs to S3
         if: success()
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
           BUCKET: ${{ secrets.S3_BUCKET_NAME }}
           S3_PREFIX: ci/${{ github.run_id }}/api${{ matrix.api }}/${{ matrix.device_label }}
         run: |
