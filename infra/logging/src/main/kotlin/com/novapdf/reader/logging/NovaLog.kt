@@ -2,6 +2,7 @@ package com.novapdf.reader.logging
 
 import androidx.annotation.VisibleForTesting
 import timber.log.Timber
+import kotlin.jvm.JvmName
 
 /**
  * Lightweight logging facade that routes events through a shared [Timber] tree while allowing
@@ -28,10 +29,12 @@ object NovaLog {
         log(LogLevel.DEBUG, tag, throwable, message, fields)
     }
 
+    @JvmName("debugWithFieldArray")
     fun d(tag: String, message: String, fields: Array<out LogField>) {
         log(LogLevel.DEBUG, tag, null, message, fields)
     }
 
+    @JvmName("debugWithThrowableAndFieldArray")
     fun d(tag: String, message: String, throwable: Throwable, fields: Array<out LogField>) {
         log(LogLevel.DEBUG, tag, throwable, message, fields)
     }
@@ -44,10 +47,12 @@ object NovaLog {
         log(LogLevel.INFO, tag, throwable, message, fields)
     }
 
+    @JvmName("infoWithFieldArray")
     fun i(tag: String, message: String, fields: Array<out LogField>) {
         log(LogLevel.INFO, tag, null, message, fields)
     }
 
+    @JvmName("infoWithThrowableAndFieldArray")
     fun i(tag: String, message: String, throwable: Throwable, fields: Array<out LogField>) {
         log(LogLevel.INFO, tag, throwable, message, fields)
     }
@@ -56,10 +61,12 @@ object NovaLog {
         log(LogLevel.WARN, tag, throwable, message, fields)
     }
 
+    @JvmName("warnWithFieldArray")
     fun w(tag: String, message: String, fields: Array<out LogField>) {
         log(LogLevel.WARN, tag, null, message, fields)
     }
 
+    @JvmName("warnWithThrowableAndFieldArray")
     fun w(tag: String, message: String, throwable: Throwable?, fields: Array<out LogField>) {
         log(LogLevel.WARN, tag, throwable, message, fields)
     }
@@ -68,10 +75,12 @@ object NovaLog {
         log(LogLevel.ERROR, tag, throwable, message, fields)
     }
 
+    @JvmName("errorWithFieldArray")
     fun e(tag: String, message: String, fields: Array<out LogField>) {
         log(LogLevel.ERROR, tag, null, message, fields)
     }
 
+    @JvmName("errorWithThrowableAndFieldArray")
     fun e(tag: String, message: String, throwable: Throwable?, fields: Array<out LogField>) {
         log(LogLevel.ERROR, tag, throwable, message, fields)
     }
