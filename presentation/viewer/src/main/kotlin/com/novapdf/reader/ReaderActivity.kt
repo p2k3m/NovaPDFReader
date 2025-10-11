@@ -28,6 +28,7 @@ import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -90,7 +91,7 @@ open class ReaderActivity : ComponentActivity() {
                         snackbarHost = snackbarHost,
                         onOpenLocalDocument = { openDocumentLauncher.launch("application/pdf") },
                         onOpenCloudDocument = { launchCloudDocumentPicker() },
-                        onOpenRemoteDocument = { url -> openRemoteDocument(url) },
+                        onOpenRemoteDocument = { source -> openRemoteDocument(source) },
                         onDismissError = { viewModel.dismissError() }
                     )
                 }
@@ -125,9 +126,9 @@ open class ReaderActivity : ComponentActivity() {
         cloudDocumentLauncher.launch(intent)
     }
 
-    private fun openRemoteDocument(url: String) {
+    private fun openRemoteDocument(source: DocumentSource) {
         showUserSnackbar(getString(R.string.remote_pdf_download_started))
-        viewModel.openRemoteDocument(url)
+        viewModel.openRemoteDocument(source)
     }
 
     private fun showUserSnackbar(message: String) {

@@ -6,7 +6,9 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
-import com.novapdf.reader.data.remote.PdfDownloadManager
+import android.net.Uri
+import com.novapdf.reader.data.remote.DocumentSourceGateway
+import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
 import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
 import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
@@ -20,12 +22,12 @@ import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
-import com.novapdf.reader.download.S3RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchIndexingState
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
@@ -73,7 +75,6 @@ class PdfViewerViewModelRenderProgressTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
 
         val renderProgress = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
         whenever(pdfRepository.renderProgress).thenReturn(renderProgress)
@@ -100,6 +101,12 @@ class PdfViewerViewModelRenderProgressTest {
         val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)
         val buildIndexUseCase = DefaultBuildSearchIndexUseCase(searchCoordinator)
 
+        val documentSourceGateway = object : DocumentSourceGateway {
+            override suspend fun fetch(source: DocumentSource): Result<Uri> {
+                return Result.failure(RemotePdfException(RemotePdfException.Reason.NETWORK))
+            }
+        }
+
         val useCases = DefaultPdfViewerUseCases(
             document = DefaultPdfDocumentUseCase(pdfRepository),
             openDocument = openDocumentUseCase,
@@ -109,7 +116,7 @@ class PdfViewerViewModelRenderProgressTest {
             bookmarks = DefaultBookmarkUseCase(bookmarkManager),
             search = DefaultDocumentSearchUseCase(searchCoordinator),
             buildSearchIndex = buildIndexUseCase,
-            remoteDocuments = DefaultRemoteDocumentUseCase(S3RemotePdfDownloader(downloadManager)),
+            remoteDocuments = DefaultRemoteDocumentUseCase(documentSourceGateway),
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
             crashReporting = DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)

@@ -10,7 +10,7 @@ import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
-import com.novapdf.reader.data.remote.PdfDownloadManager
+import com.novapdf.reader.data.remote.DocumentSourceGateway
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
 import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
@@ -25,7 +25,6 @@ import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
-import com.novapdf.reader.download.S3RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.PageRenderProfile
@@ -34,6 +33,7 @@ import com.novapdf.reader.model.RectSnapshot
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -94,7 +94,7 @@ class PdfViewerViewModelSearchTest {
         bookmarkManager: BookmarkManager,
         maintenanceScheduler: DocumentMaintenanceScheduler,
         searchCoordinator: DocumentSearchCoordinator,
-        downloadManager: PdfDownloadManager,
+        documentSourceGateway: DocumentSourceGateway,
         crashReporter: CrashReporter = object : CrashReporter {
             override fun install() = Unit
             override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) = Unit
@@ -117,7 +117,7 @@ class PdfViewerViewModelSearchTest {
             bookmarks = DefaultBookmarkUseCase(bookmarkManager),
             search = DefaultDocumentSearchUseCase(searchCoordinator),
             buildSearchIndex = buildIndexUseCase,
-            remoteDocuments = DefaultRemoteDocumentUseCase(S3RemotePdfDownloader(downloadManager)),
+            remoteDocuments = DefaultRemoteDocumentUseCase(documentSourceGateway),
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
             crashReporting = DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager)
@@ -153,7 +153,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -185,7 +185,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         viewModel.search("galaxy")
@@ -204,7 +204,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -237,7 +237,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         viewModel.search("history")
@@ -258,7 +258,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -288,7 +288,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         val uri = Uri.parse("file://doc")
@@ -307,7 +307,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -325,7 +325,8 @@ class PdfViewerViewModelSearchTest {
             fileDescriptor = mock<ParcelFileDescriptor>()
         )
         val downloadUri = Uri.parse("https://example.com/doc.pdf")
-        whenever(downloadManager.download(eq(downloadUri.toString()))).thenReturn(Result.success(downloadUri))
+        val remoteSource = DocumentSource.RemoteUrl(downloadUri.toString())
+        whenever(documentSourceGateway.fetch(eq(remoteSource))).thenReturn(Result.success(downloadUri))
         whenever(pdfRepository.open(eq(downloadUri), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
         whenever(pdfRepository.renderPage(eq(0), any(), any<PageRenderProfile>(), anyOrNull())).thenReturn(
@@ -339,13 +340,13 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
-        viewModel.openRemoteDocument(downloadUri.toString())
+        viewModel.openRemoteDocument(remoteSource)
         advanceUntilIdle()
 
-        verify(downloadManager).download(eq(downloadUri.toString()))
+        verify(documentSourceGateway).fetch(eq(remoteSource))
         verify(pdfRepository).open(eq(downloadUri), anyOrNull())
         verify(searchCoordinator).prepare(eq(session))
         assertEquals("remote_doc", viewModel.uiState.value.documentId)
@@ -361,7 +362,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -373,7 +374,10 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
-        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad")))
+        val failingSource = DocumentSource.RemoteUrl(failingUrl)
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
+            Result.failure(IllegalStateException("bad"))
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -382,13 +386,13 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
-        viewModel.openRemoteDocument(failingUrl)
+        viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
 
-        verify(downloadManager, times(4)).download(eq(failingUrl))
+        verify(documentSourceGateway, times(4)).fetch(eq(failingSource))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
         assertEquals(
@@ -406,7 +410,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
         val crashReporter = RecordingCrashReporter()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
@@ -419,7 +423,10 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
-        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad net")))
+        val failingSource = DocumentSource.RemoteUrl(failingUrl)
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
+            Result.failure(IllegalStateException("bad net"))
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -428,16 +435,16 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager,
+            documentSourceGateway,
             crashReporter,
         )
 
         repeat(3) {
-            viewModel.openRemoteDocument(failingUrl)
+            viewModel.openRemoteDocument(failingSource)
             advanceUntilIdle()
         }
 
-        verify(downloadManager, times(12)).download(eq(failingUrl))
+        verify(documentSourceGateway, times(12)).fetch(eq(failingSource))
 
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
@@ -449,9 +456,9 @@ class PdfViewerViewModelSearchTest {
         )
         assertEquals(expectedMessage, (status as DocumentStatus.Error).message)
 
-        viewModel.openRemoteDocument(failingUrl)
+        viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
-        verify(downloadManager, times(12)).download(eq(failingUrl))
+        verify(documentSourceGateway, times(12)).fetch(eq(failingSource))
 
         val repeatedStatus = viewModel.uiState.value.documentStatus
         assertTrue(repeatedStatus is DocumentStatus.Error)
@@ -461,6 +468,8 @@ class PdfViewerViewModelSearchTest {
         assertNotNull(lastMetadata)
         lastMetadata!!
         assertEquals("remoteDownload", lastMetadata["stage"])
+        assertEquals(failingSource.kind.name, lastMetadata["sourceKind"])
+        assertEquals(failingSource.id, lastMetadata["sourceId"])
         assertEquals("CIRCUIT_OPEN", lastMetadata["reason"])
         assertEquals("3", lastMetadata["failureCount"])
         assertEquals("NETWORK_RETRY_EXHAUSTED", lastMetadata["lastFailureReason"])
@@ -476,7 +485,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -492,7 +501,8 @@ class PdfViewerViewModelSearchTest {
             RemotePdfException.Reason.CORRUPTED,
             IOException("Corrupt PDF"),
         )
-        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(corruptFailure))
+        val failingSource = DocumentSource.RemoteUrl(failingUrl)
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(Result.failure(corruptFailure))
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -501,13 +511,13 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
-        viewModel.openRemoteDocument(failingUrl)
+        viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
 
-        verify(downloadManager).download(eq(failingUrl))
+        verify(documentSourceGateway).fetch(eq(failingSource))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
         assertEquals(getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
@@ -522,7 +532,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -534,7 +544,8 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
-        whenever(downloadManager.download(eq(failingUrl))).thenThrow(IllegalStateException("broken"))
+        val failingSource = DocumentSource.RemoteUrl(failingUrl)
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenThrow(IllegalStateException("broken"))
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -543,13 +554,13 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
-        viewModel.openRemoteDocument(failingUrl)
+        viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
 
-        verify(downloadManager, times(4)).download(eq(failingUrl))
+        verify(documentSourceGateway, times(4)).fetch(eq(failingSource))
         val uiState = viewModel.uiState.value
         assertTrue(uiState.documentStatus is DocumentStatus.Error)
         assertEquals(
@@ -567,7 +578,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -579,7 +590,10 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val failingUrl = "https://example.com/bad.pdf"
-        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad")))
+        val failingSource = DocumentSource.RemoteUrl(failingUrl)
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
+            Result.failure(IllegalStateException("bad"))
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -588,7 +602,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         val statuses = mutableListOf<DocumentStatus>()
@@ -599,7 +613,7 @@ class PdfViewerViewModelSearchTest {
                 .toList(statuses)
         }
 
-        viewModel.openRemoteDocument(failingUrl)
+        viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
         job.join()
 
@@ -623,7 +637,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -645,7 +659,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         val statuses = mutableListOf<DocumentStatus>()
@@ -678,7 +692,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -690,7 +704,8 @@ class PdfViewerViewModelSearchTest {
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
 
         val url = "https://example.com/cancel.pdf"
-        whenever(downloadManager.download(eq(url))).thenThrow(CancellationException("cancelled"))
+        val remoteSource = DocumentSource.RemoteUrl(url)
+        whenever(documentSourceGateway.fetch(eq(remoteSource))).thenThrow(CancellationException("cancelled"))
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -699,10 +714,10 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
-        viewModel.openRemoteDocument(url)
+        viewModel.openRemoteDocument(remoteSource)
         advanceUntilIdle()
 
         val uiState = viewModel.uiState.value
@@ -718,7 +733,7 @@ class PdfViewerViewModelSearchTest {
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
         val searchCoordinator = mock<DocumentSearchCoordinator>()
-        val downloadManager = mock<PdfDownloadManager>()
+        val documentSourceGateway = mock<DocumentSourceGateway>()
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
@@ -745,7 +760,7 @@ class PdfViewerViewModelSearchTest {
             bookmarkManager,
             maintenanceScheduler,
             searchCoordinator,
-            downloadManager
+            documentSourceGateway
         )
 
         advanceUntilIdle()

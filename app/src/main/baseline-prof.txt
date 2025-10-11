@@ -4,11 +4,11 @@ Lcom/novapdf/reader/ReaderActivity;
 HSPLcom/novapdf/reader/ReaderActivity;->onCreate(Landroid/os/Bundle;)V
 HSPLcom/novapdf/reader/ReaderActivity;->onResume()V
 HSPLcom/novapdf/reader/ReaderActivity;->onPause()V
-HSPLcom/novapdf/reader/ReaderActivity;->openRemoteDocument(Ljava/lang/String;)V
+HSPLcom/novapdf/reader/ReaderActivity;->openRemoteDocument(Lcom/novapdf/reader/model/DocumentSource;)V
 Lcom/novapdf/reader/MainActivity;
 Lcom/novapdf/reader/PdfViewerViewModel;
 HSPLcom/novapdf/reader/PdfViewerViewModel;->openDocument(Landroid/net/Uri;)V
-HSPLcom/novapdf/reader/PdfViewerViewModel;->openRemoteDocument(Ljava/lang/String;)V
+HSPLcom/novapdf/reader/PdfViewerViewModel;->openRemoteDocument(Lcom/novapdf/reader/model/DocumentSource;)V
 HSPLcom/novapdf/reader/PdfViewerViewModel;->dismissError()V
 HSPLcom/novapdf/reader/PdfViewerViewModel;->onPageFocused(I)V
 HSPLcom/novapdf/reader/PdfViewerViewModel;->jumpToPage(I)V
