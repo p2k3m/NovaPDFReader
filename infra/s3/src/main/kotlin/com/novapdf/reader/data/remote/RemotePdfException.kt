@@ -6,6 +6,7 @@ class RemotePdfException(
 ) : Exception(reason.name, cause) {
     enum class Reason {
         NETWORK,
+        NETWORK_RETRY_EXHAUSTED,
         CORRUPTED,
     }
 }

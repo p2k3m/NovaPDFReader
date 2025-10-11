@@ -438,6 +438,7 @@ private tailrec fun resolveDomainErrorCode(throwable: Throwable?): DomainErrorCo
         is InterruptedIOException -> DomainErrorCode.IO_TIMEOUT
         is RemotePdfException -> when (throwable.reason) {
             RemotePdfException.Reason.NETWORK -> DomainErrorCode.IO_TIMEOUT
+            RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> DomainErrorCode.IO_TIMEOUT
             RemotePdfException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED
         }
         is PdfOpenException -> when (throwable.reason) {

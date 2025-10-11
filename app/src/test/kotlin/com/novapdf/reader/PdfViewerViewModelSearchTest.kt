@@ -62,6 +62,7 @@ import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
@@ -376,10 +377,13 @@ class PdfViewerViewModelSearchTest {
         viewModel.openRemoteDocument(failingUrl)
         advanceUntilIdle()
 
-        verify(downloadManager).download(eq(failingUrl))
+        verify(downloadManager, times(4)).download(eq(failingUrl))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
-        assertEquals(getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
+        assertEquals(
+            getString(R.string.error_remote_open_failed_after_retries),
+            (status as DocumentStatus.Error).message
+        )
     }
 
     @Test
@@ -464,11 +468,11 @@ class PdfViewerViewModelSearchTest {
         viewModel.openRemoteDocument(failingUrl)
         advanceUntilIdle()
 
-        verify(downloadManager).download(eq(failingUrl))
+        verify(downloadManager, times(4)).download(eq(failingUrl))
         val uiState = viewModel.uiState.value
         assertTrue(uiState.documentStatus is DocumentStatus.Error)
         assertEquals(
-            getString(R.string.error_remote_open_failed),
+            getString(R.string.error_remote_open_failed_after_retries),
             (uiState.documentStatus as DocumentStatus.Error).message
         )
     }
@@ -523,7 +527,10 @@ class PdfViewerViewModelSearchTest {
         assertEquals(DocumentStatus.Idle, statuses[2])
         val errorStatus = statuses[3]
         assertTrue(errorStatus is DocumentStatus.Error)
-        assertEquals(getString(R.string.error_pdf_corrupted), (errorStatus as DocumentStatus.Error).message)
+        assertEquals(
+            getString(R.string.error_remote_open_failed_after_retries),
+            (errorStatus as DocumentStatus.Error).message
+        )
     }
 
     @Test
