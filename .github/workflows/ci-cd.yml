@@ -126,6 +126,8 @@ jobs:
       APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       UNIT_TESTS_PASSED: 'false'
       NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
+      ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
+      ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -438,13 +440,40 @@ jobs:
             disk_partition_args=("-partition-size" "$final_disk_mb")
           fi
 
+          ensure_config_value() {
+            local key="$1"
+            local value="$2"
+            local escaped_key
+
+            escaped_key=$(printf '%s' "$key" | sed 's/[][\\.^$*+?{}|()]/\\&/g')
+
+            if grep -Eq "^${escaped_key}=" "$config_path"; then
+              perl -0pi -e "s/^${escaped_key}=.*/${key}=${value}/" "$config_path"
+            else
+              printf '%s=%s\n' "$key" "$value" >> "$config_path"
+            fi
+          }
+
+          if [ "${ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION:-false}" = "true" ]; then
+            # GitHub-hosted Actions runners disallow nested virtualization. Explicitly
+            # disable it in the AVD configuration to avoid relying on the emulator's
+            # defaults differing between images.
+            ensure_config_value "hw.cpu.nested" "no"
+          fi
+
           accel_args=()
           if [ "${RUNNER_OS:-}" = "macOS" ]; then
             echo "macOS runners do not expose HVF; starting emulator with -no-accel"
             accel_args=("-no-accel" "-accel" "off")
-          elif ! "$ANDROID_HOME"/emulator/emulator-check accel >/dev/null 2>&1; then
-            echo "Hardware acceleration unavailable; starting emulator with -no-accel"
-            accel_args=("-no-accel" "-accel" "off")
+          else
+            if [ "${ACTIONS_RUNNER_ACCELERATION_PREFERENCE:-}" = "kvm" ] \
+              && "$ANDROID_HOME"/emulator/emulator-check accel 2>&1 | grep -qi 'KVM (version'; then
+              echo "KVM acceleration available; enabling hardware acceleration"
+              accel_args=("-accel" "on")
+            else
+              echo "Hardware acceleration unavailable; starting emulator with -no-accel"
+              accel_args=("-no-accel" "-accel" "off")
+            fi
           fi
 
           # Force a cold boot (-wipe-data) to clear stale emulator state that can lead to ANRs between runs.
