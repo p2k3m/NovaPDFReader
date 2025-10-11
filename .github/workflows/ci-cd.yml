@@ -293,8 +293,41 @@ jobs:
           ABI: ${{ matrix.abi }}
           TAG: ${{ matrix.tag }}
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-${API_LEVEL}" "system-images;android-${API_LEVEL};${TAG};${ABI}" "build-tools;34.0.0" "emulator"
+          set -euo pipefail
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          yes | "$SDKMANAGER" --licenses
+
+          packages=(
+            "platform-tools"
+            "platforms;android-${API_LEVEL}"
+            "system-images;android-${API_LEVEL};${TAG};${ABI}"
+            "build-tools;34.0.0"
+            "emulator"
+          )
+
+          attempt=1
+          max_attempts=3
+          while true; do
+            if yes | "$SDKMANAGER" "${packages[@]}"; then
+              break
+            fi
+
+            exit_code=$?
+            if (( attempt >= max_attempts )); then
+              echo "::error::Failed to install Android SDK packages after ${attempt} attempts (exit code ${exit_code})."
+              exit "${exit_code}"
+            fi
+
+            echo "Attempt ${attempt} to install Android SDK packages failed with exit code ${exit_code}. Cleaning partial downloads and retrying..."
+            rm -rf "$ANDROID_HOME/system-images/android-${API_LEVEL}/${TAG}/${ABI}" || true
+            rm -rf "$ANDROID_HOME/emulator" || true
+            rm -rf "$HOME/.android/cache" || true
+
+            attempt=$(( attempt + 1 ))
+            sleep $(( attempt * 5 ))
+          done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - name: Configure AWS credentials
