@@ -9,14 +9,17 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.Base64
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -111,5 +114,39 @@ class PdfDocumentRepositoryEdgeCaseTest {
         assertTrue(bitmap.isRecycled)
 
         repository.dispose()
+    }
+
+    @Test
+    fun encryptedMonsterPdfSurfacesAccessDenied() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(context, dispatcher)
+        val monsterFile = File(context.cacheDir, "monster-encrypted.pdf")
+        monsterFile.writeBytes(loadBase64Fixture("fixtures/monster-encrypted.base64"))
+
+        try {
+            try {
+                repository.open(Uri.fromFile(monsterFile))
+                fail("Expected open() to throw PdfOpenException for encrypted monster PDF")
+            } catch (exception: PdfOpenException) {
+                assertEquals(PdfOpenException.Reason.ACCESS_DENIED, exception.reason)
+            }
+        } finally {
+            repository.dispose()
+            monsterFile.delete()
+        }
+    }
+
+    private fun loadBase64Fixture(path: String): ByteArray {
+        val stream = checkNotNull(javaClass.classLoader?.getResourceAsStream(path)) {
+            "Missing test fixture: $path"
+        }
+        val base64 = stream.bufferedReader().use { reader ->
+            buildString {
+                reader.forEachLine { line ->
+                    append(line.trim())
+                }
+            }
+        }
+        return Base64.getDecoder().decode(base64)
     }
 }
