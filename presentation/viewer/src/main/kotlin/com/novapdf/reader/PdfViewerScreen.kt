@@ -135,14 +135,16 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
@@ -157,6 +159,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.novapdf.reader.presentation.viewer.BuildConfig
 import com.novapdf.reader.presentation.viewer.R
+import com.novapdf.reader.ui.automation.UiAutomatorTags
 import com.novapdf.reader.DocumentStatus
 import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.accessibility.HapticFeedbackManager
@@ -202,6 +205,7 @@ private val pageRenderDispatcher = Dispatchers.IO.limitedParallelism(PAGE_RENDER
 @OptIn(ExperimentalCoroutinesApi::class)
 private val thumbnailDispatcher = Dispatchers.IO.limitedParallelism(THUMBNAIL_PARALLELISM)
 
+@Suppress("OPT_IN_USAGE", "OPT_IN_USAGE_ERROR")
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PdfViewerRoute(
@@ -214,36 +218,42 @@ fun PdfViewerRoute(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    PdfViewerScreen(
-        state = uiState,
-        snackbarHost = snackbarHost,
-        messageFlow = viewModel.messageEvents,
-        onOpenLocalDocument = onOpenLocalDocument,
-        onOpenCloudDocument = onOpenCloudDocument,
-        onOpenRemoteDocument = onOpenRemoteDocument,
-        onDismissError = onDismissError,
-        onConfirmLargeDownload = { viewModel.confirmLargeRemoteDownload() },
-        onDismissLargeDownload = { viewModel.dismissLargeRemoteDownload() },
-        onPageChange = { viewModel.onPageFocused(it) },
-        onStrokeFinished = { viewModel.addAnnotation(it) },
-        onSaveAnnotations = { viewModel.persistAnnotations() },
-        onSearch = { viewModel.search(it) },
-        onCancelIndexing = { viewModel.cancelIndexing() },
-        onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
-        onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
-        onExportDocument = { viewModel.exportDocument(context) },
-        renderPage = { index, width, priority ->
-            viewModel.renderPage(index, width, priority)
-        },
-        requestPageSize = { viewModel.pageSize(it) },
-        onViewportWidthChanged = { viewModel.updateViewportWidth(it) },
-        onPrefetchPages = { indices, width -> viewModel.prefetchPages(indices, width) },
-        onToggleDynamicColor = { viewModel.setDynamicColorEnabled(it) },
-        onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
-        onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
-        onFontScaleChanged = { viewModel.setFontScale(it) },
-        dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .semantics { testTagsAsResourceId = true }
+    ) {
+        PdfViewerScreen(
+            state = uiState,
+            snackbarHost = snackbarHost,
+            messageFlow = viewModel.messageEvents,
+            onOpenLocalDocument = onOpenLocalDocument,
+            onOpenCloudDocument = onOpenCloudDocument,
+            onOpenRemoteDocument = onOpenRemoteDocument,
+            onDismissError = onDismissError,
+            onConfirmLargeDownload = { viewModel.confirmLargeRemoteDownload() },
+            onDismissLargeDownload = { viewModel.dismissLargeRemoteDownload() },
+            onPageChange = { viewModel.onPageFocused(it) },
+            onStrokeFinished = { viewModel.addAnnotation(it) },
+            onSaveAnnotations = { viewModel.persistAnnotations() },
+            onSearch = { viewModel.search(it) },
+            onCancelIndexing = { viewModel.cancelIndexing() },
+            onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
+            onOutlineDestinationSelected = { viewModel.jumpToPage(it) },
+            onExportDocument = { viewModel.exportDocument(context) },
+            renderPage = { index, width, priority ->
+                viewModel.renderPage(index, width, priority)
+            },
+            requestPageSize = { viewModel.pageSize(it) },
+            onViewportWidthChanged = { viewModel.updateViewportWidth(it) },
+            onPrefetchPages = { indices, width -> viewModel.prefetchPages(indices, width) },
+            onToggleDynamicColor = { viewModel.setDynamicColorEnabled(it) },
+            onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
+            onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
+            onFontScaleChanged = { viewModel.setFontScale(it) },
+            dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -642,7 +652,11 @@ private fun PdfViewerTopBar(
                 )
             }
             if (selectedDestination == MainDestination.Reader) {
-                IconButton(onClick = onSaveAnnotations, enabled = hasDocument) {
+                IconButton(
+                    onClick = onSaveAnnotations,
+                    enabled = hasDocument,
+                    modifier = Modifier.testTag(UiAutomatorTags.SAVE_ANNOTATIONS_ACTION)
+                ) {
                     Icon(
                         imageVector = Icons.Outlined.Download,
                         contentDescription = stringResource(id = R.string.save_annotations)
@@ -855,19 +869,25 @@ private fun DocumentSourceDialog(
                 Text(text = stringResource(id = R.string.open_source_dialog_body))
                 FilledTonalButton(
                     onClick = onSelectDevice,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(UiAutomatorTags.SOURCE_DEVICE_BUTTON)
                 ) {
                     Text(text = stringResource(id = R.string.open_source_device))
                 }
                 FilledTonalButton(
                     onClick = onSelectCloud,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(UiAutomatorTags.SOURCE_CLOUD_BUTTON)
                 ) {
                     Text(text = stringResource(id = R.string.open_source_cloud))
                 }
                 FilledTonalButton(
                     onClick = onSelectRemote,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag(UiAutomatorTags.SOURCE_REMOTE_BUTTON)
                 ) {
                     Text(text = stringResource(id = R.string.open_source_url))
                 }
@@ -1426,7 +1446,9 @@ private fun AdaptiveFlowStatusRow(
                     contentDescription = null,
                 )
             },
-            modifier = Modifier.semantics { contentDescription = statusText }
+            modifier = Modifier
+                .testTag(UiAutomatorTags.ADAPTIVE_FLOW_STATUS_CHIP)
+                .semantics { contentDescription = statusText }
         )
         Spacer(modifier = Modifier.height(12.dp))
         val description = if (isActive) {
@@ -1487,7 +1509,10 @@ private fun HomeContent(
                 .padding(bottom = 24.dp)
                 .semantics { contentDescription = bodyText }
         )
-        Button(onClick = onOpenDocument) {
+        Button(
+            onClick = onOpenDocument,
+            modifier = Modifier.testTag(UiAutomatorTags.HOME_OPEN_DOCUMENT_BUTTON)
+        ) {
             val buttonText = stringResource(id = R.string.empty_state_button)
             Text(
                 text = buttonText,
@@ -1822,7 +1847,10 @@ private fun OnboardingOverlay(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onSkip) {
+                    TextButton(
+                        onClick = onSkip,
+                        modifier = Modifier.testTag(UiAutomatorTags.ONBOARDING_SKIP_BUTTON)
+                    ) {
                         val skipText = stringResource(id = R.string.onboarding_skip)
                         Text(
                             text = skipText,

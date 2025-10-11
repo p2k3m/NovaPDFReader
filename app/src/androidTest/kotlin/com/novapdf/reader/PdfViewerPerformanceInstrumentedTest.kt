@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import com.novapdf.reader.ui.automation.UiAutomatorTags
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -42,6 +43,8 @@ class PdfViewerPerformanceInstrumentedTest {
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
+    private val targetPackage: String
+        get() = appContext.packageName
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -155,7 +158,7 @@ class PdfViewerPerformanceInstrumentedTest {
         }
 
         val frameVisible = device.wait(
-            Until.hasObject(By.textContains("Adaptive Flow")),
+            Until.hasObject(adaptiveFlowStatusSelector()),
             FIRST_FRAME_TIMEOUT_MS
         )
         val elapsed = SystemClock.elapsedRealtime() - start
@@ -175,6 +178,9 @@ class PdfViewerPerformanceInstrumentedTest {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
+
+    private fun adaptiveFlowStatusSelector() =
+        By.res(targetPackage, UiAutomatorTags.ADAPTIVE_FLOW_STATUS_CHIP)
 
     private suspend fun cancelOutstandingWork() {
         withContext(Dispatchers.IO) {
