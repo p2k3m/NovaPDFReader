@@ -137,6 +137,8 @@ jobs:
           S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          AI_PDF_SHA256_VALUE: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE_VALUE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
           ANDROID_KEYSTORE_BASE64_SECRET: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
@@ -169,6 +171,24 @@ jobs:
           if [ -z "${THOUSAND_PDF_KEY:-}" ]; then
             echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable or secret required to download the thousand-page PDF fixture."
             echo "Remediation: Record the S3 object key for the thousand-page PDF (for example, fixtures/stress-thousand-pages.pdf) and add it as the THOUSAND_PAGE_PDF_S3_KEY repository variable or secret."
+            missing=true
+          fi
+
+          if [ -z "${AI_PDF_SHA256_VALUE:-}" ]; then
+            echo "::error::Missing AI_PDF_SHA256 repository variable or secret required to validate the AI.pdf fixture integrity."
+            echo "Remediation: Calculate the SHA-256 digest of the AI.pdf object (for example, aws s3 cp s3://pics-1234/AI.pdf - | sha256sum) and store the 64-character hexadecimal value as the AI_PDF_SHA256 repository variable or secret."
+            missing=true
+          elif ! [[ ${AI_PDF_SHA256_VALUE} =~ ^[A-Fa-f0-9]{64}$ ]]; then
+            echo "::error::AI_PDF_SHA256 must be a 64-character hexadecimal SHA-256 digest."
+            missing=true
+          fi
+
+          if [ -z "${AI_PDF_SIZE_VALUE:-}" ]; then
+            echo "::error::Missing AI_PDF_SIZE repository variable or secret required to validate the AI.pdf fixture size."
+            echo "Remediation: Determine the size in bytes of the AI.pdf object (for example, aws s3api head-object --bucket pics-1234 --key AI.pdf --query 'ContentLength') and store it as the AI_PDF_SIZE repository variable or secret."
+            missing=true
+          elif ! [[ ${AI_PDF_SIZE_VALUE} =~ ^[0-9]+$ ]]; then
+            echo "::error::AI_PDF_SIZE must be an integer representing the AI.pdf object size in bytes."
             missing=true
           fi
 
@@ -354,7 +374,9 @@ jobs:
                   ],
                   "Resource": [
                     "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}",
-                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*"
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*",
+                    "arn:aws:s3:::${{ vars.AI_PDF_BUCKET || 'pics-1234' }}",
+                    "arn:aws:s3:::${{ vars.AI_PDF_BUCKET || 'pics-1234' }}/*"
                   ]
                 }
               ]
@@ -363,6 +385,65 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
+      - name: Download AI.pdf fixture
+        id: download_ai_pdf
+        env:
+          AI_PDF_BUCKET: ${{ vars.AI_PDF_BUCKET || 'pics-1234' }}
+          AI_PDF_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
+          AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
+        run: |
+          set -euo pipefail
+
+          bucket="${AI_PDF_BUCKET:-}"
+          key="${AI_PDF_KEY:-}"
+          expected_sha="${AI_PDF_SHA256:-}"
+          expected_size="${AI_PDF_SIZE:-}"
+
+          if [ -z "$bucket" ] || [ -z "$key" ]; then
+            echo "::error::AI.pdf bucket or key is empty. Set AI_PDF_BUCKET and AI_PDF_KEY repository variables if the defaults are incorrect."
+            exit 1
+          fi
+
+          if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
+            echo "::error::Missing expected checksum or size for AI.pdf. Ensure AI_PDF_SHA256 and AI_PDF_SIZE are defined."
+            exit 1
+          fi
+
+          dest="$RUNNER_TEMP/AI.pdf"
+          tmp="${dest}.tmp"
+          trap 'rm -f "$tmp"' EXIT
+
+          echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
+          if ! aws s3 cp --only-show-errors "s3://${bucket}/${key}" "$tmp"; then
+            echo "::error::Failed to download AI.pdf fixture from s3://${bucket}/${key}"
+            exit 1
+          fi
+
+          if [ ! -s "$tmp" ]; then
+            echo "::error::Downloaded AI.pdf fixture is empty: $tmp"
+            exit 1
+          fi
+
+          actual_size=$(stat -c%s "$tmp")
+          if [ "$actual_size" -ne "$expected_size" ]; then
+            echo "::error::AI.pdf size mismatch. Expected ${expected_size} bytes but downloaded ${actual_size} bytes."
+            exit 1
+          fi
+
+          actual_sha=$(sha256sum "$tmp" | awk '{print $1}')
+          normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+          if [ "$actual_sha" != "$normalized_expected_sha" ]; then
+            echo "::error::AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but downloaded ${actual_sha}."
+            exit 1
+          fi
+
+          mv "$tmp" "$dest"
+          trap - EXIT
+          rm -f "$tmp"
+
+          echo "ai_pdf_path=$dest" >> "$GITHUB_OUTPUT"
+          echo "AI_PDF_PATH=$dest" >> "$GITHUB_ENV"
       - name: Run unit tests
         id: unit_tests
         run: |
@@ -705,7 +786,9 @@ jobs:
                   ],
                   "Resource": [
                     "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}",
-                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*"
+                    "arn:aws:s3:::${{ secrets.S3_BUCKET_NAME }}/*",
+                    "arn:aws:s3:::${{ vars.AI_PDF_BUCKET || 'pics-1234' }}",
+                    "arn:aws:s3:::${{ vars.AI_PDF_BUCKET || 'pics-1234' }}/*"
                   ]
                 }
               ]
