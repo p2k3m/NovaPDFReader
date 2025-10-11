@@ -40,6 +40,23 @@ the `platform-tools`, `build-tools`, and emulator components for API level 32.
    ./gradlew connectedAndroidTest
    ```
 
+### Recommended emulator launch configuration
+
+For reliable UI tests, start the Android emulator with snapshots disabled and
+ample memory/storage to reduce hangs during heavy PDF rendering:
+
+```bash
+emulator @NovaPDFApi32 \
+    -no-snapshot-save \
+    -no-boot-anim \
+    -accel on \
+    -memory 4096 \
+    -partition-size 4096 \
+    -gpu swiftshader_indirect
+```
+
+Use `-accel off` if the host machine does not support KVM acceleration.
+
 When no device is present, the build gracefully skips connected tests while still verifying
 that the project compiles.
 
