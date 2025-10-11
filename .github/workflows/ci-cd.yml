@@ -1888,7 +1888,13 @@ jobs:
             echo "::error::Failed to capture bugreport after connectedAndroidTest" >&2
             exit 1
           fi
-          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+            echo "Device logs cleared crash and ANR checks" >&2
+          else
+            echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
+            exit 1
+          fi
       - name: Run macrobenchmark regression suite
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
@@ -1910,7 +1916,13 @@ jobs:
             echo "::error::Failed to capture bugreport after macrobenchmark run" >&2
             exit 1
           fi
-          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+            echo "Device logs cleared crash and ANR checks" >&2
+          else
+            echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
+            exit 1
+          fi
       - name: Generate release baseline profile
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
@@ -1932,7 +1944,13 @@ jobs:
             echo "::error::Failed to capture bugreport after baseline profile generation" >&2
             exit 1
           fi
-          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+            echo "Device logs cleared crash and ANR checks" >&2
+          else
+            echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
+            exit 1
+          fi
       - name: Verify committed baseline profile is current
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
@@ -2172,6 +2190,14 @@ jobs:
             fi
             adb logcat -c >/dev/null 2>&1 || true
           }
+          collect_native_crash_artifacts() {
+            local native_dir="${base_dir}/native-crash"
+
+            if ! tools/collect_native_crash_artifacts.sh "$native_dir"; then
+              echo "Failed to collect native crash artifacts" >&2
+            fi
+          }
+
           collect_app_crash_logs() {
             local crash_dir="crashlogs"
             local output_dir="${base_dir}/crashlogs"
@@ -2200,6 +2226,8 @@ jobs:
                 echo "Failed to export crash log $remote_path" >&2
               fi
             done <<< "$listing"
+
+            collect_native_crash_artifacts
           }
           collect_performance_metrics() {
             local package="$1"
@@ -2380,7 +2408,13 @@ jobs:
             echo "::error::Failed to capture bugreport after screenshot harness" >&2
             exit 1
           fi
-          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+            echo "Device logs cleared crash and ANR checks" >&2
+          else
+            echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
+            exit 1
+          fi
       - name: Collect emulator logs
         if: always()
         run: |
