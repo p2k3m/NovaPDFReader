@@ -19,6 +19,7 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.novapdf.reader.CacheFileNames
+import com.novapdf.reader.util.sanitizeCacheFileName
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -29,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlin.collections.buildList
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -37,6 +39,7 @@ import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
+import kotlin.math.max
 import kotlin.text.Charsets
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
@@ -97,6 +100,61 @@ class ScreenshotHarnessTest {
         cancelWorkManagerJobs()
     }
 
+    private fun buildScreenshotReadyPayload(target: ScreenshotTarget?): String {
+        return try {
+            JSONObject().apply {
+                put("status", "ready")
+                if (target != null) {
+                    put("documentId", target.documentId)
+                    put("sanitizedDocumentId", target.sanitizedDocumentId)
+                    put("pageIndex", target.pageIndex)
+                    put("pageNumber", target.pageNumber)
+                    put("pageLabel", target.pageLabel)
+                    put("pageCount", target.pageCount)
+                }
+            }.toString()
+        } catch (error: Exception) {
+            logHarnessWarn("Failed to encode screenshot ready payload; falling back to legacy format", error)
+            "ready"
+        }
+    }
+
+    private fun resolveScreenshotTarget(): ScreenshotTarget? {
+        if (!::documentUri.isInitialized) {
+            return null
+        }
+
+        var snapshot: PdfViewerUiState? = null
+        activityRule.scenario.onActivity { activity ->
+            snapshot = activity.currentDocumentStateForTest()
+        }
+        val state = snapshot ?: return null
+        if (state.pageCount <= 0) {
+            return null
+        }
+
+        val resolvedDocumentId = state.documentId ?: documentUri.toString()
+        val sanitizedDocumentId = sanitizeCacheFileName(
+            raw = resolvedDocumentId,
+            fallback = documentUri.toString(),
+            label = "screenshot document id",
+        ).ifEmpty { "document" }
+        val safePageIndex = when {
+            state.currentPage in 0 until state.pageCount -> state.currentPage
+            else -> 0
+        }
+        val pageNumber = (safePageIndex + 1).coerceIn(1, max(1, state.pageCount))
+        val paddedLabel = String.format(Locale.US, "%04d", pageNumber)
+        return ScreenshotTarget(
+            documentId = resolvedDocumentId,
+            sanitizedDocumentId = sanitizedDocumentId,
+            pageIndex = safePageIndex,
+            pageNumber = pageNumber,
+            pageLabel = paddedLabel,
+            pageCount = state.pageCount,
+        )
+    }
+
     @After
     fun tearDown() = runBlocking {
         if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
@@ -143,12 +201,24 @@ class ScreenshotHarnessTest {
             return
         }
 
+        val screenshotTarget = resolveScreenshotTarget()
+        if (screenshotTarget != null) {
+            logHarnessInfo(
+                "Prepared screenshot target for documentId=${screenshotTarget.documentId} " +
+                    "pageIndex=${screenshotTarget.pageIndex} pageNumber=${screenshotTarget.pageNumber}"
+            )
+        } else {
+            logHarnessWarn("Unable to resolve screenshot metadata; ready flag payload will omit document details")
+        }
+        val readyPayload = buildScreenshotReadyPayload(screenshotTarget)
         readyFlags.forEach { flag ->
-            logHarnessInfo("Writing screenshot ready flag to ${flag.absolutePath}")
+            logHarnessInfo(
+                "Writing screenshot ready flag to ${flag.absolutePath} with payload $readyPayload"
+            )
         }
         withContext(Dispatchers.IO) {
             readyFlags.forEach { flag ->
-                runCatching { writeHandshakeFlag(flag, "ready") }
+                runCatching { writeHandshakeFlag(flag, readyPayload) }
                     .onFailure { error ->
                         logHarnessWarn(
                             "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location",
@@ -809,6 +879,15 @@ class ScreenshotHarnessTest {
     private fun sanitizeForSingleQuotes(value: String): String {
         return value.replace("'", "'\"'\"'")
     }
+
+    private data class ScreenshotTarget(
+        val documentId: String,
+        val sanitizedDocumentId: String,
+        val pageIndex: Int,
+        val pageNumber: Int,
+        val pageLabel: String,
+        val pageCount: Int,
+    )
 
     private companion object {
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"

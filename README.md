@@ -82,6 +82,13 @@ instrumentation cache directory and temporarily adopts the
 `FOREGROUND_SERVICE_MEDIA_PROJECTION` permission so the process only opts into the
 `mediaProjection` foreground service type while the screenshot is recorded.
 
+For host-side captures, run `tools/capture_screenshots.py`. The script launches the harness,
+waits for the ready handshake flags, and records a PNG via `adb exec-out screencap -p`. The
+output filenames follow the `<docId>_pageNNNN.png` convention using the sanitized document ID and
+the one-based page number reported by the harness. The ready flag payload now includes JSON
+metadata describing the document ID, sanitized identifier, page index, and total page count so
+downstream tooling can reason about the captured frame deterministically.
+
 ## Baseline profile generation and macrobenchmarks
 
 NovaPDF ships a baseline profile so cold starts and the initial render of large documents
