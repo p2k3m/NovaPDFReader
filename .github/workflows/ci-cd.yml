@@ -297,7 +297,17 @@ jobs:
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
+          disable_pipefail() {
+            set +o pipefail 2>/dev/null || true
+          }
+
+          enable_pipefail() {
+            set -o pipefail 2>/dev/null || true
+          }
+
+          disable_pipefail
           yes | "$SDKMANAGER" --licenses
+          enable_pipefail
 
           packages=(
             "platform-tools"
@@ -310,11 +320,14 @@ jobs:
           attempt=1
           max_attempts=3
           while true; do
+            disable_pipefail
             if yes | "$SDKMANAGER" "${packages[@]}"; then
+              enable_pipefail
               break
             fi
 
             exit_code=$?
+            enable_pipefail
             if (( attempt >= max_attempts )); then
               echo "::error::Failed to install Android SDK packages after ${attempt} attempts (exit code ${exit_code})."
               exit "${exit_code}"
