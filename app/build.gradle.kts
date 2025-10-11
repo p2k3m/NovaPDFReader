@@ -329,10 +329,13 @@ android {
 
         val enableNoStreaming = when {
             explicitNoStreaming != null -> explicitNoStreaming
-            // Hosted CI emulators occasionally return a null PackageManagerInternal while
-            // streaming the APK, leading to install failures. Falling back to the legacy
-            // non-streaming path avoids the allocation call that triggers the crash.
-            isCiEnvironment -> true
+            // Some hosted emulators (including the ones used in automation for this project)
+            // run API levels that do not recognise the legacy `--no-streaming` install option.
+            // Enabling it automatically causes installation to fail with
+            // `IllegalArgumentException: Unknown option --no-streaming`. Require an explicit
+            // opt-in so environments that need the flag can provide it via the existing
+            // NOVAPDF_ENABLE_NO_STREAMING/novapdf.enableNoStreamingInstallOption toggles while
+            // keeping the default path compatible everywhere else.
             else -> false
         }
 
