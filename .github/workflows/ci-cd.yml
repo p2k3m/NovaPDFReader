@@ -241,6 +241,8 @@ jobs:
           AWS_S3_READ_ROLE_ARN: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
@@ -254,6 +256,8 @@ jobs:
             AWS_S3_READ_ROLE_ARN \
             STRESS_PDF_S3_KEY \
             THOUSAND_PAGE_PDF_S3_KEY \
+            AI_PDF_SHA256 \
+            AI_PDF_SIZE \
             ANDROID_KEYSTORE_BASE64 \
             ANDROID_SIGNING_STORE_PASSWORD \
             ANDROID_SIGNING_KEY_ALIAS \
@@ -675,6 +679,8 @@ jobs:
           S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
           STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          AI_PDF_SHA256_VALUE: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE_VALUE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
           ANDROID_KEYSTORE_BASE64_SECRET: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
@@ -703,6 +709,22 @@ jobs:
 
           if [ -z "${THOUSAND_PDF_KEY:-}" ]; then
             echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable or secret required to download the thousand-page PDF fixture."
+            missing=true
+          fi
+
+          if [ -z "${AI_PDF_SHA256_VALUE:-}" ]; then
+            echo "::error::Missing AI_PDF_SHA256 repository variable or secret required to validate the AI.pdf fixture integrity."
+            missing=true
+          elif ! [[ ${AI_PDF_SHA256_VALUE} =~ ^[A-Fa-f0-9]{64}$ ]]; then
+            echo "::error::AI_PDF_SHA256 must be a 64-character hexadecimal SHA-256 digest."
+            missing=true
+          fi
+
+          if [ -z "${AI_PDF_SIZE_VALUE:-}" ]; then
+            echo "::error::Missing AI_PDF_SIZE repository variable or secret required to validate the AI.pdf fixture size."
+            missing=true
+          elif ! [[ ${AI_PDF_SIZE_VALUE} =~ ^[0-9]+$ ]]; then
+            echo "::error::AI_PDF_SIZE must be an integer representing the AI.pdf object size in bytes."
             missing=true
           fi
 
@@ -752,6 +774,8 @@ jobs:
           AWS_S3_READ_ROLE_ARN: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
           STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
           THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
           ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
@@ -765,6 +789,8 @@ jobs:
             AWS_S3_READ_ROLE_ARN \
             STRESS_PDF_S3_KEY \
             THOUSAND_PAGE_PDF_S3_KEY \
+            AI_PDF_SHA256 \
+            AI_PDF_SIZE \
             ANDROID_KEYSTORE_BASE64 \
             ANDROID_SIGNING_STORE_PASSWORD \
             ANDROID_SIGNING_KEY_ALIAS \
@@ -1397,6 +1423,69 @@ jobs:
             echo "stress_path=${stress_path}"
             echo "thousand_path=${thousand_path}"
           } >> "$GITHUB_OUTPUT"
+      - name: Download AI.pdf fixture from S3
+        if: env.UNIT_TESTS_PASSED == 'true'
+        id: download_ai_pdf
+        env:
+          AI_PDF_BUCKET: ${{ vars.AI_PDF_BUCKET || 'pics-1234' }}
+          AI_PDF_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
+          AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
+          AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
+          FIXTURE_DIR: ${{ github.workspace }}/instrumentation-fixtures
+        run: |
+          set -euo pipefail
+
+          bucket="${AI_PDF_BUCKET:-}"
+          key="${AI_PDF_KEY:-}"
+          expected_sha="${AI_PDF_SHA256:-}"
+          expected_size="${AI_PDF_SIZE:-}"
+
+          if [ -z "$bucket" ] || [ -z "$key" ]; then
+            echo "::error::AI.pdf bucket or key is empty. Set AI_PDF_BUCKET and AI_PDF_KEY repository variables if the defaults are incorrect."
+            exit 1
+          fi
+
+          if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
+            echo "::error::Missing expected checksum or size for AI.pdf. Ensure AI_PDF_SHA256 and AI_PDF_SIZE are defined."
+            exit 1
+          fi
+
+          mkdir -p "$FIXTURE_DIR"
+
+          dest="$FIXTURE_DIR/AI.pdf"
+          tmp="${dest}.tmp"
+          trap 'rm -f "$tmp"' EXIT
+
+          echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
+          if ! aws s3 cp --only-show-errors "s3://${bucket}/${key}" "$tmp"; then
+            echo "::error::Failed to download AI.pdf fixture from s3://${bucket}/${key}" >&2
+            exit 1
+          fi
+
+          if [ ! -s "$tmp" ]; then
+            echo "::error::Downloaded AI.pdf fixture is empty: $tmp" >&2
+            exit 1
+          fi
+
+          normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+
+          actual_size=$(stat -c%s "$tmp")
+          if [ "$actual_size" -ne "$expected_size" ]; then
+            echo "::error::AI.pdf size mismatch. Expected ${expected_size} bytes but found ${actual_size} bytes." >&2
+            exit 1
+          fi
+
+          actual_sha=$(sha256sum "$tmp" | awk '{print $1}')
+          if [ "$actual_sha" != "$normalized_expected_sha" ]; then
+            echo "::error::AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but found ${actual_sha}." >&2
+            exit 1
+          fi
+
+          mv "$tmp" "$dest"
+          trap - EXIT
+          rm -f "$tmp"
+
+          echo "ai_pdf_path=${dest}" >> "$GITHUB_OUTPUT"
       - name: Stage stress PDFs on emulator
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
@@ -1468,6 +1557,31 @@ jobs:
 
           stage_fixture "$stress_path" "$STRESS_DEST"
           stage_fixture "$thousand_path" "$THOUSAND_DEST"
+      - name: Push AI.pdf fixture to device Downloads directory
+        if: env.UNIT_TESTS_PASSED == 'true'
+        env:
+          AI_PDF_PATH: ${{ steps.download_ai_pdf.outputs.ai_pdf_path }}
+        run: |
+          set -euo pipefail
+
+          ai_pdf_path="${AI_PDF_PATH:-}"
+
+          if [ -z "$ai_pdf_path" ]; then
+            echo "::error::AI.pdf path not provided from download step."
+            exit 1
+          fi
+
+          if [ ! -s "$ai_pdf_path" ]; then
+            echo "::error::AI.pdf fixture is missing or empty at ${ai_pdf_path}" >&2
+            exit 1
+          fi
+
+          adb wait-for-device
+          adb shell 'mkdir -p /sdcard/Download'
+          echo "Pushing AI.pdf to /sdcard/Download/AI.pdf" >&2
+          adb push "$ai_pdf_path" /sdcard/Download/AI.pdf
+          echo "Verifying AI.pdf presence on device" >&2
+          adb shell ls -l /sdcard/Download/AI.pdf
       - name: Run instrumentation tests against stress PDFs
         if: env.UNIT_TESTS_PASSED == 'true'
         run: |
