@@ -151,6 +151,13 @@ jobs:
           set -e
           missing=false
           firebase_missing=false
+          aws_auth_mode=none
+
+          if [ -n "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
+            aws_auth_mode=role
+          elif [ -n "${AWS_ACCESS_KEY_ID_SECRET:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+            aws_auth_mode=access_keys
+          fi
 
           if [ -z "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
             if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
@@ -233,6 +240,8 @@ jobs:
             echo "Remediation: Note the Google Cloud project ID that hosts Firebase Test Lab (e.g., nova-pdf-prod) and store it either as the FIREBASE_PROJECT_ID repository variable or secret."
             firebase_missing=true
           fi
+
+          echo "aws_auth_mode=${aws_auth_mode}" >> "$GITHUB_OUTPUT"
 
           if [ "$firebase_missing" = true ]; then
             echo "::notice::Firebase secrets missing; Firebase Test Lab jobs will be skipped."
@@ -368,7 +377,7 @@ jobs:
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - name: Configure AWS credentials (assume role)
-        if: ${{ secrets.AWS_S3_READ_ROLE_ARN != '' }}
+        if: ${{ steps.validate_required_secrets.outputs.aws_auth_mode == 'role' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_S3_READ_ROLE_ARN }}
@@ -397,7 +406,7 @@ jobs:
               ]
             }
       - name: Configure AWS credentials (access keys)
-        if: ${{ secrets.AWS_S3_READ_ROLE_ARN == '' }}
+        if: ${{ steps.validate_required_secrets.outputs.aws_auth_mode == 'access_keys' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
