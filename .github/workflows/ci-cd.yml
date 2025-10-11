@@ -18,6 +18,7 @@ jobs:
       firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
     strategy:
       fail-fast: true
+      max-parallel: 2
       matrix:
         include:
           - api: 32
@@ -369,8 +370,342 @@ jobs:
         run: |
           echo "::error::A previous step failed. Stopping remaining workflow steps."
           exit 1
+
+  heavy-pdf-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    needs: build-test
+    if: needs.build-test.result == 'success'
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - api: 32
+            avd: pixel7pro_api32
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 8192
+            disk_mb: 12288
+            device_id: pixel_7_pro
+            device_label: pixel-7-pro
+            skin: 1440x3120
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel 7 Pro
+              hw.lcd.width=1440
+              hw.lcd.height=3120
+              hw.lcd.density=512
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3120
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 32
+            avd: galaxys24ultra_api32
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 12288
+            disk_mb: 12288
+            device_id: pixel_7_pro
+            device_label: galaxy-s24-ultra
+            skin: 1440x3120
+            hardware_overrides: |
+              hw.device.manufacturer=Samsung
+              hw.device.name=Galaxy S24 Ultra
+              hw.lcd.width=1440
+              hw.lcd.height=3120
+              hw.lcd.density=500
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3120
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 32
+            avd: galaxys23ultra_api32
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 10240
+            disk_mb: 12288
+            device_id: pixel_7
+            device_label: galaxy-s23-ultra
+            skin: 1440x3088
+            hardware_overrides: |
+              hw.device.manufacturer=Samsung
+              hw.device.name=Galaxy S23 Ultra
+              hw.lcd.width=1440
+              hw.lcd.height=3088
+              hw.lcd.density=500
+              hw.displayRegion.0.width=1440
+              hw.displayRegion.0.height=3088
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 32
+            avd: pixelfold_api32
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 8192
+            disk_mb: 12288
+            device_id: pixel_fold
+            device_label: pixel-fold
+            skin: 2208x1840
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel Fold
+              hw.lcd.width=2208
+              hw.lcd.height=1840
+              hw.lcd.density=380
+              hw.displayRegion.0.width=1840
+              hw.displayRegion.0.height=2208
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+          - api: 32
+            avd: pixeltablet_api32
+            tag: google_apis
+            abi: x86_64
+            ram_mb: 12288
+            disk_mb: 12288
+            device_id: pixel_tablet
+            device_label: pixel-tablet
+            skin: 2560x1600
+            hardware_overrides: |
+              hw.device.manufacturer=Google
+              hw.device.name=Pixel Tablet
+              hw.lcd.width=2560
+              hw.lcd.height=1600
+              hw.lcd.density=280
+              hw.displayRegion.0.width=2560
+              hw.displayRegion.0.height=1600
+              hw.displayRegion.0.xOffset=0
+              hw.displayRegion.0.yOffset=0
+    env:
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
+      ARTIFACTS_DIR: artifacts
+      KEYSTORE_PATH: ${{ github.workspace }}/android-release.jks
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+      NOVAPDF_APP_ID: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      UNIT_TESTS_PASSED: 'true'
+      NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
+      ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
+      ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
+    steps:
+      - name: Validate required secrets
+        id: validate_required_secrets
+        env:
+          AWS_ACCESS_KEY_ID_SECRET: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET_NAME_SECRET: ${{ secrets.S3_BUCKET_NAME }}
+          STRESS_PDF_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
+          THOUSAND_PDF_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          ANDROID_KEYSTORE_BASE64_SECRET: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_STORE_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD_SECRET: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_JSON_SECRET: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_PROJECT_ID_VALUE: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          set -e
+          missing=false
+          firebase_missing=false
+
+          if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ]; then
+            echo "::error::Missing AWS_ACCESS_KEY_ID secret required for S3 uploads."
+            missing=true
+          fi
+
+          if [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+            echo "::error::Missing AWS_SECRET_ACCESS_KEY secret required for S3 uploads."
+            missing=true
+          fi
+
+          if [ -z "${S3_BUCKET_NAME_SECRET:-}" ]; then
+            echo "::error::Missing S3_BUCKET_NAME secret required for S3 uploads."
+            missing=true
+          fi
+
+          if [ -z "${STRESS_PDF_KEY:-}" ]; then
+            echo "::error::Missing STRESS_PDF_S3_KEY repository variable or secret required to download the stress PDF fixture."
+            missing=true
+          fi
+
+          if [ -z "${THOUSAND_PDF_KEY:-}" ]; then
+            echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable or secret required to download the thousand-page PDF fixture."
+            missing=true
+          fi
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64_SECRET:-}" ]; then
+            echo "::error::Missing ANDROID_KEYSTORE_BASE64 secret required to sign the release bundle."
+            missing=true
+          fi
+
+          if [ -z "${ANDROID_SIGNING_STORE_PASSWORD_SECRET:-}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_STORE_PASSWORD secret required to unlock the keystore."
+            missing=true
+          fi
+
+          if [ -z "${ANDROID_SIGNING_KEY_ALIAS_SECRET:-}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_KEY_ALIAS secret required for signing."
+            missing=true
+          fi
+
+          if [ -z "${ANDROID_SIGNING_KEY_PASSWORD_SECRET:-}" ]; then
+            echo "::error::Missing ANDROID_SIGNING_KEY_PASSWORD secret required to access the signing key."
+            missing=true
+          fi
+
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT_JSON_SECRET:-}" ]; then
+            echo "::warning::Missing FIREBASE_SERVICE_ACCOUNT_JSON secret required for Firebase Test Lab instrumentation coverage."
+            firebase_missing=true
+          fi
+
+          if [ -z "${FIREBASE_PROJECT_ID_VALUE:-}" ]; then
+            echo "::warning::Missing FIREBASE_PROJECT_ID repository variable or secret required to target the Firebase project for physical device testing."
+            firebase_missing=true
+          fi
+
+          if [ "$firebase_missing" = true ]; then
+            echo "::notice::Firebase secrets missing; Firebase Test Lab jobs will be skipped."
+            echo "firebase_configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "firebase_configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$missing" = true ]; then
+            exit 1
+          fi
+      - name: Mask sensitive environment variables
+        if: ${{ steps.validate_required_secrets.outcome == 'success' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          STRESS_PDF_S3_KEY: ${{ vars.STRESS_PDF_S3_KEY || secrets.STRESS_PDF_S3_KEY }}
+          THOUSAND_PAGE_PDF_S3_KEY: ${{ vars.THOUSAND_PAGE_PDF_S3_KEY || secrets.THOUSAND_PAGE_PDF_S3_KEY }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+        shell: bash
+        run: |
+          set +e
+          for var in \
+            AWS_ACCESS_KEY_ID \
+            AWS_SECRET_ACCESS_KEY \
+            AWS_SESSION_TOKEN \
+            STRESS_PDF_S3_KEY \
+            THOUSAND_PAGE_PDF_S3_KEY \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_SIGNING_STORE_PASSWORD \
+            ANDROID_SIGNING_KEY_ALIAS \
+            ANDROID_SIGNING_KEY_PASSWORD \
+            FIREBASE_SERVICE_ACCOUNT_JSON \
+            FIREBASE_PROJECT_ID
+          do
+            value="${!var:-}"
+            if [[ -n "$value" ]]; then
+              echo "::add-mask::$value"
+            fi
+          done
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+      - name: Decode signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "Decoding Android signing keystore to $KEYSTORE_PATH"
+          python3 -c "import base64, os; encoded = os.environ['ANDROID_KEYSTORE_BASE64'].strip().encode(); path = os.environ['KEYSTORE_PATH']; open(path, 'wb').write(base64.b64decode(encoded))"
+          chmod 600 "$KEYSTORE_PATH"
+      - name: Download Android SDK components
+        env:
+          API_LEVEL: ${{ matrix.api }}
+          ABI: ${{ matrix.abi }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          disable_pipefail() {
+            set +o pipefail 2>/dev/null || true
+          }
+
+          enable_pipefail() {
+            set -o pipefail 2>/dev/null || true
+          }
+
+          disable_pipefail
+          yes | "$SDKMANAGER" --licenses
+          enable_pipefail
+
+          packages=(
+            "platform-tools"
+            "platforms;android-${API_LEVEL}"
+            "system-images;android-${API_LEVEL};${TAG};${ABI}"
+            "build-tools;34.0.0"
+            "emulator"
+          )
+
+          attempt=1
+          max_attempts=3
+          while true; do
+            disable_pipefail
+            if yes | "$SDKMANAGER" "${packages[@]}"; then
+              enable_pipefail
+              break
+            fi
+
+            exit_code=$?
+            enable_pipefail
+            if (( attempt >= max_attempts )); then
+              echo "::error::Failed to install Android SDK packages after ${attempt} attempts (exit code ${exit_code})."
+              exit "${exit_code}"
+            fi
+
+            echo "Attempt ${attempt} to install Android SDK packages failed with exit code ${exit_code}. Cleaning partial downloads and retrying..."
+            rm -rf "$ANDROID_HOME/system-images/android-${API_LEVEL}/${TAG}/${ABI}" || true
+            rm -rf "$ANDROID_HOME/emulator" || true
+            rm -rf "$HOME/.android/cache" || true
+
+            attempt=$(( attempt + 1 ))
+            sleep $(( attempt * 5 ))
+          done
+      - name: Add Android platform tools to PATH
+        run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Validate AWS credential scope
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --query 'Account' --output text >/dev/null
+          aws iam get-user --query 'User.Arn' --output text >/dev/null 2>/dev/null || true
       - name: Start emulator
-        if: env.UNIT_TESTS_PASSED == 'true'
         env:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
@@ -449,9 +784,6 @@ jobs:
             final_disk_mb=$requested_disk_mb
             available_mb=$(df -Pm "$avd_root" | awk 'NR==2 {print $4}')
             reserve_mb=2048
-            # The emulator inflates the userdata image from a sparse template and
-            # requires extra scratch space beyond the requested partition size.
-            # Allocate additional headroom to avoid "not enough space" failures.
             partition_overhead_mb=2500
 
             if [[ "$available_mb" =~ ^[0-9]+$ ]]; then
@@ -501,9 +833,6 @@ jobs:
           }
 
           if [ "${ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION:-false}" = "true" ]; then
-            # GitHub-hosted Actions runners disallow nested virtualization. Explicitly
-            # disable it in the AVD configuration to avoid relying on the emulator's
-            # defaults differing between images.
             ensure_config_value "hw.cpu.nested" "no"
           fi
 
@@ -522,15 +851,11 @@ jobs:
             fi
           fi
 
-          # Force a cold boot (-wipe-data) to clear stale emulator state that can lead to ANRs between runs.
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
           device_timeout=0
           device_deadline=$((15 * 60))
-          # Bootstrapping a cold AVD without hardware acceleration can take several minutes
-          # before the virtual device appears to adb. Give the emulator extra time before
-          # bailing out to reduce spurious CI flakes.
           while true; do
             if ! kill -0 "$emulator_pid" 2>/dev/null; then
               echo "Emulator process exited before it became available to ADB" >&2
@@ -572,7 +897,6 @@ jobs:
           adb shell settings put global animator_duration_scale 0 || true
           adb shell input keyevent 82 || true
       - name: Install app under test
-        if: env.UNIT_TESTS_PASSED == 'true'
         run: |
           set -euo pipefail
 
@@ -696,6 +1020,7 @@ jobs:
               elapsed=$((elapsed + interval))
             done
           }
+
 
           wait_for_storage_volumes() {
             local deadline="$1"
@@ -1642,8 +1967,10 @@ jobs:
     name: Firebase instrumentation (physical devices)
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    needs: build-test
-    if: needs.build-test.result == 'success' && needs.build-test.outputs.firebase_configured == 'true'
+    needs:
+      - build-test
+      - heavy-pdf-tests
+    if: needs.build-test.result == 'success' && needs.heavy-pdf-tests.result == 'success' && needs.build-test.outputs.firebase_configured == 'true'
     strategy:
       fail-fast: false
       matrix:
