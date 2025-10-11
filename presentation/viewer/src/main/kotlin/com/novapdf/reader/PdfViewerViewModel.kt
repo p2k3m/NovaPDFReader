@@ -34,6 +34,7 @@ import com.novapdf.reader.model.DomainException
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.presentation.viewer.R
@@ -400,7 +401,7 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    fun openRemoteDocument(url: String) {
+    fun openRemoteDocument(source: DocumentSource) {
         val previousJob = remoteDownloadJob
         val newJob = viewModelScope.launch(dispatchers.io) {
             previousJob?.cancelAndJoin()
@@ -411,7 +412,7 @@ open class PdfViewerViewModel @Inject constructor(
                 resetError = true
             )
             val result = try {
-                remoteDocumentUseCase.download(url)
+                remoteDocumentUseCase.fetch(source)
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) {
                     setLoadingState(
@@ -422,7 +423,7 @@ open class PdfViewerViewModel @Inject constructor(
                     )
                     throw throwable
                 }
-                reportRemoteOpenFailure(throwable, url)
+                reportRemoteOpenFailure(throwable, source)
                 return@launch
             }
             result.onSuccess { uri ->
@@ -437,7 +438,7 @@ open class PdfViewerViewModel @Inject constructor(
                     )
                     throw throwable
                 }
-                reportRemoteOpenFailure(throwable, url)
+                reportRemoteOpenFailure(throwable, source)
             }
         }
         remoteDownloadJob = newJob
@@ -605,14 +606,17 @@ open class PdfViewerViewModel @Inject constructor(
         showError(app.getString(messageRes))
     }
 
-    fun reportRemoteOpenFailure(throwable: Throwable, sourceUrl: String? = null) {
+    fun reportRemoteOpenFailure(throwable: Throwable, source: DocumentSource? = null) {
         viewModelScope.launch {
             resetTransientStatus()
             val remote = throwable.findCause<RemotePdfException>()
             if (throwable !is CancellationException) {
                 val metadata = buildMap {
                     put("stage", "remoteDownload")
-                    sourceUrl?.let { put("url", it) }
+                    source?.let {
+                        put("sourceKind", it.kind.name)
+                        put("sourceId", it.id)
+                    }
                     remote?.let { error ->
                         put("reason", error.reason.name)
                         error.diagnostics?.let { diagnostics ->

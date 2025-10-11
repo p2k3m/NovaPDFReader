@@ -158,6 +158,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.novapdf.reader.presentation.viewer.BuildConfig
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.DocumentStatus
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.accessibility.HapticFeedbackManager
 import com.novapdf.reader.accessibility.rememberHapticFeedbackManager
 import com.novapdf.reader.features.annotations.AnnotationOverlay
@@ -208,7 +209,7 @@ fun PdfViewerRoute(
     snackbarHost: SnackbarHostState,
     onOpenLocalDocument: () -> Unit,
     onOpenCloudDocument: () -> Unit,
-    onOpenRemoteDocument: (String) -> Unit,
+    onOpenRemoteDocument: (DocumentSource) -> Unit,
     onDismissError: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -251,7 +252,7 @@ fun PdfViewerScreen(
     messageFlow: Flow<UiMessage>,
     onOpenLocalDocument: () -> Unit,
     onOpenCloudDocument: () -> Unit,
-    onOpenRemoteDocument: (String) -> Unit,
+    onOpenRemoteDocument: (DocumentSource) -> Unit,
     onDismissError: () -> Unit,
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
@@ -535,9 +536,9 @@ fun PdfViewerScreen(
         if (showUrlDialog) {
             DocumentUrlDialog(
                 onDismiss = { showUrlDialog = false },
-                onConfirm = { url ->
+                onConfirm = { source ->
                     showUrlDialog = false
-                    onOpenRemoteDocument(url)
+                    onOpenRemoteDocument(source)
                 }
             )
         }
@@ -868,7 +869,7 @@ private fun DocumentSourceDialog(
 @Composable
 private fun DocumentUrlDialog(
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (DocumentSource) -> Unit,
 ) {
     var url by remember { mutableStateOf("") }
     var showError by remember { mutableStateOf(false) }
@@ -910,7 +911,7 @@ private fun DocumentUrlDialog(
         confirmButton = {
             TextButton(onClick = {
                 if (isValidUrl) {
-                    onConfirm(trimmedUrl)
+                    onConfirm(DocumentSource.RemoteUrl(trimmedUrl))
                 } else {
                     showError = true
                 }

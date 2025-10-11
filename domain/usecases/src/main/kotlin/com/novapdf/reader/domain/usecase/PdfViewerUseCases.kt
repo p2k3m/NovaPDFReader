@@ -13,11 +13,12 @@ import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.data.PdfRenderException
-import com.novapdf.reader.download.RemotePdfDownloader
+import com.novapdf.reader.data.remote.DocumentSourceGateway
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.data.remote.RemoteSourceDiagnostics
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.DomainErrorCode
@@ -351,12 +352,12 @@ class DefaultDocumentSearchUseCase @Inject constructor(
 }
 
 interface RemoteDocumentUseCase {
-    suspend fun download(url: String): Result<Uri>
+    suspend fun fetch(source: DocumentSource): Result<Uri>
 }
 
 @Singleton
 class DefaultRemoteDocumentUseCase @Inject constructor(
-    private val downloader: RemotePdfDownloader,
+    private val gateway: DocumentSourceGateway,
 ) : RemoteDocumentUseCase {
     private val stateLock = Mutex()
     private var circuitOpen: Boolean = false
@@ -364,7 +365,7 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
     private var lastNetworkFailure: RemotePdfException? = null
     private var circuitDiagnostics: RemoteSourceDiagnostics? = null
 
-    override suspend fun download(url: String): Result<Uri> {
+    override suspend fun fetch(source: DocumentSource): Result<Uri> {
         val circuitBreakerFailure = stateLock.withLock {
             if (circuitOpen) {
                 RemotePdfException(
@@ -380,7 +381,7 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
             return Result.failure<Uri>(circuitBreakerFailure).mapDomainFailure()
         }
 
-        val rawResult = downloader.download(url)
+        val rawResult = gateway.fetch(source)
         if (rawResult.isSuccess) {
             stateLock.withLock { resetFailuresLocked() }
             return rawResult.mapDomainFailure()

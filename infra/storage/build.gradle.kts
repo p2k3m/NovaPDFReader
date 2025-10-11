@@ -28,6 +28,7 @@ android {
 
 dependencies {
     implementation(project(":core:cache"))
+    implementation(project(":domain:model"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.pdfium.android)
     implementation(libs.androidx.core.ktx)
