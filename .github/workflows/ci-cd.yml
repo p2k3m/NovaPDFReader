@@ -854,6 +854,17 @@ jobs:
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
+          watchdog_log="$RUNNER_TEMP/emulator-watchdog.log"
+          echo "EMULATOR_WATCHDOG_LOG=$watchdog_log" >> "$GITHUB_ENV"
+
+          if [ -x "${GITHUB_WORKSPACE}/tools/emulator_watchdog.sh" ]; then
+            nohup "${GITHUB_WORKSPACE}/tools/emulator_watchdog.sh" "$emulator_pid" emulator-5554 900 600 60 >"$watchdog_log" 2>&1 &
+            watchdog_pid=$!
+            echo "EMULATOR_WATCHDOG_PID=$watchdog_pid" >> "$GITHUB_ENV"
+          else
+            echo "Watchdog script not found or not executable; skipping watchdog startup" >&2
+          fi
+
           device_timeout=0
           device_deadline=$((15 * 60))
           while true; do
@@ -1905,6 +1916,29 @@ jobs:
       - name: Stop emulator
         if: always()
         run: adb -s emulator-5554 emu kill || true
+      - name: Stop emulator watchdog
+        if: always()
+        run: |
+          set -euo pipefail
+
+          status=0
+
+          if [ -n "${EMULATOR_WATCHDOG_PID:-}" ]; then
+            if ! wait "$EMULATOR_WATCHDOG_PID"; then
+              status=$?
+            fi
+          fi
+
+          if [ -n "${EMULATOR_WATCHDOG_LOG:-}" ] && [ -f "$EMULATOR_WATCHDOG_LOG" ]; then
+            echo "===== emulator watchdog log ====="
+            cat "$EMULATOR_WATCHDOG_LOG"
+            echo "================================="
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Emulator watchdog exited with status $status" >&2
+            exit "$status"
+          fi
       - name: Bundle release app
         if: env.UNIT_TESTS_PASSED == 'true'
         run: ./gradlew bundleRelease --stacktrace
