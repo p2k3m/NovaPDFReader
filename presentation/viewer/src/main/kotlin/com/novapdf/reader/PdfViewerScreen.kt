@@ -5,7 +5,7 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.util.Size
 import android.util.Patterns
-import android.text.format.Formatter
+import android.text.format.Formatter as AndroidFormatter
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.annotation.StringRes
@@ -147,6 +147,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
+import android.text.format.Formatter
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -222,6 +223,8 @@ fun PdfViewerRoute(
         onOpenCloudDocument = onOpenCloudDocument,
         onOpenRemoteDocument = onOpenRemoteDocument,
         onDismissError = onDismissError,
+        onConfirmLargeDownload = { viewModel.confirmLargeRemoteDownload() },
+        onDismissLargeDownload = { viewModel.dismissLargeRemoteDownload() },
         onPageChange = { viewModel.onPageFocused(it) },
         onStrokeFinished = { viewModel.addAnnotation(it) },
         onSaveAnnotations = { viewModel.persistAnnotations() },
@@ -254,6 +257,8 @@ fun PdfViewerScreen(
     onOpenCloudDocument: () -> Unit,
     onOpenRemoteDocument: (DocumentSource) -> Unit,
     onDismissError: () -> Unit,
+    onConfirmLargeDownload: () -> Unit,
+    onDismissLargeDownload: () -> Unit,
     onPageChange: (Int) -> Unit,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     onSaveAnnotations: () -> Unit,
@@ -540,6 +545,14 @@ fun PdfViewerScreen(
                     showUrlDialog = false
                     onOpenRemoteDocument(source)
                 }
+            )
+        }
+
+        state.pendingLargeDownload?.let { pending ->
+            LargeDownloadDialog(
+                pending = pending,
+                onConfirm = onConfirmLargeDownload,
+                onDismiss = onDismissLargeDownload,
             )
         }
 
@@ -917,6 +930,52 @@ private fun DocumentUrlDialog(
                 }
             }) {
                 Text(text = stringResource(id = R.string.action_open))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = R.string.action_cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun LargeDownloadDialog(
+    pending: PendingLargeDownload,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val formattedSize = remember(pending.sizeBytes) {
+        pending.sizeBytes.takeIf { it > 0L }
+            ?.let { size -> AndroidFormatter.formatShortFileSize(context, size) }
+    }
+    val formattedLimit = remember(pending.maxBytes) {
+        AndroidFormatter.formatShortFileSize(context, pending.maxBytes)
+    }
+    val body = remember(formattedSize, formattedLimit) {
+        if (formattedSize != null) {
+            context.getString(
+                R.string.remote_large_pdf_body_with_size,
+                formattedSize,
+                formattedLimit,
+            )
+        } else {
+            context.getString(
+                R.string.remote_large_pdf_body_unknown,
+                formattedLimit,
+            )
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(id = R.string.remote_large_pdf_title)) },
+        text = { Text(text = body) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(text = stringResource(id = R.string.remote_large_pdf_confirm))
             }
         },
         dismissButton = {

@@ -32,6 +32,8 @@ class PdfViewerScreenTest {
                     onOpenCloudDocument = {},
                     onOpenRemoteDocument = { _ -> },
                     onDismissError = {},
+                    onConfirmLargeDownload = {},
+                    onDismissLargeDownload = {},
                     onPageChange = {},
                     onStrokeFinished = {},
                     onSaveAnnotations = {},
