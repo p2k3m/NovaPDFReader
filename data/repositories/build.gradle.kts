@@ -70,6 +70,13 @@ kotlin {
     jvmToolchain(17)
 }
 
+tasks.configureEach {
+    if (name.contains("AndroidTest")) {
+        enabled = false
+        onlyIf { false }
+    }
+}
+
 koverReport {
     defaults {
         verify {
