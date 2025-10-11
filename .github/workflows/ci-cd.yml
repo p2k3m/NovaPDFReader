@@ -1511,26 +1511,20 @@ jobs:
           fi
 
           if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
-            if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
-              readarray -t metadata_fields < <(python3 <<'PY'
-import base64
-import json
-import sys
+              if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
+                python_script=$'import base64\nimport json\nimport sys\n\n'
+                python_script+=$'data = json.load(sys.stdin)\n'
+                python_script+=$'size = data.get("ContentLength")\n'
+                python_script+=$'checksum = data.get("ChecksumSHA256") or ""\n\n'
+                python_script+=$'if checksum:\n'
+                python_script+=$'    try:\n'
+                python_script+=$'        checksum = base64.b64decode(checksum).hex()\n'
+                python_script+=$'    except Exception:\n'
+                python_script+=$'        checksum = ""\n\n'
+                python_script+=$'print("" if size is None else size)\n'
+                python_script+=$'print(checksum)\n'
 
-data = json.load(sys.stdin)
-size = data.get("ContentLength")
-checksum = data.get("ChecksumSHA256") or ""
-
-if checksum:
-    try:
-        checksum = base64.b64decode(checksum).hex()
-    except Exception:
-        checksum = ""
-
-print("" if size is None else size)
-print(checksum)
-PY
-<<< "$metadata_json")
+                readarray -t metadata_fields < <(python3 -c "$python_script" <<< "$metadata_json")
               if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
                 echo "::notice::Using AI.pdf size ${metadata_fields[0]} bytes from S3 metadata as the expected value."
                 expected_size="${metadata_fields[0]}"
