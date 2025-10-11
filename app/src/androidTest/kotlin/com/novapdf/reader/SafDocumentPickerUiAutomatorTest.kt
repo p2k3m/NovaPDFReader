@@ -8,9 +8,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
+import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,6 +23,7 @@ import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
+import com.novapdf.reader.ui.automation.UiAutomatorTags
 import java.io.File
 import java.io.InputStream
 import java.util.Locale
@@ -52,6 +53,8 @@ class SafDocumentPickerUiAutomatorTest {
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
+    private val targetPackage: String
+        get() = appContext.packageName
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -105,20 +108,26 @@ class SafDocumentPickerUiAutomatorTest {
     }
 
     private fun dismissOnboardingIfPresent() {
-        val skipButton = device.wait(Until.findObject(By.textContains("Skip")), SHORT_WAIT_TIMEOUT)
+        val skipButton = device.wait(
+            Until.findObject(By.res(targetPackage, UiAutomatorTags.ONBOARDING_SKIP_BUTTON)),
+            SHORT_WAIT_TIMEOUT
+        )
         skipButton?.click()
         device.waitForIdle()
     }
 
     private fun openSourceDialog() {
-        val openButton = device.wait(Until.findObject(By.text("Open document")), UI_WAIT_TIMEOUT)
+        val openButton = device.wait(
+            Until.findObject(By.res(targetPackage, UiAutomatorTags.HOME_OPEN_DOCUMENT_BUTTON)),
+            UI_WAIT_TIMEOUT
+        )
         openButton?.click() ?: throw AssertionError("Unable to locate Open document button")
         device.waitForIdle()
     }
 
     private fun launchCloudPicker() {
         val cloudOption = device.wait(
-            Until.findObject(By.text("Select from Drive or OneDrive")),
+            Until.findObject(By.res(targetPackage, UiAutomatorTags.SOURCE_CLOUD_BUTTON)),
             UI_WAIT_TIMEOUT
         ) ?: throw AssertionError("Cloud document option not visible")
         cloudOption.click()
@@ -136,21 +145,19 @@ class SafDocumentPickerUiAutomatorTest {
             ?: throw AssertionError("Document $displayName not listed in Downloads")
         documentItem.click()
 
-        val openAction = device.wait(
-            Until.findObject(
-                By.textMatches("(?i)(open|select|allow)")
-            ),
-            SHORT_WAIT_TIMEOUT
-        )
+        val openAction = listOf("Open", "Select", "Allow")
+            .firstNotNullOfOrNull { label ->
+                device.wait(Until.findObject(By.textContains(label)), SHORT_WAIT_TIMEOUT)
+            }
         openAction?.click()
         device.waitForIdle()
     }
 
     private fun maybeAcceptDocumentsUiPermission() {
-        val allowButton = device.wait(
-            Until.findObject(By.textMatches("(?i)(allow|while using the app)")),
-            SHORT_WAIT_TIMEOUT
-        )
+        val allowButton = listOf("Allow", "While using the app")
+            .firstNotNullOfOrNull { label ->
+                device.wait(Until.findObject(By.textContains(label)), SHORT_WAIT_TIMEOUT)
+            }
         allowButton?.click()
         device.waitForIdle()
     }
@@ -172,10 +179,28 @@ class SafDocumentPickerUiAutomatorTest {
 
     private fun waitForDocumentToLoad() {
         val adaptiveFlowVisible = device.wait(
-            Until.hasObject(By.textContains("Adaptive Flow")),
+            Until.hasObject(adaptiveFlowStatusSelector()),
             UI_WAIT_TIMEOUT
         )
         assertTrue("Adaptive Flow indicator should appear after loading document", adaptiveFlowVisible)
+    }
+
+    private fun adaptiveFlowStatusSelector() =
+        By.res(targetPackage, UiAutomatorTags.ADAPTIVE_FLOW_STATUS_CHIP)
+
+    private fun waitUntil(
+        timeoutMs: Long,
+        checkIntervalMs: Long = POLL_INTERVAL_MS,
+        condition: () -> Boolean
+    ): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (condition()) {
+                return true
+            }
+            device.waitForIdle(checkIntervalMs)
+        }
+        return condition()
     }
 
     private fun captureOpenedDocumentId(): String? {
@@ -188,20 +213,12 @@ class SafDocumentPickerUiAutomatorTest {
 
     private fun awaitPersistedPermission(documentId: String): Boolean {
         val resolver = appContext.contentResolver
-        val deadline = SystemClock.elapsedRealtime() + UI_WAIT_TIMEOUT
-        while (SystemClock.elapsedRealtime() < deadline) {
-            val persisted = resolver.persistedUriPermissions
-            val matched = persisted.any { permission ->
+        return waitUntil(UI_WAIT_TIMEOUT) {
+            resolver.persistedUriPermissions.any { permission ->
                 permission.uri.toString() == documentId &&
-                    permission.isReadPermission &&
-                    permission.isPersisted
+                    permission.isReadPermission
             }
-            if (matched) {
-                return true
-            }
-            SystemClock.sleep(200)
         }
-        return false
     }
 
     private fun grantStoragePermissions() {
@@ -317,6 +334,7 @@ class SafDocumentPickerUiAutomatorTest {
         private const val DOCUMENTS_UI_PACKAGE = "com.android.documentsui"
         private const val UI_WAIT_TIMEOUT = 10_000L
         private const val SHORT_WAIT_TIMEOUT = 3_000L
+        private const val POLL_INTERVAL_MS = 200L
     }
 }
 

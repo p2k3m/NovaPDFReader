@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,6 +13,8 @@ import androidx.test.uiautomator.Until
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
+import com.novapdf.reader.presentation.viewer.R
+import com.novapdf.reader.ui.automation.UiAutomatorTags
 import com.novapdf.reader.work.DocumentMaintenanceWorker
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
@@ -42,6 +45,8 @@ class PdfViewerUiAutomatorTest {
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
+    private val targetPackage: String
+        get() = appContext.packageName
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -80,10 +85,17 @@ class PdfViewerUiAutomatorTest {
 
         adaptiveFlowManager(appContext).overrideSensitivityForTesting(1.6f)
 
-        val adaptiveFlowActive = device.wait(
-            Until.hasObject(By.textContains("Adaptive Flow Active")),
-            UI_WAIT_TIMEOUT
+        val statusSelector = adaptiveFlowStatusSelector()
+        val chipVisible = device.wait(Until.hasObject(statusSelector), UI_WAIT_TIMEOUT)
+        assertTrue(
+            "Adaptive Flow status chip should be visible",
+            chipVisible
         )
+
+        val activeDescription = appContext.getString(R.string.adaptive_flow_on)
+        val adaptiveFlowActive = waitUntil(UI_WAIT_TIMEOUT) {
+            device.findObject(statusSelector)?.contentDescription == activeDescription
+        }
         assertTrue(
             "Adaptive Flow status chip should report Active",
             adaptiveFlowActive
@@ -99,7 +111,10 @@ class PdfViewerUiAutomatorTest {
     fun savingAnnotationsSchedulesImmediateWork() = runBlocking {
         openDocumentInViewer()
 
-        val saveButton = device.wait(Until.findObject(By.desc("Save annotations")), UI_WAIT_TIMEOUT)
+        val saveButton = device.wait(
+            Until.findObject(By.res(targetPackage, UiAutomatorTags.SAVE_ANNOTATIONS_ACTION)),
+            UI_WAIT_TIMEOUT
+        )
         assertNotNull("Save annotations action should be visible", saveButton)
         saveButton.click()
         device.waitForIdle()
@@ -125,7 +140,7 @@ class PdfViewerUiAutomatorTest {
             activity.openDocumentForTest(documentUri)
         }
         val statusVisible = device.wait(
-            Until.hasObject(By.textContains("Adaptive Flow")),
+            Until.hasObject(adaptiveFlowStatusSelector()),
             UI_WAIT_TIMEOUT
         )
         assertTrue(
@@ -134,6 +149,9 @@ class PdfViewerUiAutomatorTest {
         )
         device.waitForIdle()
     }
+
+    private fun adaptiveFlowStatusSelector() =
+        By.res(targetPackage, UiAutomatorTags.ADAPTIVE_FLOW_STATUS_CHIP)
 
     private fun ensureWorkManagerInitialized(context: Context) {
         val appContext = context.applicationContext
@@ -145,7 +163,23 @@ class PdfViewerUiAutomatorTest {
         }
     }
 
+    private fun waitUntil(
+        timeoutMs: Long,
+        checkIntervalMs: Long = POLL_INTERVAL_MS,
+        condition: () -> Boolean
+    ): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (condition()) {
+                return true
+            }
+            device.waitForIdle(checkIntervalMs)
+        }
+        return condition()
+    }
+
     private companion object {
         private const val UI_WAIT_TIMEOUT = 5_000L
+        private const val POLL_INTERVAL_MS = 200L
     }
 }
