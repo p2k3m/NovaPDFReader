@@ -14,6 +14,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,6 +76,7 @@ open class ReaderActivity : ComponentActivity() {
     lateinit var useCases: PdfViewerUseCases
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         useComposeUi = resources.getBoolean(R.bool.config_use_compose)
         if (useComposeUi) {

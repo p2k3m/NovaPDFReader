@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.NovaPDFReader" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.NovaPDFReader" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_pdf</item>
+        <item name="windowSplashScreenBackground">@color/splash_screen_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.NovaPDFReader.Main</item>
+    </style>
+
+    <style name="Theme.NovaPDFReader.Main" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
 </resources>
