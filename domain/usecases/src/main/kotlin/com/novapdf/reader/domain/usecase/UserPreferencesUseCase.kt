@@ -12,6 +12,10 @@ interface UserPreferencesUseCase {
     suspend fun setNightModeEnabled(enabled: Boolean)
 
     suspend fun setLastOpenedDocument(uri: String?)
+
+    suspend fun setLastDocumentViewport(pageIndex: Int, zoom: Float)
+
+    suspend fun clearLastDocumentViewport()
 }
 
 @Singleton
@@ -27,5 +31,13 @@ class DefaultUserPreferencesUseCase @Inject constructor(
 
     override suspend fun setLastOpenedDocument(uri: String?) {
         repository.setLastOpenedDocument(uri)
+    }
+
+    override suspend fun setLastDocumentViewport(pageIndex: Int, zoom: Float) {
+        repository.setLastDocumentViewport(pageIndex, zoom)
+    }
+
+    override suspend fun clearLastDocumentViewport() {
+        repository.clearLastDocumentViewport()
     }
 }

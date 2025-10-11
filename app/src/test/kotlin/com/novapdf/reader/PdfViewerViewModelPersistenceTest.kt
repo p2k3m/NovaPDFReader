@@ -1,21 +1,20 @@
 package com.novapdf.reader
 
+import android.app.Application
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.asTestMainDispatcher
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
-import android.net.Uri
-import com.novapdf.reader.data.remote.DocumentSourceGateway
-import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
 import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
 import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
-import com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase
+import com.novapdf.reader.domain.usecase.DefaultBuildSearchIndexUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentMaintenanceUseCase
 import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
-import com.novapdf.reader.domain.usecase.DefaultBuildSearchIndexUseCase
 import com.novapdf.reader.domain.usecase.DefaultOpenDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
@@ -24,6 +23,8 @@ import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
+import com.novapdf.reader.model.BitmapMemoryLevel
+import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchIndexingState
@@ -33,13 +34,15 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -51,9 +54,10 @@ import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-class PdfViewerViewModelRenderProgressTest {
+@Config(application = TestPdfApp::class)
+class PdfViewerViewModelPersistenceTest {
 
-    private val dispatcher = UnconfinedTestDispatcher()
+    private val dispatcher = StandardTestDispatcher()
     private val mainDispatcher = dispatcher.asTestMainDispatcher()
 
     @Before
@@ -67,8 +71,32 @@ class PdfViewerViewModelRenderProgressTest {
     }
 
     @Test
-    @Config(application = TestPdfApp::class)
-    fun `uiState mirrors repository render progress`() = runTest {
+    fun `onPageSettled throttles viewport persistence`() = runTest {
+        val (viewModel, preferencesUseCase, sessionFlow) = createViewModel()
+        val session = PdfDocumentSession(
+            documentId = "doc",
+            uri = Uri.parse("file://doc"),
+            pageCount = 5,
+            document = mock(),
+            fileDescriptor = mock(),
+        )
+        sessionFlow.value = session
+        advanceUntilIdle()
+
+        viewModel.onPageSettled(1)
+        viewModel.onPageSettled(2)
+
+        advanceTimeBy(700)
+        assertTrue(preferencesUseCase.lastViewportRequests.isEmpty())
+
+        advanceTimeBy(100)
+        advanceUntilIdle()
+
+        assertEquals(listOf(2 to 1f), preferencesUseCase.lastViewportRequests)
+    }
+
+    private suspend fun createViewModel(): Triple<PdfViewerViewModel, TestUserPreferencesUseCase, MutableStateFlow<PdfDocumentSession?>> {
+        val context = ApplicationProvider.getApplicationContext<Application>()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
@@ -77,18 +105,34 @@ class PdfViewerViewModelRenderProgressTest {
         val searchCoordinator = mock<DocumentSearchCoordinator>()
 
         val renderProgress = MutableStateFlow<PdfRenderProgress>(PdfRenderProgress.Idle)
+        val sessionFlow = MutableStateFlow<PdfDocumentSession?>(null)
+        val outlineFlow = MutableStateFlow<List<PdfOutlineNode>>(emptyList())
+        val bitmapStats = MutableStateFlow(
+            BitmapMemoryStats(
+                currentBytes = 0,
+                peakBytes = 0,
+                warnThresholdBytes = 0,
+                criticalThresholdBytes = 0,
+                level = BitmapMemoryLevel.NORMAL,
+            )
+        )
+
         whenever(pdfRepository.renderProgress).thenReturn(renderProgress)
-        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
-        whenever(pdfRepository.outline).thenReturn(MutableStateFlow<List<PdfOutlineNode>>(emptyList()))
-        whenever(searchCoordinator.indexingState).thenReturn(MutableStateFlow(SearchIndexingState.Idle))
+        whenever(pdfRepository.session).thenReturn(sessionFlow)
+        whenever(pdfRepository.outline).thenReturn(outlineFlow)
+        whenever(pdfRepository.bitmapMemory).thenReturn(bitmapStats)
 
         whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
         whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+
+        val indexingState = MutableStateFlow<SearchIndexingState>(SearchIndexingState.Idle)
+        whenever(searchCoordinator.indexingState).thenReturn(indexingState)
 
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
         whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
         whenever(adaptiveFlowManager.frameIntervalMillis).thenReturn(MutableStateFlow(16.6f))
+        whenever(adaptiveFlowManager.uiUnderLoad).thenReturn(MutableStateFlow(false))
 
         val crashReporter = object : CrashReporter {
             override fun install() = Unit
@@ -96,47 +140,30 @@ class PdfViewerViewModelRenderProgressTest {
             override fun logBreadcrumb(message: String) = Unit
         }
 
-        val openDocumentUseCase = DefaultOpenDocumentUseCase(pdfRepository)
-        val renderPageUseCase = DefaultRenderPageUseCase(pdfRepository)
-        val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)
-        val buildIndexUseCase = DefaultBuildSearchIndexUseCase(searchCoordinator)
-
-        val documentSourceGateway = object : DocumentSourceGateway {
-            override suspend fun fetch(source: DocumentSource): Result<Uri> {
-                return Result.failure(RemotePdfException(RemotePdfException.Reason.NETWORK))
-            }
+        val documentSourceGateway = object : com.novapdf.reader.data.remote.DocumentSourceGateway {
+            override suspend fun fetch(source: DocumentSource) = Result.failure<Uri>(IllegalStateException("unsupported"))
         }
 
         val preferencesUseCase = TestUserPreferencesUseCase()
+
         val useCases = DefaultPdfViewerUseCases(
             document = DefaultPdfDocumentUseCase(pdfRepository),
-            openDocument = openDocumentUseCase,
-            renderPage = renderPageUseCase,
-            renderTile = renderTileUseCase,
+            openDocument = DefaultOpenDocumentUseCase(pdfRepository),
+            renderPage = DefaultRenderPageUseCase(pdfRepository),
+            renderTile = DefaultRenderTileUseCase(pdfRepository),
             annotations = DefaultAnnotationUseCase(annotationRepository),
             bookmarks = DefaultBookmarkUseCase(bookmarkManager),
             search = DefaultDocumentSearchUseCase(searchCoordinator),
-            buildSearchIndex = buildIndexUseCase,
+            buildSearchIndex = DefaultBuildSearchIndexUseCase(searchCoordinator),
             remoteDocuments = DefaultRemoteDocumentUseCase(documentSourceGateway),
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
-            crashReporting = DefaultCrashReportingUseCase(crashReporter),
+            crashReporting = com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager),
             preferences = preferencesUseCase,
         )
 
-        val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
-        val viewModel = PdfViewerViewModel(
-            app,
-            useCases,
-            TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
-        )
-
-        renderProgress.value = PdfRenderProgress.Rendering(pageIndex = 2, progress = 0.4f)
-        advanceUntilIdle()
-        assertEquals(PdfRenderProgress.Rendering(2, 0.4f), viewModel.uiState.value.renderProgress)
-
-        renderProgress.value = PdfRenderProgress.Idle
-        advanceUntilIdle()
-        assertEquals(PdfRenderProgress.Idle, viewModel.uiState.value.renderProgress)
+        val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
+        val viewModel = PdfViewerViewModel(context, useCases, dispatchers)
+        return Triple(viewModel, preferencesUseCase, sessionFlow)
     }
 }

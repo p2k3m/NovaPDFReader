@@ -217,6 +217,7 @@ class PdfViewerViewModelCacheAndErrorTest {
             }
         }
 
+        val preferencesUseCase = TestUserPreferencesUseCase()
         val useCases = DefaultPdfViewerUseCases(
             document = DefaultPdfDocumentUseCase(pdfRepository),
             openDocument = DefaultOpenDocumentUseCase(pdfRepository),
@@ -230,6 +231,7 @@ class PdfViewerViewModelCacheAndErrorTest {
             maintenance = DefaultDocumentMaintenanceUseCase(maintenanceScheduler),
             crashReporting = DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager),
+            preferences = preferencesUseCase,
         )
 
         val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
