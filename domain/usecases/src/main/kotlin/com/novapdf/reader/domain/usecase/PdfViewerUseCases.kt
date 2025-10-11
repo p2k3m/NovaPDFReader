@@ -388,6 +388,7 @@ interface AdaptiveFlowUseCase {
     val swipeSensitivity: StateFlow<Float>
     val preloadTargets: StateFlow<List<Int>>
     val uiUnderLoad: StateFlow<Boolean>
+    val frameIntervalMillis: StateFlow<Float>
 
     fun start()
     fun stop()
@@ -407,6 +408,8 @@ class DefaultAdaptiveFlowUseCase @Inject constructor(
         get() = manager.preloadTargets
     override val uiUnderLoad: StateFlow<Boolean>
         get() = manager.uiUnderLoad
+    override val frameIntervalMillis: StateFlow<Float>
+        get() = manager.frameIntervalMillis
 
     override fun start() = manager.start()
     override fun stop() = manager.stop()
