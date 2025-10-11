@@ -21,6 +21,7 @@ import com.novapdf.reader.data.PdfDocumentSession
 import com.novapdf.reader.data.PdfOpenException
 import com.novapdf.reader.data.PdfRenderException
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.data.remote.RemoteSourceDiagnostics
 import com.novapdf.reader.domain.usecase.BuildSearchIndexRequest
 import com.novapdf.reader.domain.usecase.OpenDocumentRequest
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
@@ -598,22 +599,76 @@ open class PdfViewerViewModel @Inject constructor(
     fun reportRemoteOpenFailure(throwable: Throwable, sourceUrl: String? = null) {
         viewModelScope.launch {
             resetTransientStatus()
+            val remote = throwable.findCause<RemotePdfException>()
             if (throwable !is CancellationException) {
                 val metadata = buildMap {
                     put("stage", "remoteDownload")
                     sourceUrl?.let { put("url", it) }
-                    if (throwable is RemotePdfException) {
-                        put("reason", throwable.reason.name)
+                    remote?.let { error ->
+                        put("reason", error.reason.name)
+                        error.diagnostics?.let { diagnostics ->
+                            put("failureCount", diagnostics.failureCount.toString())
+                            diagnostics.lastFailureReason?.let { lastReason ->
+                                put("lastFailureReason", lastReason.name)
+                            }
+                            diagnostics.lastFailureMessage
+                                ?.let(::sanitizeDiagnosticsMessage)
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { put("lastFailureMessage", it) }
+                        }
                     }
                 }
                 crashReportingUseCase.recordNonFatal(throwable, metadata)
             }
-            val messageRes = resolveErrorMessageRes(
-                throwable = throwable,
-                pdfFallback = R.string.error_remote_open_failed,
-            )
-            showError(app.getString(messageRes))
+
+            val message = if (remote?.reason == RemotePdfException.Reason.CIRCUIT_OPEN) {
+                val diagnostics = remote.diagnostics
+                if (diagnostics != null) {
+                    val detail = buildCircuitDiagnosticsDetail(diagnostics)
+                    app.getString(
+                        R.string.error_remote_open_disabled_with_diagnostics,
+                        diagnostics.failureCount,
+                        detail,
+                    )
+                } else {
+                    app.getString(R.string.error_remote_open_disabled)
+                }
+            } else {
+                val messageRes = resolveErrorMessageRes(
+                    throwable = throwable,
+                    pdfFallback = R.string.error_remote_open_failed,
+                )
+                app.getString(messageRes)
+            }
+            showError(message)
         }
+    }
+
+    private fun buildCircuitDiagnosticsDetail(diagnostics: RemoteSourceDiagnostics): String {
+        val reasonLabel = diagnostics.lastFailureReason?.let(::remoteReasonLabel)
+        val message = diagnostics.lastFailureMessage
+            ?.let(::sanitizeDiagnosticsMessage)
+            ?.takeIf { it.isNotBlank() }
+        return when {
+            reasonLabel != null && message != null -> "$reasonLabel: $message"
+            reasonLabel != null -> reasonLabel
+            message != null -> message
+            else -> app.getString(R.string.error_remote_open_diagnostics_unknown)
+        }
+    }
+
+    private fun remoteReasonLabel(reason: RemotePdfException.Reason): String {
+        val resId = when (reason) {
+            RemotePdfException.Reason.NETWORK -> R.string.remote_failure_reason_network
+            RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> R.string.remote_failure_reason_network_retry
+            RemotePdfException.Reason.CORRUPTED -> R.string.remote_failure_reason_corrupted
+            RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.remote_failure_reason_circuit_open
+        }
+        return app.getString(resId)
+    }
+
+    private fun sanitizeDiagnosticsMessage(message: String): String {
+        return message.replace('\n', ' ').replace("\r", " ").trim()
     }
 
     private fun showError(message: String) {
@@ -928,6 +983,7 @@ open class PdfViewerViewModel @Inject constructor(
                 RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED ->
                     R.string.error_remote_open_failed_after_retries
                 RemotePdfException.Reason.NETWORK -> R.string.error_remote_open_failed
+                RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.error_remote_open_disabled
             }
         }
 

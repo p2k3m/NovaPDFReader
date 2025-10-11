@@ -112,6 +112,13 @@
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_remote_open_failed_after_retries">Download failed after multiple attempts. Check your connection and try again.</string>
+    <string name="error_remote_open_disabled">Remote downloads are temporarily disabled for this session after repeated failures. Check your connection and restart the app to try again.</string>
+    <string name="error_remote_open_disabled_with_diagnostics">Remote downloads are temporarily disabled for this session after repeated failures (%1$d). Last error: %2$s.</string>
+    <string name="error_remote_open_diagnostics_unknown">Unknown error</string>
+    <string name="remote_failure_reason_network">Network error</string>
+    <string name="remote_failure_reason_network_retry">Network retry limit reached</string>
+    <string name="remote_failure_reason_corrupted">Corrupted download</string>
+    <string name="remote_failure_reason_circuit_open">Remote downloads disabled</string>
     <string name="error_page_too_large">This page is too large to render at full resolution. Zoom reset to fit the screen.</string>
     <string name="page_render_malformed_placeholder">We couldn’t render this page because the PDF is malformed.</string>
     <string name="remote_pdf_download_started">Downloading PDF…</string>

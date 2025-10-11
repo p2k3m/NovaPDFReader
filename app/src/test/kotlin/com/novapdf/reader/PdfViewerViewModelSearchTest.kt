@@ -53,6 +53,7 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -129,8 +130,18 @@ class PdfViewerViewModelSearchTest {
         )
     }
 
-    private fun getString(resId: Int): String {
-        return ApplicationProvider.getApplicationContext<TestPdfApp>().getString(resId)
+    private fun getString(resId: Int, vararg args: Any): String {
+        return ApplicationProvider.getApplicationContext<TestPdfApp>().getString(resId, *args)
+    }
+
+    private fun remoteFailureReasonLabel(reason: RemotePdfException.Reason): String {
+        val resId = when (reason) {
+            RemotePdfException.Reason.NETWORK -> R.string.remote_failure_reason_network
+            RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> R.string.remote_failure_reason_network_retry
+            RemotePdfException.Reason.CORRUPTED -> R.string.remote_failure_reason_corrupted
+            RemotePdfException.Reason.CIRCUIT_OPEN -> R.string.remote_failure_reason_circuit_open
+        }
+        return getString(resId)
     }
 
     @Test
@@ -384,6 +395,76 @@ class PdfViewerViewModelSearchTest {
             getString(R.string.error_remote_open_failed_after_retries),
             (status as DocumentStatus.Error).message
         )
+    }
+
+    @Test
+    @Config(application = TestPdfApp::class)
+    fun `remote circuit breaker disables remote downloads after repeated failures`() = runTest {
+        val annotationRepository = mock<AnnotationRepository>()
+        val pdfRepository = mock<PdfDocumentRepository>()
+        val adaptiveFlowManager = mock<AdaptiveFlowManager>()
+        val bookmarkManager = mock<BookmarkManager>()
+        val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
+        val searchCoordinator = mock<DocumentSearchCoordinator>()
+        val downloadManager = mock<PdfDownloadManager>()
+        val crashReporter = RecordingCrashReporter()
+
+        whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
+        whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
+        whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(annotationRepository.annotationsForDocument(any())).thenReturn(emptyList())
+        whenever(bookmarkManager.bookmarks(any())).thenReturn(emptyList())
+        whenever(pdfRepository.outline).thenReturn(MutableStateFlow(emptyList()))
+        whenever(pdfRepository.renderProgress).thenReturn(MutableStateFlow(PdfRenderProgress.Idle))
+        whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(null))
+
+        val failingUrl = "https://example.com/bad.pdf"
+        whenever(downloadManager.download(eq(failingUrl))).thenReturn(Result.failure(IllegalStateException("bad net")))
+
+        val viewModel = createViewModel(
+            annotationRepository,
+            pdfRepository,
+            adaptiveFlowManager,
+            bookmarkManager,
+            maintenanceScheduler,
+            searchCoordinator,
+            downloadManager,
+            crashReporter,
+        )
+
+        repeat(3) {
+            viewModel.openRemoteDocument(failingUrl)
+            advanceUntilIdle()
+        }
+
+        verify(downloadManager, times(12)).download(eq(failingUrl))
+
+        val status = viewModel.uiState.value.documentStatus
+        assertTrue(status is DocumentStatus.Error)
+        val detail = remoteFailureReasonLabel(RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED) + ": bad net"
+        val expectedMessage = getString(
+            R.string.error_remote_open_disabled_with_diagnostics,
+            3,
+            detail,
+        )
+        assertEquals(expectedMessage, (status as DocumentStatus.Error).message)
+
+        viewModel.openRemoteDocument(failingUrl)
+        advanceUntilIdle()
+        verify(downloadManager, times(12)).download(eq(failingUrl))
+
+        val repeatedStatus = viewModel.uiState.value.documentStatus
+        assertTrue(repeatedStatus is DocumentStatus.Error)
+        assertEquals(expectedMessage, (repeatedStatus as DocumentStatus.Error).message)
+
+        val lastMetadata = crashReporter.recordedMetadata.lastOrNull()
+        assertNotNull(lastMetadata)
+        lastMetadata!!
+        assertEquals("remoteDownload", lastMetadata["stage"])
+        assertEquals("CIRCUIT_OPEN", lastMetadata["reason"])
+        assertEquals("3", lastMetadata["failureCount"])
+        assertEquals("NETWORK_RETRY_EXHAUSTED", lastMetadata["lastFailureReason"])
+        assertEquals("bad net", lastMetadata["lastFailureMessage"])
     }
 
     @Test
@@ -675,4 +756,15 @@ class PdfViewerViewModelSearchTest {
         verify(pdfRepository, never()).prefetchPages(any(), any())
     }
 
+    private class RecordingCrashReporter : CrashReporter {
+        val recordedMetadata = mutableListOf<Map<String, String>>()
+
+        override fun install() = Unit
+
+        override fun recordNonFatal(throwable: Throwable, metadata: Map<String, String>) {
+            recordedMetadata += metadata
+        }
+
+        override fun logBreadcrumb(message: String) = Unit
+    }
 }
