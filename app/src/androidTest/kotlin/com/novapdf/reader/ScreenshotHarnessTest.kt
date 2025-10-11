@@ -68,6 +68,7 @@ class ScreenshotHarnessTest {
     private lateinit var handshakePackageName: String
     private var harnessEnabled: Boolean = false
     private var programmaticScreenshotsEnabled: Boolean = false
+    private var metricsRecorder: PerformanceMetricsRecorder? = null
 
     @Before
     fun setUp() = runBlocking {
@@ -88,6 +89,7 @@ class ScreenshotHarnessTest {
         harnessEnabled = true
         programmaticScreenshotsEnabled = shouldCaptureProgrammaticScreenshots()
         logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
+        metricsRecorder = PerformanceMetricsRecorder(appContext)
         ensureWorkManagerInitialized(appContext)
         logHarnessInfo("Installing thousand-page stress document for screenshot harness")
         documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
@@ -100,6 +102,10 @@ class ScreenshotHarnessTest {
         if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
             return@runBlocking
         }
+        metricsRecorder?.finish()?.let { report ->
+            publishPerformanceMetrics(report)
+        }
+        metricsRecorder = null
         cancelWorkManagerJobs()
         withContext(Dispatchers.IO) { cleanupFlags() }
     }
@@ -180,6 +186,7 @@ class ScreenshotHarnessTest {
                 )
                 lastLog = now
             }
+            metricsRecorder?.sample()
             Thread.sleep(250)
         }
 
@@ -192,6 +199,40 @@ class ScreenshotHarnessTest {
             }
         }
         logHarnessInfo("Screenshot harness handshake completed; flags cleared")
+    }
+
+    private fun publishPerformanceMetrics(report: PerformanceMetricsReport) {
+        val csv = buildString {
+            appendLine("metric,value,unit,details")
+            appendLine("time_to_first_page,${report.timeToFirstPageMs},ms,")
+            val peakBytes = report.peakTotalPssKb.toLong() * 1024L
+            appendLine("peak_memory,${peakBytes},bytes,source=totalPss")
+            appendLine(
+                "dropped_frames,${report.droppedFrames},frames,total_frames=${report.totalFrames}"
+            )
+        }
+        val directories = if (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty()) {
+            handshakeCacheDirs
+        } else {
+            listOfNotNull(if (::appContext.isInitialized) appContext.cacheDir else null)
+        }
+        directories.forEach { directory ->
+            val outputFile = File(directory, CacheFileNames.PERFORMANCE_METRICS_FILE)
+            runCatching { writeHandshakeFlag(outputFile, csv) }
+                .onSuccess {
+                    logHarnessInfo(
+                        "Wrote performance metrics to ${outputFile.absolutePath} " +
+                            "(timeToFirstPage=${report.timeToFirstPageMs}ms peakPss=${report.peakTotalPssKb}KiB " +
+                            "droppedFrames=${report.droppedFrames}/${report.totalFrames})"
+                    )
+                }
+                .onFailure { error ->
+                    logHarnessWarn(
+                        "Unable to write performance metrics to ${outputFile.absolutePath}",
+                        error
+                    )
+                }
+        }
     }
 
     private fun cleanupFlags() {
@@ -484,6 +525,7 @@ class ScreenshotHarnessTest {
 
     private fun openDocumentInViewer() {
         logHarnessInfo("Opening thousand-page document in viewer: $documentUri")
+        metricsRecorder?.start(activityRule.scenario)
         activityRule.scenario.onActivity { activity ->
             activity.openDocumentForTest(documentUri)
         }
@@ -503,6 +545,7 @@ class ScreenshotHarnessTest {
                     DocumentStatus.Idle -> documentReady = state.pageCount > 0
                 }
             }
+            metricsRecorder?.sample()
 
             errorMessage?.let { message ->
                 val snapshotState = snapshot
@@ -517,6 +560,8 @@ class ScreenshotHarnessTest {
                 throw error
             }
             if (documentReady) {
+                metricsRecorder?.markFirstPageRendered()
+                metricsRecorder?.sample()
                 logHarnessInfo(
                     "Thousand-page document finished loading with pageCount=${snapshot?.pageCount}"
                 )
@@ -533,6 +578,7 @@ class ScreenshotHarnessTest {
                 )
                 lastLog = now
             }
+            metricsRecorder?.sample()
             Thread.sleep(250)
         }
 
