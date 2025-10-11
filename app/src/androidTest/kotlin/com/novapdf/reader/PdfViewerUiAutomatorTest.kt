@@ -2,7 +2,6 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -140,7 +139,7 @@ class PdfViewerUiAutomatorTest {
         val appContext = context.applicationContext
         runCatching { WorkManager.getInstance(appContext) }.onFailure {
             val configuration = Configuration.Builder()
-                .setMinimumLoggingLevel(Log.DEBUG)
+                .setMinimumLoggingLevel(android.util.Log.DEBUG)
                 .build()
             WorkManagerTestInitHelper.initializeTestWorkManager(appContext, configuration)
         }

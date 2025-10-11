@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-unit")
     implementation(libs.androidx.core)
     implementation(libs.androidx.annotation)
+    implementation(project(":infra:logging"))
 
     api(libs.errorprone.annotations)
 }

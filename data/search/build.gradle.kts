@@ -32,6 +32,7 @@ dependencies {
     api(project(":domain:model"))
     implementation(project(":data:repositories"))
     implementation(project(":core:cache"))
+    implementation(project(":infra:logging"))
     api(libs.kotlinx.coroutines.core)
 
     implementation(libs.androidx.annotation)

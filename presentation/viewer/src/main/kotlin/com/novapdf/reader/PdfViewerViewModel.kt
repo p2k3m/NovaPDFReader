@@ -5,7 +5,7 @@ import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import android.util.Size
 import android.util.LruCache
 import android.os.Build
@@ -894,7 +894,7 @@ open class PdfViewerViewModel @Inject constructor(
         searchJob = viewModelScope.launch(indexDispatcher) {
             val session = documentUseCase.session.value ?: return@launch
             val results = runCatching { searchUseCase.search(session, query) }
-                .onFailure { throwable -> Log.e("PdfViewerViewModel", "Search failed", throwable) }
+                .onFailure { throwable -> NovaLog.e("PdfViewerViewModel", "Search failed", throwable) }
                 .getOrDefault(emptyList())
             updateUiState { it.copy(searchResults = results) }
         }

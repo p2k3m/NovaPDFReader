@@ -3,7 +3,7 @@ package com.novapdf.reader
 import android.content.Context
 import android.util.Base64
 import android.util.Base64InputStream
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.core.net.toUri
 import androidx.test.platform.app.InstrumentationRegistry
 import com.novapdf.reader.BuildConfig
@@ -30,7 +30,7 @@ class TestDocumentFixtures @Inject constructor() {
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
         withContext(Dispatchers.IO) {
             val storageCandidates = resolveStorageCandidates(context)
-            Log.i(
+            NovaLog.i(
                 TAG,
                 "Resolved ${storageCandidates.size} candidate directories for thousand-page PDF: " +
                     storageCandidates.joinToString { candidate ->
@@ -53,16 +53,16 @@ class TestDocumentFixtures @Inject constructor() {
 
             val destination = File(destinationDirectory, CacheFileNames.THOUSAND_PAGE_CACHE)
             destination.parentFile?.mkdirs()
-            Log.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
+            NovaLog.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
             createThousandPagePdf(destination)
 
             if (!validateThousandPagePdf(destination)) {
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Validation failed after generating thousand-page PDF at ${destination.absolutePath}; removing artifact"
                 )
                 if (!destination.delete()) {
-                    Log.w(
+                    NovaLog.w(
                         TAG,
                         "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after failed validation"
                     )
@@ -70,7 +70,7 @@ class TestDocumentFixtures @Inject constructor() {
                 throw IOException("Generated thousand-page PDF failed validation")
             }
 
-            Log.i(
+            NovaLog.i(
                 TAG,
                 "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)"
             )
@@ -118,7 +118,7 @@ class TestDocumentFixtures @Inject constructor() {
             if (destinationDirectory != null && destinationDirectory != candidate.directory) {
                 migrateFixture(source, destinationDirectory)?.let { return it }
             }
-            Log.i(
+            NovaLog.i(
                 TAG,
                 "Reusing cached thousand-page PDF at ${source.absolutePath} (size=${source.length()} bytes)"
             )
@@ -146,13 +146,13 @@ class TestDocumentFixtures @Inject constructor() {
 
         targetDirectories.forEach { directory ->
             if (!directory.exists() && !directory.mkdirs()) {
-                Log.w(TAG, "Unable to prepare harness cache directory at ${directory.absolutePath}")
+                NovaLog.w(TAG, "Unable to prepare harness cache directory at ${directory.absolutePath}")
                 return@forEach
             }
 
             val destination = File(directory, CacheFileNames.THOUSAND_PAGE_CACHE)
             if (copyFixture(file, destination)) {
-                Log.i(
+                NovaLog.i(
                     TAG,
                     "Relocated thousand-page PDF to ${destination.absolutePath} for application accessibility"
                 )
@@ -160,7 +160,7 @@ class TestDocumentFixtures @Inject constructor() {
             }
         }
 
-        Log.w(
+        NovaLog.w(
             TAG,
             "Unable to relocate thousand-page PDF into application storage; using ${file.absolutePath}"
         )
@@ -177,9 +177,9 @@ class TestDocumentFixtures @Inject constructor() {
             }
             destination.length() > 0L && validateThousandPagePdf(destination)
         } catch (error: IOException) {
-            Log.w(TAG, "Unable to copy thousand-page PDF to ${destination.absolutePath}", error)
+            NovaLog.w(TAG, "Unable to copy thousand-page PDF to ${destination.absolutePath}", error)
             if (destination.exists() && !destination.delete()) {
-                Log.w(TAG, "Failed to delete incomplete thousand-page PDF at ${destination.absolutePath}")
+                NovaLog.w(TAG, "Failed to delete incomplete thousand-page PDF at ${destination.absolutePath}")
             }
             false
         }
@@ -194,7 +194,7 @@ class TestDocumentFixtures @Inject constructor() {
         val valid = validateThousandPagePdf(file)
         if (valid) {
             if (logReuse) {
-                Log.i(
+                NovaLog.i(
                     TAG,
                     "Reusing cached thousand-page PDF at ${file.absolutePath} (size=${file.length()} bytes)"
                 )
@@ -202,12 +202,12 @@ class TestDocumentFixtures @Inject constructor() {
             return file
         }
 
-        Log.w(
+        NovaLog.w(
             TAG,
             "Cached thousand-page PDF at ${file.absolutePath} failed validation; deleting corrupted artifact"
         )
         if (!file.delete()) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Unable to delete corrupted thousand-page PDF at ${file.absolutePath}; future runs will attempt regeneration"
             )
@@ -217,7 +217,7 @@ class TestDocumentFixtures @Inject constructor() {
 
     private fun migrateFixture(source: File, destinationDirectory: File): File? {
         if (!destinationDirectory.exists() && !destinationDirectory.mkdirs()) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Unable to prepare destination directory ${destinationDirectory.absolutePath} for thousand-page PDF migration"
             )
@@ -227,18 +227,18 @@ class TestDocumentFixtures @Inject constructor() {
         return try {
             source.copyTo(destination, overwrite = true)
             if (validateThousandPagePdf(destination)) {
-                Log.i(
+                NovaLog.i(
                     TAG,
                     "Migrated cached thousand-page PDF from ${source.absolutePath} to ${destination.absolutePath}"
                 )
                 destination
             } else {
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Validation failed after migrating thousand-page PDF to ${destination.absolutePath}; removing artifact"
                 )
                 if (!destination.delete()) {
-                    Log.w(
+                    NovaLog.w(
                         TAG,
                         "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after migration"
                     )
@@ -246,13 +246,13 @@ class TestDocumentFixtures @Inject constructor() {
                 null
             }
         } catch (error: IOException) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Unable to migrate thousand-page PDF to ${destination.absolutePath}",
                 error
             )
             if (destination.exists() && !destination.delete()) {
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Unable to clean up failed thousand-page PDF migration at ${destination.absolutePath}"
                 )
@@ -291,7 +291,7 @@ class TestDocumentFixtures @Inject constructor() {
 
         if (!preparedFromAsset && !preparedFromNetwork && !preparedFromWriter) {
             try {
-                Log.i(TAG, "Falling back to thousand-page writer after asset/network failures")
+                NovaLog.i(TAG, "Falling back to thousand-page writer after asset/network failures")
                 writeThousandPagePdf(tempFile)
             } catch (error: IOException) {
                 tempFile.delete()
@@ -311,12 +311,12 @@ class TestDocumentFixtures @Inject constructor() {
 
     private fun tryGenerateThousandPagePdf(destination: File): Boolean {
         return try {
-            Log.i(TAG, "Generating thousand-page PDF via local writer")
+            NovaLog.i(TAG, "Generating thousand-page PDF via local writer")
             writeThousandPagePdf(destination)
             true
         } catch (error: IOException) {
             destination.delete()
-            Log.w(TAG, "Unable to generate thousand-page PDF via writer", error)
+            NovaLog.w(TAG, "Unable to generate thousand-page PDF via writer", error)
             false
         }
     }
@@ -326,7 +326,7 @@ class TestDocumentFixtures @Inject constructor() {
             ?.takeIf { it.isNotBlank() }
             ?: defaultThousandPageUrl
             ?: run {
-                Log.i(TAG, "No thousand-page PDF download URL supplied; skipping network fetch")
+                NovaLog.i(TAG, "No thousand-page PDF download URL supplied; skipping network fetch")
                 return false
             }
 
@@ -343,7 +343,7 @@ class TestDocumentFixtures @Inject constructor() {
                 return false
             }
 
-            Log.i(TAG, "Downloading thousand-page PDF from $url")
+            NovaLog.i(TAG, "Downloading thousand-page PDF from $url")
             connection.inputStream.use { input ->
                 destination.outputStream().buffered().use { output ->
                     input.copyTo(output)
@@ -353,21 +353,21 @@ class TestDocumentFixtures @Inject constructor() {
 
             if (destination.length() <= 0L) {
                 destination.delete()
-                Log.w(TAG, "Downloaded thousand-page PDF was empty; deleting corrupted artifact")
+                NovaLog.w(TAG, "Downloaded thousand-page PDF was empty; deleting corrupted artifact")
                 return false
             }
 
             if (!validateThousandPagePdf(destination)) {
                 destination.delete()
-                Log.w(TAG, "Validation failed after downloading thousand-page PDF; removing artifact")
+                NovaLog.w(TAG, "Validation failed after downloading thousand-page PDF; removing artifact")
                 return false
             }
 
-            Log.i(TAG, "Successfully downloaded thousand-page PDF to ${destination.absolutePath}")
+            NovaLog.i(TAG, "Successfully downloaded thousand-page PDF to ${destination.absolutePath}")
             true
         } catch (_: IOException) {
             destination.delete()
-            Log.w(TAG, "Failed to download thousand-page PDF from $url; falling back to bundled assets")
+            NovaLog.w(TAG, "Failed to download thousand-page PDF from $url; falling back to bundled assets")
             false
         } finally {
             connection.disconnect()
@@ -377,7 +377,7 @@ class TestDocumentFixtures @Inject constructor() {
     private fun copyBundledThousandPagePdf(destination: File): Boolean {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         return try {
-            Log.i(TAG, "Attempting to hydrate thousand-page PDF from bundled asset")
+            NovaLog.i(TAG, "Attempting to hydrate thousand-page PDF from bundled asset")
             instrumentation.context.assets.open(THOUSAND_PAGE_ASSET_BASE64).use { assetStream ->
                 Base64InputStream(assetStream, Base64.DEFAULT).use { decodedStream ->
                     destination.outputStream().buffered().use { output ->
@@ -388,10 +388,10 @@ class TestDocumentFixtures @Inject constructor() {
             }
             if (!validateThousandPagePdf(destination)) {
                 destination.delete()
-                Log.w(TAG, "Bundled thousand-page PDF asset failed validation")
+                NovaLog.w(TAG, "Bundled thousand-page PDF asset failed validation")
                 false
             } else {
-                Log.i(
+                NovaLog.i(
                     TAG,
                     "Successfully restored thousand-page PDF from bundled asset (size=${destination.length()} bytes)"
                 )
@@ -399,44 +399,44 @@ class TestDocumentFixtures @Inject constructor() {
             }
         } catch (error: IOException) {
             destination.delete()
-            Log.w(TAG, "Unable to copy bundled thousand-page PDF fixture", error)
+            NovaLog.w(TAG, "Unable to copy bundled thousand-page PDF fixture", error)
             false
         } catch (error: SecurityException) {
             destination.delete()
-            Log.w(TAG, "Security exception copying bundled thousand-page PDF fixture", error)
+            NovaLog.w(TAG, "Security exception copying bundled thousand-page PDF fixture", error)
             false
         } catch (error: Throwable) {
             destination.delete()
-            Log.w(TAG, "Unexpected failure copying bundled thousand-page PDF fixture", error)
+            NovaLog.w(TAG, "Unexpected failure copying bundled thousand-page PDF fixture", error)
             false
         }
     }
 
     private fun validateThousandPagePdf(candidate: File): Boolean {
         if (!candidate.exists() || candidate.length() <= 0L) {
-            Log.w(TAG, "Validation failed for thousand-page PDF; file missing or empty at ${candidate.absolutePath}")
+            NovaLog.w(TAG, "Validation failed for thousand-page PDF; file missing or empty at ${candidate.absolutePath}")
             return false
         }
 
         val bytes = try {
             candidate.readBytes()
         } catch (error: IOException) {
-            Log.w(TAG, "Unable to read thousand-page PDF for validation", error)
+            NovaLog.w(TAG, "Unable to read thousand-page PDF for validation", error)
             return false
         } catch (error: SecurityException) {
-            Log.w(TAG, "Security exception while reading thousand-page PDF for validation", error)
+            NovaLog.w(TAG, "Security exception while reading thousand-page PDF for validation", error)
             return false
         }
 
         if (bytes.isEmpty()) {
-            Log.w(TAG, "Validation failed; thousand-page PDF is empty at ${candidate.absolutePath}")
+            NovaLog.w(TAG, "Validation failed; thousand-page PDF is empty at ${candidate.absolutePath}")
             return false
         }
 
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         val digestHex = digest.toHexString()
         if (!digestHex.equals(EXPECTED_THOUSAND_PAGE_DIGEST, ignoreCase = true)) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Thousand-page PDF digest mismatch for ${candidate.absolutePath}; " +
                     "expected=$EXPECTED_THOUSAND_PAGE_DIGEST actual=${digestHex.lowercase(Locale.US)}"
@@ -447,12 +447,12 @@ class TestDocumentFixtures @Inject constructor() {
         val contents = try {
             String(bytes, StandardCharsets.ISO_8859_1)
         } catch (error: Exception) {
-            Log.w(TAG, "Unable to decode thousand-page PDF for validation", error)
+            NovaLog.w(TAG, "Unable to decode thousand-page PDF for validation", error)
             return false
         }
 
         if (!contents.startsWith("%PDF-1.")) {
-            Log.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
+            NovaLog.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
             return false
         }
 
@@ -463,7 +463,7 @@ class TestDocumentFixtures @Inject constructor() {
         val lastPageFound = contents.contains(lastPageMarker)
 
         if (!footerValid || !totalPagesFound || !lastPageFound) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Validation failed for thousand-page PDF (footer=$footerValid, " +
                     "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
@@ -472,14 +472,14 @@ class TestDocumentFixtures @Inject constructor() {
         }
 
         if (!validatePageTree(candidate, contents)) {
-            Log.w(
+            NovaLog.w(
                 TAG,
                 "Validation failed for thousand-page PDF due to oversized /Kids arrays"
             )
             return false
         }
 
-        Log.i(
+        NovaLog.i(
             TAG,
             "Validated thousand-page PDF at ${candidate.absolutePath} " +
                 "(size=${candidate.length()} bytes, digest=${digestHex.lowercase(Locale.US)})"
@@ -500,7 +500,7 @@ class TestDocumentFixtures @Inject constructor() {
                 }
             }
             if (referenceCount > MAX_KIDS_PER_ARRAY) {
-                Log.w(
+                NovaLog.w(
                     TAG,
                     "Detected oversized /Kids array with $referenceCount entries in ${candidate.absolutePath}"
                 )

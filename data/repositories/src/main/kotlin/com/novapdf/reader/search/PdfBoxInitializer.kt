@@ -1,7 +1,7 @@
 package com.novapdf.reader.search
 
 import android.content.Context
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +25,7 @@ object PdfBoxInitializer {
                 }
                 true
             } catch (error: Throwable) {
-                Log.w(TAG, "Unable to initialise PDFBox resources", error)
+                NovaLog.w(TAG, "Unable to initialise PDFBox resources", error)
                 false
             }
             if (success) {

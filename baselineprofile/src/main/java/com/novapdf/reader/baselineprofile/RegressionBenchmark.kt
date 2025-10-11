@@ -1,6 +1,6 @@
 package com.novapdf.reader.baselineprofile
 
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.StartupMode
@@ -38,7 +38,7 @@ class RegressionBenchmark {
             launchReaderAndAwait()
 
             val loadDurationMs = measureStressDocumentLoadTimeMs()
-            Log.d(TAG, "Document load completed in ${loadDurationMs}ms")
+            NovaLog.d(TAG, "Document load completed in ${loadDurationMs}ms")
 
             assertTrue(
                 "Document load regression: expected <= $DOCUMENT_LOAD_BUDGET_MS ms but was $loadDurationMs ms",
@@ -62,7 +62,7 @@ class RegressionBenchmark {
             val scrollDurationMs = measureTimeMillis {
                 exerciseReaderContent()
             }
-            Log.d(TAG, "Scroll interaction completed in ${scrollDurationMs}ms")
+            NovaLog.d(TAG, "Scroll interaction completed in ${scrollDurationMs}ms")
 
             assertTrue(
                 "Render regression: expected scroll <= $SCROLL_RENDER_BUDGET_MS ms but was $scrollDurationMs ms",

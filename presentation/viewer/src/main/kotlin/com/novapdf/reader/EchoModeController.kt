@@ -2,7 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
@@ -143,7 +143,7 @@ class EchoModeController(context: Context) : TextToSpeech.OnInitListener {
             textToSpeech = engine
             initializationJob = null
             if (engine == null) {
-                Log.w(TAG, "TextToSpeech engine unavailable; falling back to haptic feedback", initialised.exceptionOrNull())
+                NovaLog.w(TAG, "TextToSpeech engine unavailable; falling back to haptic feedback", initialised.exceptionOrNull())
                 isInitialized = true
                 readyForPlayback = false
                 drainPendingWithFallback()

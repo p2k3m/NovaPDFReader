@@ -2,7 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.novapdf.reader.CacheFileNames
@@ -62,7 +62,7 @@ class SamplePdfInstrumentedTest {
                 renderedPage.compress(Bitmap.CompressFormat.PNG, 100, stream)
             }
             renderedPage.recycle()
-            Log.d("SamplePdfInstrumentedTest", "Saved sample screenshot to ${screenshotFile.absolutePath}")
+            NovaLog.d("SamplePdfInstrumentedTest", "Saved sample screenshot to ${screenshotFile.absolutePath}")
         } finally {
             repository.dispose()
         }

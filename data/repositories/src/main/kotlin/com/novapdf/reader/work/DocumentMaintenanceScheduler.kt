@@ -1,7 +1,8 @@
 package com.novapdf.reader.work
 
 import android.content.Context
-import android.util.Log
+import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import androidx.work.BackoffPolicy
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -78,13 +79,19 @@ class DocumentMaintenanceScheduler(context: Context) {
         val manager = runCatching { WorkManager.getInstance(appContext) }
             .getOrElse { error ->
                 if (error is IllegalStateException) {
-                    Log.w(
-                        TAG,
-                        "Skipping $operation because WorkManager is not initialised yet",
-                        error
+                    NovaLog.w(
+                        tag = TAG,
+                        message = "Skipping $operation because WorkManager is not initialised yet",
+                        throwable = error,
+                        field("operation", operation),
                     )
                 } else {
-                    Log.w(TAG, "Unable to obtain WorkManager for $operation", error)
+                    NovaLog.w(
+                        tag = TAG,
+                        message = "Unable to obtain WorkManager for $operation",
+                        throwable = error,
+                        field("operation", operation),
+                    )
                 }
                 return
             }
@@ -92,7 +99,12 @@ class DocumentMaintenanceScheduler(context: Context) {
         try {
             block(manager)
         } catch (error: Exception) {
-            Log.w(TAG, "WorkManager operation '$operation' failed", error)
+            NovaLog.w(
+                tag = TAG,
+                message = "WorkManager operation '$operation' failed",
+                throwable = error,
+                field("operation", operation),
+            )
         }
     }
 

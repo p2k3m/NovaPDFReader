@@ -59,6 +59,7 @@ spotless = "6.25.0"
 dependencyAnalysis = "1.31.0"
 androidxSqlite = "2.4.0"
 checkerframework = "3.19.0"
+timber = "5.0.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
@@ -142,6 +143,7 @@ play-services-tasks = { module = "com.google.android.gms:play-services-tasks", v
 androidx-sqlite = { module = "androidx.sqlite:sqlite", version.ref = "androidxSqlite" }
 checkerframework-qual = { module = "org.checkerframework:checker-qual", version.ref = "checkerframework" }
 androidx-coordinatorlayout = { module = "androidx.coordinatorlayout:coordinatorlayout", version.ref = "coordinatorlayout" }
+timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
