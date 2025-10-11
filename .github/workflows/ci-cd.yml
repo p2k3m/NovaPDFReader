@@ -1735,7 +1735,11 @@ jobs:
           fi
 
           adb wait-for-device
-          adb shell 'mkdir -p /sdcard/Download'
+
+          if ! adb shell 'mkdir -p /sdcard/Download'; then
+            echo "::warning::Unable to create /sdcard/Download on device; assuming it already exists" >&2
+          fi
+
           echo "Pushing AI.pdf to /sdcard/Download/AI.pdf" >&2
           adb push "$ai_pdf_path" /sdcard/Download/AI.pdf
           echo "Verifying AI.pdf presence on device" >&2
