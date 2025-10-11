@@ -1038,88 +1038,66 @@ jobs:
           for key, report in sorted(executed_tests.items()):
               print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
-      - name: Validate ANR and crash-free logcat
+      - name: Collect and validate device logs after connected tests
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
-          adb logcat -d > logcat-after-tests.txt
-          python3 - <<'PY'
-          import pathlib
-          import re
-          import sys
-          import os
-
-          package_name = os.environ.get("PACKAGE_NAME", "com.novapdf.reader")
-          escaped_package = re.escape(package_name)
-
-          log_path = pathlib.Path("logcat-after-tests.txt")
-          if not log_path.exists():
-              print("::error::Unable to locate captured logcat at", log_path)
-              sys.exit(1)
-
-          contents = log_path.read_text(encoding="utf-8", errors="ignore")
-          crash_signatures = [
-              (
-                  re.compile(rf"ANR in {escaped_package}"),
-                  f"Detected Application Not Responding dialog for {package_name} during instrumentation tests",
-              ),
-              (
-                  re.compile(rf"Application is not responding: Process {escaped_package}"),
-                  f"Detected system level 'Application is not responding' warning for {package_name}",
-              ),
-              (
-                  re.compile(rf"FATAL EXCEPTION: .*Process: {escaped_package}"),
-                  f"Detected fatal crash in {package_name} during instrumentation tests",
-              ),
-              (
-                  re.compile(r"E AndroidRuntime: FATAL EXCEPTION"),
-                  "AndroidRuntime reported a fatal exception while instrumentation tests were running",
-              ),
-              (
-                  re.compile(rf"Fatal signal \d+ .*? \(SIG[A-Z]+\).*?{escaped_package}"),
-                  f"Detected native crash (fatal signal) for {package_name} during instrumentation tests",
-              ),
-              (
-                  re.compile(rf"Process {escaped_package} has died"),
-                  f"System server logged that {package_name} process died during instrumentation tests",
-              ),
-              (
-                  re.compile(rf"Force finishing activity {escaped_package}"),
-                  "Activity manager force-finished NovaPDF Reader during instrumentation tests",
-              ),
-          ]
-
-          issues = [message for pattern, message in crash_signatures if pattern.search(contents)]
-          if issues:
-              for message in issues:
-                  print(f"::error::{message}")
-              sys.exit(1)
-
-          print("Logcat is free from ANR/crash signatures")
-          PY
-      - name: Stage post-test logcat snippet
-        if: always()
-        run: |
-          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
-          if [ -f logcat-after-tests.txt ]; then
-            cp logcat-after-tests.txt "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/logcat-after-tests.txt"
-          else
-            echo "No post-test logcat snippet captured" >&2
+          logs_dir="device-logs/connected-android-test"
+          mkdir -p "$logs_dir"
+          logcat_path="${logs_dir}/logcat.txt"
+          bugreport_path="${logs_dir}/bugreport.zip"
+          adb logcat -d > "$logcat_path"
+          if ! timeout 5m adb bugreport "$bugreport_path"; then
+            echo "::error::Failed to capture bugreport after connectedAndroidTest" >&2
+            exit 1
           fi
+          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
       - name: Run macrobenchmark regression suite
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
+      - name: Collect and validate device logs after macrobenchmarks
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
+        run: |
+          set -euo pipefail
+          logs_dir="device-logs/macrobenchmark"
+          mkdir -p "$logs_dir"
+          logcat_path="${logs_dir}/logcat.txt"
+          bugreport_path="${logs_dir}/bugreport.zip"
+          adb logcat -d > "$logcat_path"
+          if ! timeout 5m adb bugreport "$bugreport_path"; then
+            echo "::error::Failed to capture bugreport after macrobenchmark run" >&2
+            exit 1
+          fi
+          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
       - name: Generate release baseline profile
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
+      - name: Collect and validate device logs after baseline profile generation
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
+        run: |
+          set -euo pipefail
+          logs_dir="device-logs/baseline-profile"
+          mkdir -p "$logs_dir"
+          logcat_path="${logs_dir}/logcat.txt"
+          bugreport_path="${logs_dir}/bugreport.zip"
+          adb logcat -d > "$logcat_path"
+          if ! timeout 5m adb bugreport "$bugreport_path"; then
+            echo "::error::Failed to capture bugreport after baseline profile generation" >&2
+            exit 1
+          fi
+          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
       - name: Verify committed baseline profile is current
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
         run: |
@@ -1552,11 +1530,40 @@ jobs:
           adb shell cmd uimode night no || true
           adb shell settings put secure high_text_contrast_enabled 0 || true
           adb shell settings put secure accessibility_display_daltonizer_enabled 0 || true
+      - name: Collect and validate device logs after screenshot harness
+        if: env.UNIT_TESTS_PASSED == 'true'
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
+        run: |
+          set -euo pipefail
+          logs_dir="device-logs/screenshot-harness"
+          mkdir -p "$logs_dir"
+          logcat_path="${logs_dir}/logcat.txt"
+          bugreport_path="${logs_dir}/bugreport.zip"
+          adb logcat -d > "$logcat_path"
+          if ! timeout 5m adb bugreport "$bugreport_path"; then
+            echo "::error::Failed to capture bugreport after screenshot harness" >&2
+            exit 1
+          fi
+          python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"
       - name: Collect emulator logs
         if: always()
         run: |
           mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
           adb logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/emulator.log" || true
+      - name: Stage device diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          target_dir="${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$target_dir"
+          if [ -d device-logs ]; then
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a device-logs/ "$target_dir/"
+            else
+              cp -R device-logs/. "$target_dir/"
+            fi
+          fi
       - name: Stop emulator
         if: always()
         run: adb -s emulator-5554 emu kill || true
