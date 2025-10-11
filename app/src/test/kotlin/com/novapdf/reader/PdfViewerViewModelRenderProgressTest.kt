@@ -87,6 +87,7 @@ class PdfViewerViewModelRenderProgressTest {
         whenever(adaptiveFlowManager.readingSpeedPagesPerMinute).thenReturn(MutableStateFlow(30f))
         whenever(adaptiveFlowManager.swipeSensitivity).thenReturn(MutableStateFlow(1f))
         whenever(adaptiveFlowManager.preloadTargets).thenReturn(MutableStateFlow(emptyList()))
+        whenever(adaptiveFlowManager.frameIntervalMillis).thenReturn(MutableStateFlow(16.6f))
 
         val crashReporter = object : CrashReporter {
             override fun install() = Unit

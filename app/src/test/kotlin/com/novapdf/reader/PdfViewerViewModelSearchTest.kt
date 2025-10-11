@@ -100,6 +100,7 @@ class PdfViewerViewModelSearchTest {
         },
     ): PdfViewerViewModel {
         whenever(searchCoordinator.indexingState).thenReturn(MutableStateFlow(SearchIndexingState.Idle))
+        whenever(adaptiveFlowManager.frameIntervalMillis).thenReturn(MutableStateFlow(16.6f))
         val openDocumentUseCase = DefaultOpenDocumentUseCase(pdfRepository)
         val renderPageUseCase = DefaultRenderPageUseCase(pdfRepository)
         val renderTileUseCase = DefaultRenderTileUseCase(pdfRepository)

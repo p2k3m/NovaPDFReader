@@ -84,6 +84,7 @@ data class PdfViewerUiState(
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
     val swipeSensitivity: Float = 1f,
+    val frameIntervalMillis: Float = 16.6f,
     val uiUnderLoad: Boolean = false,
     val searchResults: List<SearchResult> = emptyList(),
     val activeAnnotations: List<AnnotationCommand> = emptyList(),
@@ -97,12 +98,14 @@ data class PdfViewerUiState(
     val searchIndexing: SearchIndexingState = SearchIndexingState.Idle,
     val renderProgress: PdfRenderProgress = PdfRenderProgress.Idle,
     val bitmapMemory: BitmapMemoryStats = BitmapMemoryStats(),
+    val renderQueueStats: RenderQueueStats = RenderQueueStats(),
     val malformedPages: Set<Int> = emptySet()
 )
 
 private data class DocumentContext(
     val speed: Float,
     val sensitivity: Float,
+    val frameIntervalMillis: Float,
     val isUiUnderLoad: Boolean,
     val session: PdfDocumentSession?,
     val outline: List<PdfOutlineNode>,
@@ -283,11 +286,20 @@ open class PdfViewerViewModel @Inject constructor(
                 combine(
                     adaptiveFlowUseCase.readingSpeed,
                     adaptiveFlowUseCase.swipeSensitivity,
+                    adaptiveFlowUseCase.frameIntervalMillis,
                     documentUseCase.session,
                     documentUseCase.outline,
                     documentUseCase.renderProgress,
-                ) { speed, sensitivity, session, outline, renderProgress ->
-                    DocumentContext(speed, sensitivity, false, session, outline, renderProgress)
+                ) { speed, sensitivity, frameInterval, session, outline, renderProgress ->
+                    DocumentContext(
+                        speed = speed,
+                        sensitivity = sensitivity,
+                        frameIntervalMillis = frameInterval,
+                        isUiUnderLoad = false,
+                        session = session,
+                        outline = outline,
+                        renderProgress = renderProgress,
+                    )
                 },
                 adaptiveFlowUseCase.uiUnderLoad
             ) { context, uiUnderLoad ->
@@ -314,6 +326,7 @@ open class PdfViewerViewModel @Inject constructor(
                 _uiState.value = previous.copy(
                     readingSpeed = context.speed,
                     swipeSensitivity = context.sensitivity,
+                    frameIntervalMillis = context.frameIntervalMillis,
                     uiUnderLoad = context.isUiUnderLoad,
                     documentId = documentId,
                     pageCount = session?.pageCount ?: 0,
@@ -353,6 +366,17 @@ open class PdfViewerViewModel @Inject constructor(
                         if (sanitized.isNotEmpty()) {
                             prefetchRequests.trySend(PrefetchRequest(sanitized, width)).isSuccess
                         }
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            renderQueue.stats.collect { stats ->
+                updateUiState { current ->
+                    if (current.renderQueueStats == stats) {
+                        current
+                    } else {
+                        current.copy(renderQueueStats = stats)
                     }
                 }
             }

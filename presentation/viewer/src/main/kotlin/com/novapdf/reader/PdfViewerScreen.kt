@@ -57,6 +57,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Search
@@ -154,6 +155,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.novapdf.reader.presentation.viewer.BuildConfig
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.DocumentStatus
 import com.novapdf.reader.accessibility.HapticFeedbackManager
@@ -172,6 +174,7 @@ import com.airbnb.lottie.compose.rememberLottieComposition
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -478,6 +481,17 @@ fun PdfViewerScreen(
                         onCancel = onCancelIndexing,
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
+                            .padding(16.dp)
+                    )
+                }
+
+                if (BuildConfig.DEBUG) {
+                    HealthHud(
+                        frameIntervalMillis = state.frameIntervalMillis,
+                        queueStats = state.renderQueueStats,
+                        memoryStats = state.bitmapMemory,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
                             .padding(16.dp)
                     )
                 }
@@ -1606,6 +1620,77 @@ private fun DevOptionsContent(
         Spacer(modifier = Modifier.height(24.dp))
         FilledTonalButton(onClick = onBack) {
             Text(text = stringResource(id = R.string.dev_options_back))
+        }
+    }
+}
+
+@Composable
+private fun HealthHud(
+    frameIntervalMillis: Float,
+    queueStats: RenderQueueStats,
+    memoryStats: BitmapMemoryStats,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val fps = remember(frameIntervalMillis) {
+        if (frameIntervalMillis > 0f) {
+            1000f / frameIntervalMillis
+        } else {
+            0f
+        }
+    }
+    val fpsText = remember(fps) { String.format(Locale.US, "%.1f", fps) }
+    val queueDepth = queueStats.totalQueued
+    val queueBreakdown = remember(queueStats) {
+        "V${queueStats.visible}/N${queueStats.nearby}/T${queueStats.thumbnail}"
+    }
+    val pendingJobs = queueStats.active
+    val currentMemory = remember(memoryStats.currentBytes, context) {
+        Formatter.formatShortFileSize(context, memoryStats.currentBytes)
+    }
+    val peakMemory = remember(memoryStats.peakBytes, context) {
+        Formatter.formatShortFileSize(context, memoryStats.peakBytes)
+    }
+    val levelLabel = remember(memoryStats.level) {
+        memoryStats.level.name.lowercase(Locale.US).replaceFirstChar { it.titlecase(Locale.US) }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 6.dp,
+        modifier = modifier
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = "Health",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "FPS: $fpsText",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Queue: $queueDepth ($queueBreakdown)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Pending: $pendingJobs",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Memory: $currentMemory / $peakMemory ($levelLabel)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

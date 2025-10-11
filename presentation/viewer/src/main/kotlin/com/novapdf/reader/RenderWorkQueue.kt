@@ -5,6 +5,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -14,6 +17,16 @@ import kotlinx.coroutines.sync.withLock
  * background thumbnails are opportunistically processed. Requests are prioritized
  * according to [Priority] and executed with bounded parallelism.
  */
+data class RenderQueueStats(
+    val active: Int = 0,
+    val visible: Int = 0,
+    val nearby: Int = 0,
+    val thumbnail: Int = 0,
+) {
+    val totalQueued: Int
+        get() = visible + nearby + thumbnail
+}
+
 class RenderWorkQueue(
     private val scope: CoroutineScope,
     private val dispatcher: CoroutineDispatcher,
@@ -39,6 +52,9 @@ class RenderWorkQueue(
     private val thumbnailQueue = ArrayDeque<WorkItem>()
     private var activeCount = 0
 
+    private val _stats = MutableStateFlow(RenderQueueStats())
+    val stats: StateFlow<RenderQueueStats> = _stats.asStateFlow()
+
     suspend fun <T> submit(priority: Priority, block: suspend () -> T): T {
         val deferred = CompletableDeferred<Any?>()
         val item = WorkItem(priority, block = { block() }, deferred)
@@ -62,6 +78,7 @@ class RenderWorkQueue(
         mutex.withLock {
             queueFor(item.priority).addLast(item)
             fillLaunchListLocked(toLaunch)
+            updateStatsLocked()
         }
         toLaunch.forEach { startItem(it) }
     }
@@ -107,6 +124,7 @@ class RenderWorkQueue(
                 mutex.withLock {
                     activeCount--
                     fillLaunchListLocked(toLaunch)
+                    updateStatsLocked()
                 }
                 toLaunch.forEach { startItem(it) }
             }
@@ -122,6 +140,7 @@ class RenderWorkQueue(
                     removeFromQueuesLocked(item)
                     fillLaunchListLocked(toLaunch)
                 }
+                updateStatsLocked()
                 job
             }
             toLaunch.forEach { startItem(it) }
@@ -135,5 +154,14 @@ class RenderWorkQueue(
             Priority.NEARBY_PAGE -> nearbyQueue.remove(target)
             Priority.THUMBNAIL -> thumbnailQueue.remove(target)
         }
+    }
+
+    private fun updateStatsLocked() {
+        _stats.value = RenderQueueStats(
+            active = activeCount,
+            visible = visibleQueue.size,
+            nearby = nearbyQueue.size,
+            thumbnail = thumbnailQueue.size,
+        )
     }
 }
