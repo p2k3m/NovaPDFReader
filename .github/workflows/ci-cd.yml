@@ -385,6 +385,55 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
+      - name: Resolve AI.pdf metadata
+        id: ai_pdf_metadata
+        env:
+          AI_PDF_BUCKET: ${{ vars.AI_PDF_BUCKET || 'pics-1234' }}
+          AI_PDF_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
+        run: |
+          set -euo pipefail
+
+          bucket="${AI_PDF_BUCKET:-}"
+          key="${AI_PDF_KEY:-}"
+
+          if [ -z "$bucket" ] || [ -z "$key" ]; then
+            echo "::error::AI.pdf bucket or key is empty. Set AI_PDF_BUCKET and AI_PDF_KEY repository variables if the defaults are incorrect."
+            exit 1
+          fi
+
+          cache_dir="$RUNNER_TEMP/ai-pdf-cache"
+          mkdir -p "$cache_dir"
+
+          etag=""
+          if metadata=$(aws s3api head-object --bucket "$bucket" --key "$key" --query ETag --output text 2>/dev/null); then
+            etag=$(printf '%s' "$metadata" | tr -d '"')
+          else
+            echo "::warning::Unable to retrieve AI.pdf metadata via aws s3api head-object; caching will be skipped unless a previous cache entry exists."
+          fi
+
+          cache_enabled="false"
+          cache_key="ai-pdf-no-etag"
+          if [ -n "$etag" ]; then
+            cache_enabled="true"
+            cache_key="ai-pdf-${etag}"
+          fi
+
+          {
+            echo "cache_dir=${cache_dir}"
+            echo "dest_path=${cache_dir}/AI.pdf"
+            echo "cache_key=${cache_key}"
+            echo "cache_enabled=${cache_enabled}"
+            echo "etag=${etag}"
+            echo "bucket=${bucket}"
+            echo "key=${key}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore AI.pdf cache
+        if: steps.ai_pdf_metadata.outputs.cache_enabled == 'true'
+        id: ai_pdf_cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.ai_pdf_metadata.outputs.cache_dir }}
+          key: ${{ steps.ai_pdf_metadata.outputs.cache_key }}
       - name: Download AI.pdf fixture
         id: download_ai_pdf
         env:
@@ -392,6 +441,8 @@ jobs:
           AI_PDF_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
           AI_PDF_SHA256: ${{ vars.AI_PDF_SHA256 || secrets.AI_PDF_SHA256 }}
           AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
+          AI_PDF_DEST: ${{ steps.ai_pdf_metadata.outputs.dest_path }}
+          AI_PDF_CACHE_HIT: ${{ steps.ai_pdf_cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
 
@@ -409,36 +460,78 @@ jobs:
             echo "::error::Missing expected checksum or size for AI.pdf. Ensure AI_PDF_SHA256 and AI_PDF_SIZE are defined."
             exit 1
           fi
+          dest="${AI_PDF_DEST:-}"
+          if [ -z "$dest" ]; then
+            echo "::error::AI.pdf destination path is not defined."
+            exit 1
+          fi
 
-          dest="$RUNNER_TEMP/AI.pdf"
           tmp="${dest}.tmp"
           trap 'rm -f "$tmp"' EXIT
 
-          echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
-          if ! aws s3 cp --only-show-errors "s3://${bucket}/${key}" "$tmp"; then
-            echo "::error::Failed to download AI.pdf fixture from s3://${bucket}/${key}"
-            exit 1
-          fi
-
-          if [ ! -s "$tmp" ]; then
-            echo "::error::Downloaded AI.pdf fixture is empty: $tmp"
-            exit 1
-          fi
-
-          actual_size=$(stat -c%s "$tmp")
-          if [ "$actual_size" -ne "$expected_size" ]; then
-            echo "::error::AI.pdf size mismatch. Expected ${expected_size} bytes but downloaded ${actual_size} bytes."
-            exit 1
-          fi
-
-          actual_sha=$(sha256sum "$tmp" | awk '{print $1}')
           normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
-          if [ "$actual_sha" != "$normalized_expected_sha" ]; then
-            echo "::error::AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but downloaded ${actual_sha}."
-            exit 1
+          cache_hit="${AI_PDF_CACHE_HIT:-false}"
+
+          download_ai_pdf() {
+            echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
+            if ! aws s3 cp --only-show-errors "s3://${bucket}/${key}" "$tmp"; then
+              echo "::error::Failed to download AI.pdf fixture from s3://${bucket}/${key}" >&2
+              exit 1
+            fi
+
+            if [ ! -s "$tmp" ]; then
+              echo "::error::Downloaded AI.pdf fixture is empty: $tmp" >&2
+              exit 1
+            fi
+
+            mv "$tmp" "$dest"
+          }
+
+          last_error=""
+          verify_ai_pdf() {
+            local path="$1"
+
+            if [ ! -s "$path" ]; then
+              last_error="AI.pdf is missing or empty at $path"
+              return 1
+            fi
+
+            local actual_size
+            actual_size=$(stat -c%s "$path")
+            if [ "$actual_size" -ne "$expected_size" ]; then
+              last_error="AI.pdf size mismatch. Expected ${expected_size} bytes but found ${actual_size} bytes."
+              return 1
+            fi
+
+            local actual_sha
+            actual_sha=$(sha256sum "$path" | awk '{print $1}')
+            if [ "$actual_sha" != "$normalized_expected_sha" ]; then
+              last_error="AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but found ${actual_sha}."
+              return 1
+            fi
+
+            last_error=""
+            return 0
+          }
+
+          if [ -s "$dest" ] && verify_ai_pdf "$dest"; then
+            echo "AI.pdf fixture satisfied integrity checks from cache (cache hit: ${cache_hit})." >&2
+          else
+            if [ -s "$dest" ]; then
+              echo "::warning::Cached AI.pdf failed validation: ${last_error:-unknown reason}. Fetching a fresh copy." >&2
+            elif [ "$cache_hit" = "true" ]; then
+              echo "::warning::Cache indicated a hit but AI.pdf was missing. Fetching a fresh copy." >&2
+            fi
+
+            rm -f "$dest"
+            download_ai_pdf
+
+            if ! verify_ai_pdf "$dest"; then
+              echo "::error::Failed to verify AI.pdf after download: ${last_error:-unknown reason}." >&2
+              exit 1
+            fi
           fi
 
-          mv "$tmp" "$dest"
           trap - EXIT
           rm -f "$tmp"
 
