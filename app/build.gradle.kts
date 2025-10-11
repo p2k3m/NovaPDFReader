@@ -760,6 +760,9 @@ val requiredInstrumentationTests = listOf(
     ),
     "com.novapdf.reader.PdfViewerUiAutomatorTest" to listOf(
         "loadsThousandPageDocumentAndActivatesAdaptiveFlow"
+    ),
+    "com.novapdf.reader.SafDocumentPickerUiAutomatorTest" to listOf(
+        "openDocumentViaStorageAccessFrameworkGrantsPersistablePermission"
     )
 )
 
