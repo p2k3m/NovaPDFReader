@@ -29,7 +29,7 @@ android {
 }
 
 dependencies {
-    api(project(":infra:s3"))
+    api(project(":infra:storage"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

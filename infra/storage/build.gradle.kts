@@ -9,7 +9,7 @@ plugins {
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
 
 android {
-    namespace = "com.novapdf.reader.test.harness"
+    namespace = "com.novapdf.reader.storage"
     compileSdk = versionCatalog.findVersion("androidCompileSdk").get().requiredVersion.toInt()
 
     defaultConfig {
@@ -27,8 +27,10 @@ android {
 }
 
 dependencies {
-    implementation(project(":infra:storage"))
+    implementation(project(":core:cache"))
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.pdfium.android)
+    implementation(libs.androidx.core.ktx)
 }
 
 kotlin {

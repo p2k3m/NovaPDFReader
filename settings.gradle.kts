@@ -43,6 +43,7 @@ include(
     ":engine:pdf",
     ":presentation:viewer",
     ":presentation:compose",
+    ":infra:storage",
     ":infra:s3",
     ":infra:download",
     ":infra:logging",
