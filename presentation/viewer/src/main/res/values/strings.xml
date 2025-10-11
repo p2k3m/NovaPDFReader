@@ -65,6 +65,21 @@
     <string name="adaptive_flow_summary_description">Speed: %1$.0f pages/min · Sensitivity: %2$.1f</string>
     <string name="adaptive_flow_summary_button">Play summary</string>
     <string name="adaptive_flow_summary_unavailable">Adaptive Flow paused</string>
+    <plurals name="echo_summary_page_position">
+        <item quantity="one">Page %1$d of %2$d.</item>
+        <item quantity="other">Page %1$d of %2$d.</item>
+    </plurals>
+    <plurals name="echo_summary_reading_pace">
+        <item quantity="one">Reading pace %1$d page per minute.</item>
+        <item quantity="other">Reading pace %1$d pages per minute.</item>
+    </plurals>
+    <plurals name="echo_summary_annotation_count">
+        <item quantity="one">Contains %1$d annotation.</item>
+        <item quantity="other">Contains %1$d annotations.</item>
+    </plurals>
+    <string name="echo_summary_bookmarked">This page is bookmarked.</string>
+    <string name="echo_summary_not_bookmarked">This page is not bookmarked.</string>
+    <string name="echo_summary_adaptive_flow_active">Adaptive Flow is actively adjusting page turns.</string>
     <string name="empty_state_message">Discover knowledge, one page at a time.</string>
     <string name="empty_state_button">Open document</string>
     <string name="empty_state_supporting">Import a PDF or revisit your saved library to keep your learning streak alive.</string>

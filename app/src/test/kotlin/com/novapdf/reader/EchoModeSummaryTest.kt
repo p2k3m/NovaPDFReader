@@ -14,7 +14,7 @@ class EchoModeSummaryTest {
     fun summaryIsNullWhenDocumentMissing() {
         val state = PdfViewerUiState()
 
-        assertEquals(null, state.echoSummary())
+        assertEquals(null, state.echoSummary(FakeEchoModeSummaryStrings()))
     }
 
     @Test
@@ -47,7 +47,7 @@ class EchoModeSummaryTest {
             )
         )
 
-        val summary = state.echoSummary()
+        val summary = state.echoSummary(FakeEchoModeSummaryStrings())
 
         assertNotNull(summary)
         summary!!
@@ -56,5 +56,36 @@ class EchoModeSummaryTest {
         assertTrue(summary.contains("bookmarked"))
         assertTrue(summary.contains("Contains 2"))
         assertTrue(summary.contains("Adaptive Flow"))
+    }
+}
+
+private class FakeEchoModeSummaryStrings : EchoModeSummaryStrings {
+    override fun pagePosition(pageNumber: Int, pageCount: Int): String {
+        return "Page $pageNumber of $pageCount."
+    }
+
+    override fun readingPace(pagesPerMinute: Int): String {
+        return if (pagesPerMinute == 1) {
+            "Reading pace $pagesPerMinute page per minute."
+        } else {
+            "Reading pace $pagesPerMinute pages per minute."
+        }
+    }
+
+    override fun bookmarkStatus(bookmarked: Boolean): String {
+        return if (bookmarked) "This page is bookmarked." else "This page is not bookmarked."
+    }
+
+    override fun annotationSummary(annotationCount: Int): String? {
+        if (annotationCount <= 0) return null
+        return if (annotationCount == 1) {
+            "Contains $annotationCount annotation."
+        } else {
+            "Contains $annotationCount annotations."
+        }
+    }
+
+    override fun adaptiveFlowActive(): String {
+        return "Adaptive Flow is actively adjusting page turns."
     }
 }
