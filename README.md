@@ -60,6 +60,12 @@ Use `-accel off` if the host machine does not support KVM acceleration.
 When no device is present, the build gracefully skips connected tests while still verifying
 that the project compiles.
 
+NovaPDF's Gradle automation also issues `adb shell cmd appops set com.google.android.gms RUN_IN_BACKGROUND ignore`
+and `RUN_ANY_IN_BACKGROUND ignore` so Play Services cannot trigger auto-updates on the
+shared test images. This keeps background download storms from starving instrumentation
+runs; ensure your custom emulator snapshots expose the `cmd appops` utility so the
+suppression can be applied automatically.
+
 ## Programmatic screenshot capture
 
 The screenshot harness can capture UI frames directly on the device when invoked with

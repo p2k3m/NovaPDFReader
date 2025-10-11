@@ -18,6 +18,7 @@ import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
 import java.io.File
 import java.util.Properties
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.gradle.api.tasks.StopExecutionException
@@ -133,6 +134,8 @@ val minimumConnectedTestApiLevel = max(21, minimumSupportedApiLevel ?: 21)
 val androidSdkDirectory = locateAndroidSdkDir()
 val adbExecutable = findAdbExecutable(androidSdkDirectory)
 
+val playServicesAutoUpdateDisabledDevices = ConcurrentHashMap.newKeySet<String>()
+
 fun queryDeviceApiLevel(serial: String): Int? {
     val executable = adbExecutable ?: return null
 
@@ -213,6 +216,83 @@ fun runAdbCommand(
     }
 }
 
+fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
+    if (playServicesAutoUpdateDisabledDevices.contains(serial)) {
+        return
+    }
+
+    val apiLevel = queryDeviceApiLevel(serial)
+    if (apiLevel == null) {
+        logger.info(
+            "Skipping Play Services auto-update suppression for Android device $serial because the API level could not be determined."
+        )
+        return
+    }
+
+    val operations = buildList {
+        if (apiLevel >= 24) {
+            add(
+                listOf(
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "set",
+                    "com.google.android.gms",
+                    "RUN_IN_BACKGROUND",
+                    "ignore"
+                )
+            )
+        }
+        if (apiLevel >= 28) {
+            add(
+                listOf(
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "set",
+                    "com.google.android.gms",
+                    "RUN_ANY_IN_BACKGROUND",
+                    "ignore"
+                )
+            )
+        }
+    }
+
+    if (operations.isEmpty()) {
+        logger.info(
+            "Skipping Play Services auto-update suppression for Android device $serial because API level $apiLevel does not expose background app-ops toggles."
+        )
+        playServicesAutoUpdateDisabledDevices.add(serial)
+        return
+    }
+
+    var commandApplied = false
+    operations.forEach { command ->
+        val output = runAdbCommand(serial, logger, timeoutSeconds = 15, *command.toTypedArray())
+        if (output == null) {
+            logger.info(
+                "Unable to apply Play Services auto-update suppression via '${command.joinToString(" ")}' on device $serial."
+            )
+            return
+        }
+
+        commandApplied = true
+        val trimmedOutput = output.trim()
+        if (trimmedOutput.isNotEmpty() && !trimmedOutput.equals("No operations.", ignoreCase = true)) {
+            logger.info(
+                "adb ${command.joinToString(" ")} for device $serial responded with: $trimmedOutput"
+            )
+        }
+    }
+
+    if (commandApplied) {
+        playServicesAutoUpdateDisabledDevices.add(serial)
+        logger.info(
+            "Play Services auto-update suppression applied to Android device $serial (API level $apiLevel)."
+        )
+    }
+}
+
 fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
     val waitResult = runAdbCommand(serial, logger, timeoutSeconds = 120, "wait-for-device")
     if (waitResult == null) {
@@ -242,6 +322,7 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
         )?.trim()
 
         if (bootCompleted == "1" || devBootCompleted == "1") {
+            disablePlayServicesAutoUpdates(serial, logger)
             return true
         }
 
