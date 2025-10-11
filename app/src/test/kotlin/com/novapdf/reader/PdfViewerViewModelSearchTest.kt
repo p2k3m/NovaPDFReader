@@ -379,7 +379,7 @@ class PdfViewerViewModelSearchTest {
         verify(downloadManager).download(eq(failingUrl))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
-        assertEquals(getString(R.string.error_remote_open_failed), (status as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_pdf_corrupted), (status as DocumentStatus.Error).message)
     }
 
     @Test
@@ -523,7 +523,7 @@ class PdfViewerViewModelSearchTest {
         assertEquals(DocumentStatus.Idle, statuses[2])
         val errorStatus = statuses[3]
         assertTrue(errorStatus is DocumentStatus.Error)
-        assertEquals(getString(R.string.error_remote_open_failed), (errorStatus as DocumentStatus.Error).message)
+        assertEquals(getString(R.string.error_pdf_corrupted), (errorStatus as DocumentStatus.Error).message)
     }
 
     @Test
