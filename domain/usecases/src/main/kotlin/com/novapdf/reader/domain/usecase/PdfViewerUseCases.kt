@@ -424,7 +424,9 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
                 }
             }
 
-            RemotePdfException.Reason.CORRUPTED -> {
+            RemotePdfException.Reason.CORRUPTED,
+            RemotePdfException.Reason.UNSAFE,
+            RemotePdfException.Reason.FILE_TOO_LARGE -> {
                 resetFailuresLocked()
             }
 
@@ -549,6 +551,8 @@ private tailrec fun resolveDomainErrorCode(throwable: Throwable?): DomainErrorCo
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> DomainErrorCode.IO_TIMEOUT
             RemotePdfException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED
             RemotePdfException.Reason.CIRCUIT_OPEN -> DomainErrorCode.IO_TIMEOUT
+            RemotePdfException.Reason.UNSAFE -> DomainErrorCode.PDF_MALFORMED
+            RemotePdfException.Reason.FILE_TOO_LARGE -> DomainErrorCode.IO_TIMEOUT
         }
         is PdfOpenException -> when (throwable.reason) {
             PdfOpenException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED

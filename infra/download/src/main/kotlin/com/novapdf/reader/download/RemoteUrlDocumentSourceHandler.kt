@@ -22,6 +22,6 @@ class RemoteUrlDocumentSourceHandler @Inject constructor(
                     IllegalArgumentException("Unsupported document source: $source"),
                 )
             )
-        return downloader.download(remote.url)
+        return downloader.download(remote.url, allowLargeFile = remote.allowLargeFile)
     }
 }

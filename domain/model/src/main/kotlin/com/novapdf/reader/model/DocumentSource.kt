@@ -16,18 +16,33 @@ sealed interface DocumentSource {
         DROPBOX,
     }
 
-    data class RemoteUrl(val url: String) : DocumentSource {
+    data class RemoteUrl(
+        val url: String,
+        val allowLargeFile: Boolean = false,
+    ) : DocumentSource {
         override val id: String = url
         override val kind: Kind = Kind.REMOTE_URL
+
+        fun withLargeFileConsent(): RemoteUrl = copy(allowLargeFile = true)
     }
 
-    data class GoogleDrive(val fileId: String) : DocumentSource {
+    data class GoogleDrive(
+        val fileId: String,
+        val allowLargeFile: Boolean = false,
+    ) : DocumentSource {
         override val id: String = fileId
         override val kind: Kind = Kind.GOOGLE_DRIVE
+
+        fun withLargeFileConsent(): GoogleDrive = copy(allowLargeFile = true)
     }
 
-    data class Dropbox(val path: String) : DocumentSource {
+    data class Dropbox(
+        val path: String,
+        val allowLargeFile: Boolean = false,
+    ) : DocumentSource {
         override val id: String = path
         override val kind: Kind = Kind.DROPBOX
+
+        fun withLargeFileConsent(): Dropbox = copy(allowLargeFile = true)
     }
 }
