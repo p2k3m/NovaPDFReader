@@ -17,6 +17,7 @@ import com.novapdf.reader.download.RemotePdfDownloader
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.data.remote.RemoteSourceDiagnostics
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.DomainErrorCode
@@ -39,6 +40,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.job
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Domain-level contract that aggregates the use cases the presentation layer needs.
@@ -355,8 +358,112 @@ interface RemoteDocumentUseCase {
 class DefaultRemoteDocumentUseCase @Inject constructor(
     private val downloader: RemotePdfDownloader,
 ) : RemoteDocumentUseCase {
-    override suspend fun download(url: String): Result<Uri> =
-        downloader.download(url).mapDomainFailure()
+    private val stateLock = Mutex()
+    private var circuitOpen: Boolean = false
+    private var consecutiveNetworkFailures: Int = 0
+    private var lastNetworkFailure: RemotePdfException? = null
+    private var circuitDiagnostics: RemoteSourceDiagnostics? = null
+
+    override suspend fun download(url: String): Result<Uri> {
+        val circuitBreakerFailure = stateLock.withLock {
+            if (circuitOpen) {
+                RemotePdfException(
+                    RemotePdfException.Reason.CIRCUIT_OPEN,
+                    lastNetworkFailure,
+                    circuitDiagnostics,
+                )
+            } else {
+                null
+            }
+        }
+        if (circuitBreakerFailure != null) {
+            return Result.failure<Uri>(circuitBreakerFailure).mapDomainFailure()
+        }
+
+        val rawResult = downloader.download(url)
+        if (rawResult.isSuccess) {
+            stateLock.withLock { resetFailuresLocked() }
+            return rawResult.mapDomainFailure()
+        }
+
+        val failure = rawResult.exceptionOrNull()
+        if (failure is CancellationException) throw failure
+
+        val processed = stateLock.withLock { handleFailureLocked(failure) }
+        return processed.mapDomainFailure()
+    }
+
+    private fun handleFailureLocked(throwable: Throwable?): Result<Uri> {
+        val remoteFailure = when (throwable) {
+            is RemotePdfException -> throwable
+            null -> RemotePdfException(RemotePdfException.Reason.NETWORK)
+            else -> RemotePdfException(RemotePdfException.Reason.NETWORK, throwable)
+        }
+
+        when (remoteFailure.reason) {
+            RemotePdfException.Reason.NETWORK,
+            RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> {
+                lastNetworkFailure = remoteFailure
+                consecutiveNetworkFailures += 1
+                if (!circuitOpen && consecutiveNetworkFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+                    circuitOpen = true
+                    val diagnostics = RemoteSourceDiagnostics(
+                        failureCount = consecutiveNetworkFailures,
+                        lastFailureReason = remoteFailure.reason,
+                        lastFailureMessage = resolveFailureMessage(remoteFailure),
+                    )
+                    circuitDiagnostics = diagnostics
+                    return Result.failure<Uri>(
+                        RemotePdfException(
+                            RemotePdfException.Reason.CIRCUIT_OPEN,
+                            remoteFailure,
+                            diagnostics,
+                        )
+                    )
+                }
+            }
+
+            RemotePdfException.Reason.CORRUPTED -> {
+                resetFailuresLocked()
+            }
+
+            RemotePdfException.Reason.CIRCUIT_OPEN -> {
+                circuitOpen = true
+                remoteFailure.diagnostics?.let { diagnostics ->
+                    circuitDiagnostics = diagnostics
+                    consecutiveNetworkFailures = diagnostics.failureCount
+                }
+                lastNetworkFailure = remoteFailure
+            }
+        }
+
+        return Result.failure<Uri>(remoteFailure)
+    }
+
+    private fun resetFailuresLocked() {
+        if (circuitOpen) return
+        consecutiveNetworkFailures = 0
+        lastNetworkFailure = null
+        circuitDiagnostics = null
+    }
+
+    private fun resolveFailureMessage(throwable: Throwable?): String? {
+        var current = throwable
+        while (current != null) {
+            if (current !is RemotePdfException) {
+                val message = current.message
+                if (!message.isNullOrBlank()) {
+                    return message
+                }
+            }
+            current = current.cause
+        }
+        return throwable?.message
+    }
+
+    private companion object {
+        private const val CIRCUIT_BREAKER_THRESHOLD = 3
+    }
 }
 
 interface DocumentMaintenanceUseCase {
@@ -440,6 +547,7 @@ private tailrec fun resolveDomainErrorCode(throwable: Throwable?): DomainErrorCo
             RemotePdfException.Reason.NETWORK -> DomainErrorCode.IO_TIMEOUT
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> DomainErrorCode.IO_TIMEOUT
             RemotePdfException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED
+            RemotePdfException.Reason.CIRCUIT_OPEN -> DomainErrorCode.IO_TIMEOUT
         }
         is PdfOpenException -> when (throwable.reason) {
             PdfOpenException.Reason.CORRUPTED -> DomainErrorCode.PDF_MALFORMED

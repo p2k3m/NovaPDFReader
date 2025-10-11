@@ -79,6 +79,7 @@ class S3RemotePdfDownloader @Inject constructor(
             RemotePdfException.Reason.NETWORK -> true
             RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED -> false
             RemotePdfException.Reason.CORRUPTED -> false
+            RemotePdfException.Reason.CIRCUIT_OPEN -> false
         }
     }
 
