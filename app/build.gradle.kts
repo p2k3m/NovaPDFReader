@@ -545,6 +545,32 @@ if (requireConnectedDevice != true) {
                             return false
                         }
 
+                        fun packageServiceReady(): Boolean {
+                            val output = executeAdbCommand(
+                                serial,
+                                "shell",
+                                "cmd",
+                                "package",
+                                "list",
+                                "packages"
+                            )?.trim()
+
+                            if (output.isNullOrEmpty()) {
+                                return false
+                            }
+
+                            val lowered = output.lowercase()
+                            if (
+                                "can't find service: package" in lowered ||
+                                "failure calling service package" in lowered ||
+                                "cmd: not found" in lowered
+                            ) {
+                                return false
+                            }
+
+                            return true
+                        }
+
                         val timeoutNanos = TimeUnit.MINUTES.toNanos(5)
                         val start = System.nanoTime()
                         while (System.nanoTime() - start < timeoutNanos) {
@@ -557,7 +583,9 @@ if (requireConnectedDevice != true) {
                                 ?.toIntOrNull()
 
                             if ((bootCompleted == "1" || devBootCompleted == "1") && apiLevel != null) {
-                                return true
+                                if (packageServiceReady()) {
+                                    return true
+                                }
                             }
 
                             Thread.sleep(5_000)
