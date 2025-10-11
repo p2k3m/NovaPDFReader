@@ -1737,13 +1737,41 @@ jobs:
           adb wait-for-device
 
           if ! adb shell 'mkdir -p /sdcard/Download'; then
-            echo "::warning::Unable to create /sdcard/Download on device; assuming it already exists" >&2
+            echo "::warning::Unable to create /sdcard/Download on device; attempting alternate targets" >&2
           fi
 
-          echo "Pushing AI.pdf to /sdcard/Download/AI.pdf" >&2
-          adb push "$ai_pdf_path" /sdcard/Download/AI.pdf
-          echo "Verifying AI.pdf presence on device" >&2
-          adb shell ls -l /sdcard/Download/AI.pdf
+          push_targets=(
+            "/sdcard/Download/AI.pdf"
+            "/storage/emulated/0/Download/AI.pdf"
+          )
+          pushed_path=""
+
+          for target in "${push_targets[@]}"; do
+            echo "Pushing AI.pdf to ${target}" >&2
+            if adb push "$ai_pdf_path" "$target"; then
+              pushed_path="$target"
+              break
+            fi
+            echo "::warning::Failed to push AI.pdf to ${target}; trying next location" >&2
+          done
+
+          if [ -z "$pushed_path" ]; then
+            fallback_dir="/data/local/tmp"
+            fallback_path="${fallback_dir}/AI.pdf"
+            echo "Attempting fallback push of AI.pdf to ${fallback_path}" >&2
+            if adb push "$ai_pdf_path" "$fallback_path"; then
+              pushed_path="$fallback_path"
+              echo "::warning::AI.pdf pushed to fallback location ${fallback_path}; Downloads directory unavailable" >&2
+            fi
+          fi
+
+          if [ -z "$pushed_path" ]; then
+            echo "::error::Failed to push AI.pdf fixture to any known device location" >&2
+            exit 1
+          fi
+
+          echo "Verifying AI.pdf presence on device at ${pushed_path}" >&2
+          adb shell ls -l "$pushed_path"
       - name: Run instrumentation tests against stress PDFs
         if: env.UNIT_TESTS_PASSED == 'true'
         run: |
