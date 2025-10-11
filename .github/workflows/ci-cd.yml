@@ -152,17 +152,22 @@ jobs:
           missing=false
           firebase_missing=false
           aws_auth_mode=none
+          has_access_keys=false
+
+          if [ -n "${AWS_ACCESS_KEY_ID_SECRET:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+            has_access_keys=true
+          fi
 
           if [ -n "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
             aws_auth_mode=role
-          elif [ -n "${AWS_ACCESS_KEY_ID_SECRET:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+          elif [ "$has_access_keys" = true ]; then
             aws_auth_mode=access_keys
           fi
 
           if [ -z "${AWS_S3_READ_ROLE_ARN_SECRET:-}" ]; then
-            if [ -z "${AWS_ACCESS_KEY_ID_SECRET:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY_SECRET:-}" ]; then
+            if [ "$has_access_keys" = false ]; then
               echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role, and AWS access key credentials were not supplied as a fallback."
-              echo "Remediation: Either provide an IAM role ARN via the AWS_S3_READ_ROLE_ARN repository secret, or configure long-lived credentials by storing an access key ID and secret access key as the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY repository secrets."
+              echo "Remediation: Either provide an IAM role ARN via the AWS_S3_READ_ROLE_ARN repository secret, or configure long-lived credentials by storing an access key ID and secret access key as the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY repository secrets (double-check the secret names for typos)."
               missing=true
             else
               echo "::notice::AWS_S3_READ_ROLE_ARN secret not provided; will fall back to AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY credentials."
