@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.pdfbox.android)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.datastore.preferences)
 
     api(libs.androidx.room.runtime)
     api(libs.pdfium.android)

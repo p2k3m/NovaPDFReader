@@ -90,9 +90,11 @@ data class PendingLargeDownload(
 
 data class PdfViewerUiState(
     val documentId: String? = null,
+    val lastOpenedDocumentUri: String? = null,
     val pageCount: Int = 0,
     val currentPage: Int = 0,
     val documentStatus: DocumentStatus = DocumentStatus.Idle,
+    val preferencesReady: Boolean = false,
     val isNightMode: Boolean = false,
     val readingSpeed: Float = 0f,
     val swipeSensitivity: Float = 1f,
@@ -166,6 +168,8 @@ open class PdfViewerViewModel @Inject constructor(
     private val maintenanceUseCase = useCases.maintenance
     private val crashReportingUseCase = useCases.crashReporting
     private val adaptiveFlowUseCase = useCases.adaptiveFlow
+    private val preferencesUseCase = useCases.preferences
+    private val initialNightMode: Boolean = isNightModeEnabled()
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
@@ -235,7 +239,15 @@ open class PdfViewerViewModel @Inject constructor(
     @Volatile
     private var activeDocumentId: String? = null
     private val memoryCallbacks = object : ComponentCallbacks2 {
-        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+        override fun onConfigurationChanged(newConfig: Configuration) {
+            val nightMode = isNightModeEnabled()
+            if (_uiState.value.isNightMode != nightMode) {
+                updateUiState { current -> current.copy(isNightMode = nightMode) }
+            }
+            viewModelScope.launch(dispatchers.io) {
+                preferencesUseCase.setNightModeEnabled(nightMode)
+            }
+        }
 
         @Suppress("OVERRIDE_DEPRECATION")
         override fun onLowMemory() {
@@ -291,9 +303,26 @@ open class PdfViewerViewModel @Inject constructor(
         app.registerComponentCallbacks(memoryCallbacks)
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _uiState.value = _uiState.value.copy(
-            isNightMode = isNightModeEnabled(),
+            isNightMode = initialNightMode,
             dynamicColorEnabled = supportsDynamicColor
         )
+        viewModelScope.launch(dispatchers.io) {
+            preferencesUseCase.preferences.collect { prefs ->
+                val resolvedNightMode = prefs.nightMode ?: initialNightMode
+                if (prefs.nightMode == null) {
+                    preferencesUseCase.setNightModeEnabled(resolvedNightMode)
+                }
+                withContext(dispatchers.main) {
+                    updateUiState { current ->
+                        current.copy(
+                            isNightMode = resolvedNightMode,
+                            lastOpenedDocumentUri = prefs.lastDocumentUri,
+                            preferencesReady = true
+                        )
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             val contextFlow = combine(
                 adaptiveFlowUseCase.readingSpeed,
@@ -408,6 +437,13 @@ open class PdfViewerViewModel @Inject constructor(
         viewModelScope.launch(dispatchers.io) {
             loadDocument(uri, resetError = true)
         }
+    }
+
+    fun openLastDocument() {
+        if (!_uiState.value.preferencesReady) return
+        val uriString = _uiState.value.lastOpenedDocumentUri ?: return
+        val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return
+        openDocument(uri)
     }
 
     fun openRemoteDocument(source: DocumentSource) {
@@ -525,6 +561,9 @@ open class PdfViewerViewModel @Inject constructor(
             return
         }
         val session = sessionResult.session
+        runCatching {
+            preferencesUseCase.setLastOpenedDocument(session.uri.toString())
+        }
         annotationUseCase.clear(session.documentId)
         setLoadingState(
             isLoading = true,

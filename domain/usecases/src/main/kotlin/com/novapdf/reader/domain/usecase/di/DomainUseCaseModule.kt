@@ -26,6 +26,8 @@ import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.domain.usecase.RemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.RenderPageUseCase
 import com.novapdf.reader.domain.usecase.RenderTileUseCase
+import com.novapdf.reader.domain.usecase.DefaultUserPreferencesUseCase
+import com.novapdf.reader.domain.usecase.UserPreferencesUseCase
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -91,4 +93,10 @@ abstract class DomainUseCaseModule {
     @Binds
     @Singleton
     abstract fun bindAdaptiveFlowUseCase(impl: DefaultAdaptiveFlowUseCase): AdaptiveFlowUseCase
+
+    @Binds
+    @Singleton
+    abstract fun bindUserPreferencesUseCase(
+        impl: DefaultUserPreferencesUseCase,
+    ): UserPreferencesUseCase
 }

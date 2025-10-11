@@ -60,6 +60,7 @@ interface PdfViewerUseCases {
     val maintenance: DocumentMaintenanceUseCase
     val crashReporting: CrashReportingUseCase
     val adaptiveFlow: AdaptiveFlowUseCase
+    val preferences: UserPreferencesUseCase
 }
 
 @Singleton
@@ -76,6 +77,7 @@ class DefaultPdfViewerUseCases @Inject constructor(
     override val maintenance: DocumentMaintenanceUseCase,
     override val crashReporting: CrashReportingUseCase,
     override val adaptiveFlow: AdaptiveFlowUseCase,
+    override val preferences: UserPreferencesUseCase,
 ) : PdfViewerUseCases
 
 interface PdfDocumentUseCase {
