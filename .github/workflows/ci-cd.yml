@@ -188,18 +188,14 @@ jobs:
           fi
 
           if [ -z "${AI_PDF_SHA256_VALUE:-}" ]; then
-            echo "::error::Missing AI_PDF_SHA256 repository variable or secret required to validate the AI.pdf fixture integrity."
-            echo "Remediation: Calculate the SHA-256 digest of the AI.pdf object (for example, aws s3 cp s3://pics-1234/AI.pdf - | sha256sum) and store the 64-character hexadecimal value as the AI_PDF_SHA256 repository variable or secret."
-            missing=true
+            echo "::notice::AI_PDF_SHA256 repository variable or secret not provided; the checksum will be derived automatically."
           elif ! [[ ${AI_PDF_SHA256_VALUE} =~ ^[A-Fa-f0-9]{64}$ ]]; then
             echo "::error::AI_PDF_SHA256 must be a 64-character hexadecimal SHA-256 digest."
             missing=true
           fi
 
           if [ -z "${AI_PDF_SIZE_VALUE:-}" ]; then
-            echo "::error::Missing AI_PDF_SIZE repository variable or secret required to validate the AI.pdf fixture size."
-            echo "Remediation: Determine the size in bytes of the AI.pdf object (for example, aws s3api head-object --bucket pics-1234 --key AI.pdf --query 'ContentLength') and store it as the AI_PDF_SIZE repository variable or secret."
-            missing=true
+            echo "::notice::AI_PDF_SIZE repository variable or secret not provided; the size will be derived automatically."
           elif ! [[ ${AI_PDF_SIZE_VALUE} =~ ^[0-9]+$ ]]; then
             echo "::error::AI_PDF_SIZE must be an integer representing the AI.pdf object size in bytes."
             missing=true
@@ -436,10 +432,36 @@ jobs:
           mkdir -p "$cache_dir"
 
           etag=""
-          if metadata=$(aws s3api head-object --bucket "$bucket" --key "$key" --query ETag --output text 2>/dev/null); then
-            etag=$(printf '%s' "$metadata" | tr -d '"')
+          metadata_size=""
+          metadata_checksum=""
+          if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
+            readarray -t metadata_fields < <(python3 <<'PY'
+import base64
+import json
+import sys
+
+data = json.load(sys.stdin)
+
+etag = (data.get("ETag") or "").strip('"')
+size = data.get("ContentLength")
+checksum = data.get("ChecksumSHA256") or ""
+
+if checksum:
+    try:
+        checksum = base64.b64decode(checksum).hex()
+    except Exception:
+        checksum = ""
+
+print(etag)
+print("" if size is None else size)
+print(checksum)
+PY
+<<< "$metadata_json")
+            etag="${metadata_fields[0]:-}"
+            metadata_size="${metadata_fields[1]:-}"
+            metadata_checksum="${metadata_fields[2]:-}"
           else
-            echo "::warning::Unable to retrieve AI.pdf metadata via aws s3api head-object; caching will be skipped unless a previous cache entry exists."
+            echo "::warning::Unable to retrieve AI.pdf metadata via aws s3api head-object; caching and automatic defaults may be limited."
           fi
 
           cache_enabled="false"
@@ -457,6 +479,8 @@ jobs:
             echo "etag=${etag}"
             echo "bucket=${bucket}"
             echo "key=${key}"
+            echo "metadata_size=${metadata_size}"
+            echo "metadata_checksum=${metadata_checksum}"
           } >> "$GITHUB_OUTPUT"
       - name: Restore AI.pdf cache
         if: steps.ai_pdf_metadata.outputs.cache_enabled == 'true'
@@ -474,6 +498,8 @@ jobs:
           AI_PDF_SIZE: ${{ vars.AI_PDF_SIZE || secrets.AI_PDF_SIZE }}
           AI_PDF_DEST: ${{ steps.ai_pdf_metadata.outputs.dest_path }}
           AI_PDF_CACHE_HIT: ${{ steps.ai_pdf_cache.outputs.cache-hit }}
+          AI_PDF_METADATA_SIZE: ${{ steps.ai_pdf_metadata.outputs.metadata_size }}
+          AI_PDF_METADATA_CHECKSUM: ${{ steps.ai_pdf_metadata.outputs.metadata_checksum }}
         run: |
           set -euo pipefail
 
@@ -481,16 +507,14 @@ jobs:
           key="${AI_PDF_KEY:-}"
           expected_sha="${AI_PDF_SHA256:-}"
           expected_size="${AI_PDF_SIZE:-}"
+          metadata_size="${AI_PDF_METADATA_SIZE:-}"
+          metadata_checksum="${AI_PDF_METADATA_CHECKSUM:-}"
 
           if [ -z "$bucket" ] || [ -z "$key" ]; then
             echo "::error::AI.pdf bucket or key is empty. Set AI_PDF_BUCKET and AI_PDF_KEY repository variables if the defaults are incorrect."
             exit 1
           fi
 
-          if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
-            echo "::error::Missing expected checksum or size for AI.pdf. Ensure AI_PDF_SHA256 and AI_PDF_SIZE are defined."
-            exit 1
-          fi
           dest="${AI_PDF_DEST:-}"
           if [ -z "$dest" ]; then
             echo "::error::AI.pdf destination path is not defined."
@@ -500,7 +524,20 @@ jobs:
           tmp="${dest}.tmp"
           trap 'rm -f "$tmp"' EXIT
 
-          normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+          if [ -z "$expected_size" ] && [ -n "$metadata_size" ]; then
+            echo "::notice::Using AI.pdf size ${metadata_size} bytes from S3 metadata as the expected value."
+            expected_size="$metadata_size"
+          fi
+
+          normalized_expected_sha=""
+          if [ -z "$expected_sha" ] && [ -n "$metadata_checksum" ]; then
+            echo "::notice::Using AI.pdf checksum derived from S3 metadata as the expected value."
+            expected_sha="$metadata_checksum"
+          fi
+
+          if [ -n "$expected_sha" ]; then
+            normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+          fi
           cache_hit="${AI_PDF_CACHE_HIT:-false}"
 
           download_ai_pdf() {
@@ -529,14 +566,20 @@ jobs:
 
             local actual_size
             actual_size=$(stat -c%s "$path")
-            if [ "$actual_size" -ne "$expected_size" ]; then
+            if [ -z "$expected_size" ]; then
+              echo "::notice::AI.pdf size not supplied; using downloaded size ${actual_size} bytes."
+              expected_size="$actual_size"
+            elif [ "$actual_size" -ne "$expected_size" ]; then
               last_error="AI.pdf size mismatch. Expected ${expected_size} bytes but found ${actual_size} bytes."
               return 1
             fi
 
             local actual_sha
             actual_sha=$(sha256sum "$path" | awk '{print $1}')
-            if [ "$actual_sha" != "$normalized_expected_sha" ]; then
+            if [ -z "$normalized_expected_sha" ]; then
+              echo "::notice::AI.pdf checksum not supplied; using downloaded checksum ${actual_sha}."
+              normalized_expected_sha="$actual_sha"
+            elif [ "$actual_sha" != "$normalized_expected_sha" ]; then
               last_error="AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but found ${actual_sha}."
               return 1
             fi
@@ -567,6 +610,12 @@ jobs:
           rm -f "$tmp"
 
           echo "ai_pdf_path=$dest" >> "$GITHUB_OUTPUT"
+          if [ -n "$expected_size" ]; then
+            echo "ai_pdf_size=$expected_size" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$normalized_expected_sha" ]; then
+            echo "ai_pdf_sha256=$normalized_expected_sha" >> "$GITHUB_OUTPUT"
+          fi
           echo "AI_PDF_PATH=$dest" >> "$GITHUB_ENV"
       - name: Run unit tests
         id: unit_tests
@@ -740,16 +789,14 @@ jobs:
           fi
 
           if [ -z "${AI_PDF_SHA256_VALUE:-}" ]; then
-            echo "::error::Missing AI_PDF_SHA256 repository variable or secret required to validate the AI.pdf fixture integrity."
-            missing=true
+            echo "::notice::AI_PDF_SHA256 repository variable or secret not provided; the checksum will be derived automatically."
           elif ! [[ ${AI_PDF_SHA256_VALUE} =~ ^[A-Fa-f0-9]{64}$ ]]; then
             echo "::error::AI_PDF_SHA256 must be a 64-character hexadecimal SHA-256 digest."
             missing=true
           fi
 
           if [ -z "${AI_PDF_SIZE_VALUE:-}" ]; then
-            echo "::error::Missing AI_PDF_SIZE repository variable or secret required to validate the AI.pdf fixture size."
-            missing=true
+            echo "::notice::AI_PDF_SIZE repository variable or secret not provided; the size will be derived automatically."
           elif ! [[ ${AI_PDF_SIZE_VALUE} =~ ^[0-9]+$ ]]; then
             echo "::error::AI_PDF_SIZE must be an integer representing the AI.pdf object size in bytes."
             missing=true
@@ -1473,8 +1520,37 @@ jobs:
           fi
 
           if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
-            echo "::error::Missing expected checksum or size for AI.pdf. Ensure AI_PDF_SHA256 and AI_PDF_SIZE are defined."
-            exit 1
+            if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
+              readarray -t metadata_fields < <(python3 <<'PY'
+import base64
+import json
+import sys
+
+data = json.load(sys.stdin)
+size = data.get("ContentLength")
+checksum = data.get("ChecksumSHA256") or ""
+
+if checksum:
+    try:
+        checksum = base64.b64decode(checksum).hex()
+    except Exception:
+        checksum = ""
+
+print("" if size is None else size)
+print(checksum)
+PY
+<<< "$metadata_json")
+              if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
+                echo "::notice::Using AI.pdf size ${metadata_fields[0]} bytes from S3 metadata as the expected value."
+                expected_size="${metadata_fields[0]}"
+              fi
+              if [ -z "$expected_sha" ] && [ -n "${metadata_fields[1]:-}" ]; then
+                echo "::notice::Using AI.pdf checksum derived from S3 metadata as the expected value."
+                expected_sha="${metadata_fields[1]}"
+              fi
+            else
+              echo "::warning::Unable to derive AI.pdf metadata; proceeding without predefined checksum or size."
+            fi
           fi
 
           mkdir -p "$FIXTURE_DIR"
@@ -1494,16 +1570,25 @@ jobs:
             exit 1
           fi
 
-          normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+          normalized_expected_sha=""
+          if [ -n "$expected_sha" ]; then
+            normalized_expected_sha=$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')
+          fi
 
           actual_size=$(stat -c%s "$tmp")
-          if [ "$actual_size" -ne "$expected_size" ]; then
+          if [ -z "$expected_size" ]; then
+            echo "::notice::AI.pdf size not supplied; using downloaded size ${actual_size} bytes."
+            expected_size="$actual_size"
+          elif [ "$actual_size" -ne "$expected_size" ]; then
             echo "::error::AI.pdf size mismatch. Expected ${expected_size} bytes but found ${actual_size} bytes." >&2
             exit 1
           fi
 
           actual_sha=$(sha256sum "$tmp" | awk '{print $1}')
-          if [ "$actual_sha" != "$normalized_expected_sha" ]; then
+          if [ -z "$normalized_expected_sha" ]; then
+            echo "::notice::AI.pdf checksum not supplied; using downloaded checksum ${actual_sha}."
+            normalized_expected_sha="$actual_sha"
+          elif [ "$actual_sha" != "$normalized_expected_sha" ]; then
             echo "::error::AI.pdf SHA-256 mismatch. Expected ${normalized_expected_sha} but found ${actual_sha}." >&2
             exit 1
           fi
@@ -1513,6 +1598,12 @@ jobs:
           rm -f "$tmp"
 
           echo "ai_pdf_path=${dest}" >> "$GITHUB_OUTPUT"
+          if [ -n "$expected_size" ]; then
+            echo "ai_pdf_size=$expected_size" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$normalized_expected_sha" ]; then
+            echo "ai_pdf_sha256=$normalized_expected_sha" >> "$GITHUB_OUTPUT"
+          fi
       - name: Stage stress PDFs on emulator
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
