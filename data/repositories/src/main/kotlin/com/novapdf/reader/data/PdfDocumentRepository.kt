@@ -263,6 +263,7 @@ class PdfDocumentRepository(
         sizeBytesProvider: () -> Long? = { null },
         block: suspend () -> T,
     ): T {
+        signalPipelineProgress()
         val traceName = buildTraceSectionName(operation, pageIndex)
         Trace.beginSection(traceName)
         val startNanos = SystemClock.elapsedRealtimeNanos()
@@ -355,145 +356,171 @@ class PdfDocumentRepository(
     @WorkerThread
     suspend fun open(uri: Uri, cancellationSignal: CancellationSignal? = null): PdfDocumentSession {
         return withContextGuard {
-            cancellationSignal.throwIfCanceled()
-            closeSessionInternal()
-            releaseRepairedDocument(retainPersistent = true)
-            cachedRemoteFile?.let { file ->
-                if (file.exists() && !file.delete()) {
-                    NovaLog.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
-                }
-            }
-            cachedRemoteFile = null
-            cancellationSignal.throwIfCanceled()
-            var remoteCacheFile: File? = null
-            remoteCacheFile = try {
-                cacheRemoteUriIfNeeded(uri, cancellationSignal)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                NovaLog.w(
-                    TAG,
-                    "Unable to cache remote PDF from $uri",
-                    throwable = error,
-                    fields = logFields(
-                        operation = "cacheRemote",
-                        documentId = uri.toString(),
-                        pageIndex = null,
-                        sizeBytes = null,
-                        durationMs = null,
-                        field("uri", uri),
-                    ),
-                )
-                reportNonFatal(
-                    error,
-                    mapOf(
-                        "stage" to "cacheRemote",
-                        "uri" to uri.toString()
+            withPipelineWatchdog(
+                pipeline = PipelineType.OPEN,
+                timeoutMillis = PIPELINE_PROGRESS_TIMEOUT_MS,
+                onTimeout = { timeout ->
+                    NovaLog.w(
+                        TAG,
+                        "Open pipeline timed out; cancelling",
+                        throwable = timeout,
+                        fields = logFields(
+                            operation = "open",
+                            documentId = uri.toString(),
+                        ),
                     )
-                )
-                throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, error)
-            }
-            var keepRemoteCache = false
-            var remoteCacheDeleted = false
-            try {
-                val candidateUri = remoteCacheFile?.toUri() ?: uri
-                if (!validateDocumentUri(candidateUri)) {
-                    throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
-                }
-                val preparedFile = prepareLargeDocumentIfNeeded(candidateUri, uri, cancellationSignal)
-                if (preparedFile != null) {
-                    assignRepairedDocument(preparedFile)
-                }
-                val sourceUri = repairedDocumentFile?.toUri() ?: candidateUri
-                var activePfd = try {
-                    openParcelFileDescriptor(sourceUri, cancellationSignal)
-                } catch (security: SecurityException) {
-                    reportNonFatal(
-                        security,
-                        mapOf(
-                            "stage" to "openFileDescriptor",
-                            "uri" to sourceUri.toString()
-                        )
-                    )
-                    throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
-                } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
+                },
+            ) {
                 cancellationSignal.throwIfCanceled()
-                val document: PdfDocument = try {
-                    pdfiumCore.newDocument(activePfd)
-                } catch (throwable: Throwable) {
-                    try {
-                        activePfd.close()
-                    } catch (_: IOException) {
+                signalPipelineProgress()
+                closeSessionInternal()
+                signalPipelineProgress()
+                releaseRepairedDocument(retainPersistent = true)
+                cachedRemoteFile?.let { file ->
+                    if (file.exists() && !file.delete()) {
+                        NovaLog.w(TAG, "Unable to delete previous remote PDF cache at ${file.absolutePath}")
                     }
-                    NovaLog.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                }
+                cachedRemoteFile = null
+                cancellationSignal.throwIfCanceled()
+                signalPipelineProgress()
+                var remoteCacheFile: File? = null
+                remoteCacheFile = try {
+                    cacheRemoteUriIfNeeded(uri, cancellationSignal).also { signalPipelineProgress() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    NovaLog.w(
+                        TAG,
+                        "Unable to cache remote PDF from $uri",
+                        throwable = error,
+                        fields = logFields(
+                            operation = "cacheRemote",
+                            documentId = uri.toString(),
+                            pageIndex = null,
+                            sizeBytes = null,
+                            durationMs = null,
+                            field("uri", uri),
+                        ),
+                    )
                     reportNonFatal(
-                        throwable,
+                        error,
                         mapOf(
-                            "stage" to "pdfiumNewDocument",
-                            "uri" to sourceUri.toString()
+                            "stage" to "cacheRemote",
+                            "uri" to uri.toString()
                         )
                     )
-                    val repaired = attemptPdfRepair(candidateUri, cacheKey = uri)
-                        ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
-
-                    val repairedPfd = try {
-                        ParcelFileDescriptor.open(repaired, ParcelFileDescriptor.MODE_READ_ONLY)
-                    } catch (error: Exception) {
-                        throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, error)
+                    throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, error)
+                }
+                var keepRemoteCache = false
+                var remoteCacheDeleted = false
+                try {
+                    val candidateUri = remoteCacheFile?.toUri() ?: uri
+                    if (!validateDocumentUri(candidateUri)) {
+                        throw PdfOpenException(PdfOpenException.Reason.UNSUPPORTED)
                     }
-
-                    val repairedDocument = try {
-                        pdfiumCore.newDocument(repairedPfd)
-                    } catch (second: Throwable) {
-                        try {
-                            repairedPfd.close()
-                        } catch (_: IOException) {
-                        }
-                        NovaLog.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                    signalPipelineProgress()
+                    val preparedFile = prepareLargeDocumentIfNeeded(candidateUri, uri, cancellationSignal)
+                    if (preparedFile != null) {
+                        assignRepairedDocument(preparedFile)
+                        signalPipelineProgress()
+                    }
+                    val sourceUri = repairedDocumentFile?.toUri() ?: candidateUri
+                    var activePfd = try {
+                        openParcelFileDescriptor(sourceUri, cancellationSignal).also { signalPipelineProgress() }
+                    } catch (security: SecurityException) {
                         reportNonFatal(
-                            second,
+                            security,
                             mapOf(
-                                "stage" to "pdfiumNewDocumentRepair",
-                                "uri" to candidateUri.toString()
+                                "stage" to "openFileDescriptor",
+                                "uri" to sourceUri.toString()
                             )
                         )
-                        throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
-                    }
+                        throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED, security)
+                    } ?: throw PdfOpenException(PdfOpenException.Reason.ACCESS_DENIED)
+                    cancellationSignal.throwIfCanceled()
+                    signalPipelineProgress()
+                    val document: PdfDocument = try {
+                        pdfiumCore.newDocument(activePfd).also { signalPipelineProgress() }
+                    } catch (throwable: Throwable) {
+                        try {
+                            activePfd.close()
+                        } catch (_: IOException) {
+                        }
+                        NovaLog.e(TAG, "Failed to open PDF via Pdfium", throwable)
+                        reportNonFatal(
+                            throwable,
+                            mapOf(
+                                "stage" to "pdfiumNewDocument",
+                                "uri" to sourceUri.toString()
+                            )
+                        )
+                        val repaired = attemptPdfRepair(candidateUri, cacheKey = uri)
+                            ?: throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, throwable)
 
-                    if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
-                        cleanedUpRepairedFile(repairedDocumentFile!!)
+                        val repairedPfd = try {
+                            ParcelFileDescriptor.open(repaired, ParcelFileDescriptor.MODE_READ_ONLY)
+                        } catch (error: Exception) {
+                            throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, error)
+                        }
+
+                        val repairedDocument = try {
+                            pdfiumCore.newDocument(repairedPfd)
+                        } catch (second: Throwable) {
+                            try {
+                                repairedPfd.close()
+                            } catch (_: IOException) {
+                            }
+                            NovaLog.e(TAG, "Failed to open repaired PDF via Pdfium", second)
+                            reportNonFatal(
+                                second,
+                                mapOf(
+                                    "stage" to "pdfiumNewDocumentRepair",
+                                    "uri" to candidateUri.toString()
+                                )
+                            )
+                            throw PdfOpenException(PdfOpenException.Reason.CORRUPTED, second)
+                        }
+
+                        if (repairedDocumentFile != null && repairedDocumentFile != repaired) {
+                            cleanedUpRepairedFile(repairedDocumentFile!!)
+                        }
+                        assignRepairedDocument(repaired)
+                        signalPipelineProgress()
+                        activePfd = repairedPfd
+                        repairedDocument
                     }
-                    assignRepairedDocument(repaired)
-                    activePfd = repairedPfd
-                    repairedDocument
-                }
-                val pageCount = withPdfiumDocument(document, sourceUri) {
-                    pdfiumCore.getPageCount(document)
-                }
-                val session = PdfDocumentSession(
-                    documentId = uri.toString(),
-                    uri = sourceUri,
-                    pageCount = pageCount,
-                    document = document,
-                    fileDescriptor = activePfd
-                )
-                openSession.value = session
-                outlineNodes.value = parseDocumentOutline(session)
-                if (repairedDocumentFile == null) {
-                    cachedRemoteFile = remoteCacheFile
-                    keepRemoteCache = remoteCacheFile != null
-                } else if (remoteCacheFile != null && remoteCacheFile != repairedDocumentFile) {
-                    if (remoteCacheFile.exists() && !remoteCacheFile.delete()) {
-                        NovaLog.w(TAG, "Unable to delete temporary remote PDF at ${remoteCacheFile.absolutePath}")
+                    val pageCount = withPdfiumDocument(document, sourceUri) {
+                        signalPipelineProgress()
+                        pdfiumCore.getPageCount(document)
                     }
-                    remoteCacheDeleted = true
-                }
-                session
-            } finally {
-                if (!keepRemoteCache && !remoteCacheDeleted) {
-                    remoteCacheFile?.let { file ->
-                        if (file.exists() && !file.delete()) {
-                            NovaLog.w(TAG, "Unable to delete remote PDF cache at ${file.absolutePath}")
+                    signalPipelineProgress()
+                    val session = PdfDocumentSession(
+                        documentId = uri.toString(),
+                        uri = sourceUri,
+                        pageCount = pageCount,
+                        document = document,
+                        fileDescriptor = activePfd
+                    )
+                    openSession.value = session
+                    outlineNodes.value = parseDocumentOutline(session).also { signalPipelineProgress() }
+                    if (repairedDocumentFile == null) {
+                        cachedRemoteFile = remoteCacheFile
+                        keepRemoteCache = remoteCacheFile != null
+                    } else if (remoteCacheFile != null && remoteCacheFile != repairedDocumentFile) {
+                        if (remoteCacheFile.exists() && !remoteCacheFile.delete()) {
+                            NovaLog.w(TAG, "Unable to delete temporary remote PDF at ${remoteCacheFile.absolutePath}")
+                        }
+                        remoteCacheDeleted = true
+                    }
+                    signalPipelineProgress()
+                    session
+                } finally {
+                    if (!keepRemoteCache && !remoteCacheDeleted) {
+                        remoteCacheFile?.let { file ->
+                            if (file.exists() && !file.delete()) {
+                                NovaLog.w(TAG, "Unable to delete remote PDF cache at ${file.absolutePath}")
+                            }
                         }
                     }
                 }
@@ -513,19 +540,38 @@ class PdfDocumentRepository(
         profile: PageRenderProfile = PageRenderProfile.HIGH_DETAIL,
         cancellationSignal: CancellationSignal? = null,
     ): Bitmap? = withContextGuard {
-        cancellationSignal.throwIfCanceled()
-        if (targetWidth <= 0) return@withContextGuard null
-        if (malformedPages.contains(pageIndex)) {
-            throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
+        withPipelineWatchdog(
+            pipeline = PipelineType.RENDER,
+            timeoutMillis = PIPELINE_PROGRESS_TIMEOUT_MS,
+            onTimeout = { timeout ->
+                NovaLog.w(
+                    TAG,
+                    "Render pipeline timed out",
+                    throwable = timeout,
+                    fields = logFields(
+                        operation = "renderPage",
+                        documentId = openSession.value?.documentId,
+                        pageIndex = pageIndex,
+                    ),
+                )
+            },
+        ) {
+            cancellationSignal.throwIfCanceled()
+            signalPipelineProgress()
+            if (targetWidth <= 0) return@withPipelineWatchdog null
+            if (malformedPages.contains(pageIndex)) {
+                throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
+            }
+            val bitmap = ensurePageBitmap(
+                pageIndex,
+                targetWidth,
+                profile = profile,
+                cancellationSignal = cancellationSignal,
+            ) ?: return@withPipelineWatchdog null
+            cancellationSignal.throwIfCanceled()
+            signalPipelineProgress()
+            copyBitmap(bitmap)
         }
-        val bitmap = ensurePageBitmap(
-            pageIndex,
-            targetWidth,
-            profile = profile,
-            cancellationSignal = cancellationSignal,
-        ) ?: return@withContextGuard null
-        cancellationSignal.throwIfCanceled()
-        copyBitmap(bitmap)
     }
 
     @WorkerThread
@@ -540,129 +586,149 @@ class PdfDocumentRepository(
 
     @WorkerThread
     suspend fun renderTile(request: PageTileRequest): Bitmap? = withContextGuard {
-        request.cancellationSignal.throwIfCanceled()
-        coroutineContext.ensureActive()
-        if (malformedPages.contains(request.pageIndex)) {
-            throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
-        }
-        if (openSession.value == null) return@withContextGuard null
-        val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withContextGuard null
-        val pageWidth = pageSize.width
-        val pageHeight = pageSize.height
-        if (pageWidth <= 0 || pageHeight <= 0 || request.scale <= 0f) {
-            return@withContextGuard null
-        }
-
-        val clampedLeft = request.tileRect.left.coerceIn(0, pageWidth - 1)
-        val clampedTop = request.tileRect.top.coerceIn(0, pageHeight - 1)
-        val clampedRight = request.tileRect.right.coerceIn(clampedLeft + 1, pageWidth)
-        val clampedBottom = request.tileRect.bottom.coerceIn(clampedTop + 1, pageHeight)
-
-        val tileWidth = ((clampedRight - clampedLeft) * request.scale).roundToInt().coerceAtLeast(1)
-        val tileHeight = ((clampedBottom - clampedTop) * request.scale).roundToInt().coerceAtLeast(1)
-        val tileSizeBytes = tileWidth.toLong() * tileHeight.toLong() * 4L
-        val targetWidth = max(1, (pageWidth * request.scale).roundToInt())
-        val targetHeight = max(1, (pageHeight * request.scale).roundToInt())
-        val maxDimension = max(max(tileWidth, tileHeight), max(targetWidth, targetHeight))
-        if (maxDimension > MAX_BITMAP_DIMENSION) {
-            val adjustedScale = ((request.scale.toDouble() * MAX_BITMAP_DIMENSION.toDouble()) /
-                (maxDimension.toDouble() + 1.0)).coerceAtLeast(0.01).toFloat()
-            NovaLog.w(
-                TAG,
-                "Requested tile exceeds bitmap dimension cap ($tileWidth x $tileHeight); " +
-                    "falling back to scale $adjustedScale"
-            )
-            throw PdfRenderException(
-                PdfRenderException.Reason.PAGE_TOO_LARGE,
-                suggestedScale = adjustedScale
-            )
-        }
-        val offsetX = (-clampedLeft * request.scale).roundToInt()
-        val offsetY = (-clampedTop * request.scale).roundToInt()
-
-        val lockOwner = Any()
-        renderMutex.lock(lockOwner)
-        val activeSession = openSession.value
-        if (activeSession == null) {
-            renderMutex.unlock(lockOwner)
-            return@withContextGuard null
-        }
-        val result = try {
-            traceOperation(
-                operation = "renderTile",
-                documentId = activeSession.documentId,
-                pageIndex = request.pageIndex,
-                sizeBytesProvider = { tileSizeBytes },
-            ) {
-                request.cancellationSignal.throwIfCanceled()
-                coroutineContext.ensureActive()
-                val bitmap = obtainBitmap(tileWidth, tileHeight, Bitmap.Config.ARGB_8888)
-                try {
-                    request.cancellationSignal.throwIfCanceled()
-                    coroutineContext.ensureActive()
-                    withPdfiumPage(activeSession, request.pageIndex) {
-                        pdfiumCore.renderPageBitmap(
-                            activeSession.document,
-                            bitmap,
-                            request.pageIndex,
-                            offsetX,
-                            offsetY,
-                            targetWidth,
-                            targetHeight,
-                            true
-                        )
-                    }
-                    request.cancellationSignal.throwIfCanceled()
-                    coroutineContext.ensureActive()
-                    pageFailureCounts.remove(request.pageIndex)
-                    bitmap
-                } catch (throwable: Throwable) {
-                    recycleBitmap(bitmap)
-                    if (throwable is CancellationException) {
-                        throw throwable
-                    }
-                    if (throwable is PdfRenderException) throw throwable
-                    NovaLog.e(
-                        TAG,
-                        "Failed to render tile for page ${request.pageIndex}",
-                        throwable = throwable,
-                        fields = logFields(
-                            operation = "renderTile",
-                            documentId = activeSession.documentId,
-                            pageIndex = request.pageIndex,
-                            sizeBytes = tileSizeBytes,
-                        ),
-                    )
-                    val failureCount = pageFailureCounts.merge(request.pageIndex, 1) { previous, increment ->
-                        previous + increment
-                    } ?: 1
-                    val isMalformed = throwable.isLikelyMalformedPageError()
-                    val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
-                    reportNonFatal(
-                        throwable,
-                        mapOf(
-                            "stage" to "renderTile",
-                            "pageIndex" to request.pageIndex.toString(),
-                            "scale" to request.scale.toString(),
-                            "tile" to "$clampedLeft,$clampedTop,$clampedRight,$clampedBottom",
-                            "malformed" to shouldMarkMalformed.toString(),
-                            "failures" to failureCount.toString()
-                        )
-                    )
-                    if (shouldMarkMalformed) {
-                        markPageMalformed(request.pageIndex)
-                        throw PdfRenderException(
-                            PdfRenderException.Reason.MALFORMED_PAGE,
-                            cause = throwable
-                        )
-                    }
-                    null
-                }
+        withPipelineWatchdog(
+            pipeline = PipelineType.RENDER,
+            timeoutMillis = PIPELINE_PROGRESS_TIMEOUT_MS,
+            onTimeout = { timeout ->
+                NovaLog.w(
+                    TAG,
+                    "Render tile pipeline timed out",
+                    throwable = timeout,
+                    fields = logFields(
+                        operation = "renderTile",
+                        documentId = openSession.value?.documentId,
+                        pageIndex = request.pageIndex,
+                    ),
+                )
+            },
+        ) {
+            request.cancellationSignal.throwIfCanceled()
+            coroutineContext.ensureActive()
+            signalPipelineProgress()
+            if (malformedPages.contains(request.pageIndex)) {
+                throw PdfRenderException(PdfRenderException.Reason.MALFORMED_PAGE)
             }
-        } finally {
-            renderMutex.unlock(lockOwner)
+            if (openSession.value == null) return@withPipelineWatchdog null
+            val pageSize = getPageSizeInternal(request.pageIndex) ?: return@withPipelineWatchdog null
+            val pageWidth = pageSize.width
+            val pageHeight = pageSize.height
+            if (pageWidth <= 0 || pageHeight <= 0 || request.scale <= 0f) {
+                return@withPipelineWatchdog null
+            }
+
+            val clampedLeft = request.tileRect.left.coerceIn(0, pageWidth - 1)
+            val clampedTop = request.tileRect.top.coerceIn(0, pageHeight - 1)
+            val clampedRight = request.tileRect.right.coerceIn(clampedLeft + 1, pageWidth)
+            val clampedBottom = request.tileRect.bottom.coerceIn(clampedTop + 1, pageHeight)
+
+            val tileWidth = ((clampedRight - clampedLeft) * request.scale).roundToInt().coerceAtLeast(1)
+            val tileHeight = ((clampedBottom - clampedTop) * request.scale).roundToInt().coerceAtLeast(1)
+            val tileSizeBytes = tileWidth.toLong() * tileHeight.toLong() * 4L
+            val targetWidth = max(1, (pageWidth * request.scale).roundToInt())
+            val targetHeight = max(1, (pageHeight * request.scale).roundToInt())
+            val maxDimension = max(max(tileWidth, tileHeight), max(targetWidth, targetHeight))
+            if (maxDimension > MAX_BITMAP_DIMENSION) {
+                val adjustedScale = ((request.scale.toDouble() * MAX_BITMAP_DIMENSION.toDouble()) /
+                    (maxDimension.toDouble() + 1.0)).coerceAtLeast(0.01).toFloat()
+                NovaLog.w(
+                    TAG,
+                    "Requested tile exceeds bitmap dimension cap ($tileWidth x $tileHeight); " +
+                        "falling back to scale $adjustedScale"
+                )
+                throw PdfRenderException(
+                    PdfRenderException.Reason.PAGE_TOO_LARGE,
+                    suggestedScale = adjustedScale
+                )
+            }
+            val offsetX = (-clampedLeft * request.scale).roundToInt()
+            val offsetY = (-clampedTop * request.scale).roundToInt()
+
+            val lockOwner = Any()
+            renderMutex.lock(lockOwner)
+            val activeSession = openSession.value
+            if (activeSession == null) {
+                renderMutex.unlock(lockOwner)
+                return@withPipelineWatchdog null
+            }
+            val result = try {
+                traceOperation(
+                    operation = "renderTile",
+                    documentId = activeSession.documentId,
+                    pageIndex = request.pageIndex,
+                    sizeBytesProvider = { tileSizeBytes },
+                ) {
+                    request.cancellationSignal.throwIfCanceled()
+                    coroutineContext.ensureActive()
+                    val bitmap = obtainBitmap(tileWidth, tileHeight, Bitmap.Config.ARGB_8888)
+                    try {
+                        request.cancellationSignal.throwIfCanceled()
+                        coroutineContext.ensureActive()
+                        withPdfiumPage(activeSession, request.pageIndex) {
+                            pdfiumCore.renderPageBitmap(
+                                activeSession.document,
+                                bitmap,
+                                request.pageIndex,
+                                offsetX,
+                                offsetY,
+                                targetWidth,
+                                targetHeight,
+                                true
+                            )
+                        }
+                        request.cancellationSignal.throwIfCanceled()
+                        coroutineContext.ensureActive()
+                        pageFailureCounts.remove(request.pageIndex)
+                        signalPipelineProgress()
+                        bitmap
+                    } catch (throwable: Throwable) {
+                        recycleBitmap(bitmap)
+                        if (throwable is CancellationException) {
+                            throw throwable
+                        }
+                        if (throwable is PdfRenderException) throw throwable
+                        NovaLog.e(
+                            TAG,
+                            "Failed to render tile for page ${request.pageIndex}",
+                            throwable = throwable,
+                            fields = logFields(
+                                operation = "renderTile",
+                                documentId = activeSession.documentId,
+                                pageIndex = request.pageIndex,
+                                sizeBytes = tileSizeBytes,
+                            ),
+                        )
+                        val failureCount = pageFailureCounts.merge(request.pageIndex, 1) { previous, increment ->
+                            previous + increment
+                        } ?: 1
+                        val isMalformed = throwable.isLikelyMalformedPageError()
+                        val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
+                        reportNonFatal(
+                            throwable,
+                            mapOf(
+                                "stage" to "renderTile",
+                                "pageIndex" to request.pageIndex.toString(),
+                                "scale" to request.scale.toString(),
+                                "tile" to "$clampedLeft,$clampedTop,$clampedRight,$clampedBottom",
+                                "malformed" to shouldMarkMalformed.toString(),
+                                "failures" to failureCount.toString()
+                            )
+                        )
+                        if (shouldMarkMalformed) {
+                            markPageMalformed(request.pageIndex)
+                            throw PdfRenderException(
+                                PdfRenderException.Reason.MALFORMED_PAGE,
+                                cause = throwable
+                            )
+                        }
+                        null
+                    }
+                }
+            } finally {
+                renderMutex.unlock(lockOwner)
+            }
+            signalPipelineProgress()
+            result
         }
-        result
     }
 
     fun prefetchPages(indices: List<Int>, targetWidth: Int) {
@@ -1230,6 +1296,7 @@ class PdfDocumentRepository(
     @WorkerThread
     private fun updateRenderProgress(progress: PdfRenderProgress) {
         ensureWorkerThread()
+        signalPipelineProgress()
         renderProgressState.value = progress
     }
 
@@ -1299,6 +1366,7 @@ class PdfDocumentRepository(
                                 val read = input.read(buffer)
                                 if (read == -1) break
                                 output.write(buffer, 0, read)
+                                signalPipelineProgress()
                             }
                             output.flush()
                         }

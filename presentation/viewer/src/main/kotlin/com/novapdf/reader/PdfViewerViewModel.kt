@@ -528,6 +528,9 @@ open class PdfViewerViewModel @Inject constructor(
             indexingJob = result.job
         }.onFailure { throwable ->
             if (throwable is CancellationException) throw throwable
+            if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
+                notifyOperationTimeout()
+            }
             crashReportingUseCase.recordNonFatal(
                 throwable,
                 mapOf(
@@ -553,6 +556,9 @@ open class PdfViewerViewModel @Inject constructor(
             )
             val throwable = result.exceptionOrNull()
             if (throwable is CancellationException) throw throwable
+            if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
+                notifyOperationTimeout()
+            }
             if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.PAGE_TOO_LARGE) {
                 notifyPageTooLarge()
                 val fallbackWidth = throwable.suggestedWidth?.takeIf { it > 0 }
@@ -564,6 +570,9 @@ open class PdfViewerViewModel @Inject constructor(
                     )
                     fallbackResult.exceptionOrNull()?.let { error ->
                         if (error is CancellationException) throw error
+                        if (error is DomainException && error.code == DomainErrorCode.IO_TIMEOUT) {
+                            notifyOperationTimeout()
+                        }
                     }
                 }
             }
@@ -764,6 +773,9 @@ open class PdfViewerViewModel @Inject constructor(
                     }
                 }
             }
+            if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
+                notifyOperationTimeout()
+            }
             null
         }
     }
@@ -837,6 +849,9 @@ open class PdfViewerViewModel @Inject constructor(
                         markPageMalformed(index)
                     }
                 }
+            }
+            if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
+                notifyOperationTimeout()
             }
             null
         }
@@ -960,6 +975,10 @@ open class PdfViewerViewModel @Inject constructor(
         if (pageTooLargeNotified.compareAndSet(false, true)) {
             enqueueMessage(R.string.error_page_too_large)
         }
+    }
+
+    private fun notifyOperationTimeout() {
+        enqueueMessage(R.string.error_document_io_issue)
     }
 
     @StringRes
