@@ -1640,7 +1640,7 @@ jobs:
                 print(etag)
                 print("" if size is None else size)
                 print(checksum)
-' "$metadata_json"
+              ' "$metadata_json"
             )
 
             if [ "${metadata_fields[0]:-}" != "" ] && [ "${metadata_fields[0]}" != "null" ]; then
