@@ -1781,7 +1781,7 @@ jobs:
           }
 
           manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-PY
+          PY
       - name: Download AI.pdf fixture from S3
         if: env.UNIT_TESTS_PASSED == 'true'
         id: download_ai_pdf
@@ -1910,32 +1910,32 @@ PY
           export AI_SHA="$normalized_expected_sha"
 
           python3 - <<'PY'
-import json
-import os
-import pathlib
+          import json
+          import os
+          import pathlib
 
-manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
+          manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
 
-def _load_existing(path: pathlib.Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+          def _load_existing(path: pathlib.Path) -> dict:
+              if not path.exists():
+                  return {}
+              try:
+                  return json.loads(path.read_text(encoding="utf-8"))
+              except Exception:
+                  return {}
 
-data = _load_existing(manifest_path)
+          data = _load_existing(manifest_path)
 
-data["ai_pdf"] = {
-    "path": os.environ.get("AI_PATH", ""),
-    "version": os.environ.get("AI_VERSION", ""),
-    "etag": os.environ.get("AI_ETAG", ""),
-    "size": os.environ.get("AI_SIZE", ""),
-    "sha256": os.environ.get("AI_SHA", ""),
-}
+          data["ai_pdf"] = {
+              "path": os.environ.get("AI_PATH", ""),
+              "version": os.environ.get("AI_VERSION", ""),
+              "etag": os.environ.get("AI_ETAG", ""),
+              "size": os.environ.get("AI_SIZE", ""),
+              "sha256": os.environ.get("AI_SHA", ""),
+          }
 
-manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-PY
+          manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+          PY
       - name: Stage stress PDFs on emulator
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
