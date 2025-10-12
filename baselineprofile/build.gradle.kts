@@ -337,6 +337,10 @@ val connectedAndroidTestTasks = tasks.matching { task ->
         task.name.startsWith("checkTestedAppObfuscation")
 }
 
+val baselineProfileCollectionTasks = tasks.matching { task ->
+    task.name.startsWith("collect") && task.name.endsWith("BaselineProfile")
+}
+
 if (skipConnectedTestsOnCi) {
     androidComponents.beforeVariants { variantBuilder ->
         variantBuilder.enable = false
@@ -351,8 +355,28 @@ if (skipConnectedTestsOnCi) {
             false
         }
     }
+
+    baselineProfileCollectionTasks.configureEach {
+        onlyIf {
+            logger.warn(
+                "Skipping task $name because connected Android tests are disabled on CI. " +
+                    "Set novapdf.allowCiConnectedTests=true or NOVAPDF_ALLOW_CI_CONNECTED_TESTS=true to enable them."
+            )
+            false
+        }
+    }
 } else {
     connectedAndroidTestTasks.configureEach {
+        onlyIf {
+            val hasDevice = hasConnectedDeviceForBaseline()
+            if (!hasDevice) {
+                logger.warn("Skipping task $name because no connected Android devices/emulators were detected.")
+            }
+            hasDevice
+        }
+    }
+
+    baselineProfileCollectionTasks.configureEach {
         onlyIf {
             val hasDevice = hasConnectedDeviceForBaseline()
             if (!hasDevice) {
