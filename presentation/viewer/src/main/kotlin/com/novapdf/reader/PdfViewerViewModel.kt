@@ -214,6 +214,10 @@ open class PdfViewerViewModel @Inject constructor(
     private val processLifecycleOwner = runCatching { ProcessLifecycleOwner.get() }.getOrNull()
     @Volatile
     private var appInForeground: Boolean = true
+    @Volatile
+    private var uiUnderLoad: Boolean = false
+    @Volatile
+    private var backgroundWorkEnabled: Boolean = true
     private val appLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
             updateForegroundState(true)
@@ -430,6 +434,7 @@ open class PdfViewerViewModel @Inject constructor(
             }.collect { (context, bitmapMemory) ->
                 val session = context.session
                 recomputePrefetchEnabled(session)
+                uiUnderLoad = context.isUiUnderLoad
                 val annotations = session?.let { annotationUseCase.annotationsFor(it.documentId) }
                     .orEmpty()
                 val bookmarks = if (session != null) {
@@ -458,6 +463,7 @@ open class PdfViewerViewModel @Inject constructor(
                     bitmapMemory = bitmapMemory,
                     malformedPages = if (shouldResetMalformed) emptySet() else previous.malformedPages
                 )
+                updateBackgroundWorkState()
             }
         }
         viewModelScope.launch {
@@ -507,17 +513,29 @@ open class PdfViewerViewModel @Inject constructor(
     private fun shouldThrottlePrefetch(): Boolean {
         if (!prefetchEnabled) return true
         if (!appInForeground) return true
-        return adaptiveFlowUseCase.isUiUnderLoad()
+        return uiUnderLoad
     }
 
     private fun recomputePrefetchEnabled(session: PdfDocumentSession?) {
-        prefetchEnabled = renderCachesEnabled.get() &&
+        val enabled = renderCachesEnabled.get() &&
             (session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true)
+        if (prefetchEnabled != enabled) {
+            prefetchEnabled = enabled
+            updateBackgroundWorkState()
+        }
     }
 
     private fun updateForegroundState(isForeground: Boolean) {
         appInForeground = isForeground
-        renderQueue.setBackgroundWorkEnabled(isForeground)
+        updateBackgroundWorkState()
+    }
+
+    private fun updateBackgroundWorkState() {
+        val shouldEnable = appInForeground && prefetchEnabled && !uiUnderLoad
+        if (backgroundWorkEnabled != shouldEnable) {
+            backgroundWorkEnabled = shouldEnable
+            renderQueue.setBackgroundWorkEnabled(shouldEnable)
+        }
     }
 
     fun openDocument(uri: Uri) {
