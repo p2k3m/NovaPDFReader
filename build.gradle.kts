@@ -303,8 +303,8 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
         return false
     }
 
-    val attempts = 20
-    repeat(attempts) { attempt ->
+    val bootCheckAttempts = 20
+    repeat(bootCheckAttempts) { attempt ->
         val bootCompleted = runAdbCommand(
             serial,
             logger,
@@ -323,13 +323,12 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
         )?.trim()
 
         if (bootCompleted == "1" || devBootCompleted == "1") {
-            disablePlayServicesAutoUpdates(serial, logger)
-            return true
+            return ensurePackageManagerReady(serial, logger)
         }
 
-        if (attempt < attempts - 1) {
+        if (attempt < bootCheckAttempts - 1) {
             logger.info(
-                "Android device $serial has not reported sys.boot_completed=1 (attempt ${attempt + 1} of $attempts). Retrying before APK installation."
+                "Android device $serial has not reported sys.boot_completed=1 (attempt ${attempt + 1} of $bootCheckAttempts). Retrying before APK installation."
             )
             Thread.sleep(10_000)
         }
@@ -337,6 +336,43 @@ fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
 
     logger.warn(
         "Android device $serial did not report sys.boot_completed=1 before APK installation."
+    )
+    return false
+}
+
+private fun ensurePackageManagerReady(serial: String, logger: Logger): Boolean {
+    val serviceCheckAttempts = 10
+    repeat(serviceCheckAttempts) { attempt ->
+        val output = runAdbCommand(
+            serial,
+            logger,
+            timeoutSeconds = 30,
+            "shell",
+            "cmd",
+            "package",
+            "path",
+            "android"
+        )?.trim()
+
+        val serviceUnavailable = output.isNullOrEmpty() ||
+            output.contains("Can't find service: package", ignoreCase = true) ||
+            output.contains("Exception occurred", ignoreCase = true)
+
+        if (!serviceUnavailable) {
+            disablePlayServicesAutoUpdates(serial, logger)
+            return true
+        }
+
+        if (attempt < serviceCheckAttempts - 1) {
+            logger.info(
+                "Android device $serial does not have the package service ready yet (attempt ${attempt + 1} of $serviceCheckAttempts). Retrying before APK installation."
+            )
+            Thread.sleep(10_000)
+        }
+    }
+
+    logger.warn(
+        "Android device $serial did not expose a responsive package service before APK installation."
     )
     return false
 }
