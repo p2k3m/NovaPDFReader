@@ -14,20 +14,9 @@ internal const val STEADY_STATE_SCROLL_VARIANCE_FPS = 5.0
 internal const val PEAK_MEMORY_TARGET_MB = 600.0
 internal const val PEAK_MEMORY_VARIANCE_MB = 75.0
 
-internal fun List<Long>.median(): Double {
+internal fun List<out Number>.median(): Double {
     require(isNotEmpty()) { "Median is undefined for an empty collection." }
-    val sorted = sorted()
-    val middle = sorted.size / 2
-    return if (sorted.size % 2 == 0) {
-        (sorted[middle - 1] + sorted[middle]) / 2.0
-    } else {
-        sorted[middle].toDouble()
-    }
-}
-
-internal fun List<Double>.median(): Double {
-    require(isNotEmpty()) { "Median is undefined for an empty collection." }
-    val sorted = sorted()
+    val sorted = map { it.toDouble() }.sorted()
     val middle = sorted.size / 2
     return if (sorted.size % 2 == 0) {
         (sorted[middle - 1] + sorted[middle]) / 2.0
