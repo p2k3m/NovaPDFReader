@@ -1596,7 +1596,7 @@ jobs:
             fi
 
             readarray -t metadata_fields < <(
-              python3 - <<'PY'
+              python3 -c '
 import json
 import sys
 
@@ -1605,13 +1605,9 @@ try:
 except Exception:
     data = {}
 
-version_id = data.get("VersionId") or ""
-etag = (data.get("ETag") or "").strip('"')
-
-print(version_id)
-print(etag)
-PY
-            <<< "$metadata_json"
+print(data.get("VersionId") or "")
+print((data.get("ETag") or "").strip("\""))
+' <<< "$metadata_json"
             )
 
             if [ "${metadata_fields[0]:-}" != "" ] && [ "${metadata_fields[0]}" != "null" ]; then
@@ -1706,7 +1702,7 @@ PY
           fi
 
           readarray -t metadata_fields < <(
-            python3 - <<'PY' <<<"$metadata_json"
+            python3 -c '
 import base64
 import json
 import sys
@@ -1718,7 +1714,7 @@ except Exception:
 
 size = data.get("ContentLength")
 checksum = data.get("ChecksumSHA256") or ""
-etag = (data.get("ETag") or "").strip('"')
+etag = (data.get("ETag") or "").strip("\"")
 version_id = data.get("VersionId") or ""
 
 if checksum:
@@ -1731,7 +1727,7 @@ print("" if size is None else size)
 print(checksum)
 print(etag)
 print(version_id)
-PY
+' <<< "$metadata_json"
           )
 
           if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
