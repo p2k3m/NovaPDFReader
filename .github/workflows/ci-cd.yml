@@ -1615,31 +1615,31 @@ jobs:
 
             readarray -t metadata_fields < <(
               python3 -c '
-  import base64
-  import json
-  import sys
+                import base64
+                import json
+                import sys
 
-  raw = sys.argv[1] if len(sys.argv) > 1 else ""
-  try:
-      data = json.loads(raw)
-  except Exception:
-      data = {}
+                raw = sys.argv[1] if len(sys.argv) > 1 else ""
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = {}
 
-  version = data.get("VersionId") or ""
-  etag = (data.get("ETag") or "").strip("\"")
-  size = data.get("ContentLength")
-  checksum = data.get("ChecksumSHA256") or ""
+                version = data.get("VersionId") or ""
+                etag = (data.get("ETag") or "").strip("\"")
+                size = data.get("ContentLength")
+                checksum = data.get("ChecksumSHA256") or ""
 
-  if checksum:
-      try:
-          checksum = base64.b64decode(checksum).hex()
-      except Exception:
-          checksum = ""
+                if checksum:
+                    try:
+                        checksum = base64.b64decode(checksum).hex()
+                    except Exception:
+                        checksum = ""
 
-  print(version)
-  print(etag)
-  print("" if size is None else size)
-  print(checksum)
+                print(version)
+                print(etag)
+                print("" if size is None else size)
+                print(checksum)
 ' "$metadata_json"
             )
 
