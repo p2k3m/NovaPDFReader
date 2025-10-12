@@ -32,9 +32,136 @@ if [ -n "$serial" ]; then
   adb_cmd+=(-s "$serial")
 fi
 
+package_name="${PACKAGE_NAME:-com.novapdf.reader}"
+test_package_name="${TEST_PACKAGE_NAME:-${package_name}.test}"
+collect_native_libs="${COLLECT_NATIVE_LIBS:-true}"
+native_lib_root="${output_dir}/native-libs"
+
 log() {
   local message="$1"
   printf '[native-crash] %s\n' "$message" >&2
+}
+
+determine_active_abis() {
+  local package="$1"
+  local -n result_ref="$2"
+  result_ref=()
+
+  local dumpsys_output
+  if ! dumpsys_output=$(timeout 15s "${adb_cmd[@]}" shell dumpsys package "$package" 2>/dev/null); then
+    return 1
+  fi
+
+  local primary secondary
+  primary=$(printf '%s\n' "$dumpsys_output" | awk -F'=' '/primaryCpuAbi=/{print $2; exit}' | tr -d '\r')
+  secondary=$(printf '%s\n' "$dumpsys_output" | awk -F'=' '/secondaryCpuAbi=/{print $2; exit}' | tr -d '\r')
+
+  if [ -n "$primary" ] && [ "$primary" != "(null)" ]; then
+    result_ref+=("$primary")
+  fi
+
+  if [ -n "$secondary" ] && [ "$secondary" != "(null)" ] && [ "$secondary" != "$primary" ]; then
+    result_ref+=("$secondary")
+  fi
+
+  if [ "${#result_ref[@]}" -eq 0 ]; then
+    local fallback
+    fallback=$(timeout 5s "${adb_cmd[@]}" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r' || true)
+    if [ -n "$fallback" ]; then
+      result_ref+=("$fallback")
+    fi
+  fi
+
+  return 0
+}
+
+extract_native_libs_for_package() {
+  local package="$1"
+  local destination_root="$2"
+
+  if ! command -v unzip >/dev/null 2>&1; then
+    log "Skipping native library extraction for $package because unzip is unavailable"
+    return
+  fi
+
+  local -a active_abis
+  if ! determine_active_abis "$package" active_abis || [ "${#active_abis[@]}" -eq 0 ]; then
+    log "Unable to determine active ABI for $package; skipping native library extraction"
+    return
+  fi
+
+  local apk_paths
+  if ! apk_paths=$(timeout 30s "${adb_cmd[@]}" shell pm path "$package" 2>/dev/null); then
+    log "Failed to query APK paths for $package; skipping native library extraction"
+    return
+  fi
+  apk_paths=$(printf '%s\n' "$apk_paths" | tr -d '\r' | awk 'NF')
+  if [ -z "$apk_paths" ]; then
+    log "No APK paths reported for $package; skipping native library extraction"
+    return
+  fi
+
+  local package_root="${destination_root%/}/$package"
+  local apk_output_dir="${package_root}/apks"
+  local libs_output_dir="${package_root}/native-libs"
+  mkdir -p "$apk_output_dir" "$libs_output_dir"
+
+  log "Extracting native libraries for $package (ABIs: ${active_abis[*]})"
+  local saved_any=false
+
+  while IFS= read -r raw_path; do
+    [ -n "$raw_path" ] || continue
+    local remote_path="${raw_path#*:}"
+    if [ -z "$remote_path" ]; then
+      continue
+    fi
+
+    local apk_name
+    apk_name=$(basename "$remote_path")
+    local local_apk_path="${apk_output_dir}/${apk_name}"
+    if ! timeout 60s "${adb_cmd[@]}" pull "$remote_path" "$local_apk_path" >/dev/null 2>&1; then
+      log "Failed to pull $remote_path for $package"
+      continue
+    fi
+
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    local -a patterns=()
+    local abi
+    for abi in "${active_abis[@]}"; do
+      patterns+=("lib/${abi}/*")
+    done
+
+    if unzip -qn "$local_apk_path" "${patterns[@]}" -d "$temp_dir" >/dev/null 2>&1; then
+      if [ -d "$temp_dir/lib" ]; then
+        while IFS= read -r lib_path; do
+          local relative="${lib_path#${temp_dir}/lib/}"
+          local current_abi="${relative%%/*}"
+          local remainder="${relative#*/}"
+          if [ -z "$remainder" ] || [ "$current_abi" = "$relative" ]; then
+            continue
+          fi
+          local destination_path="${libs_output_dir}/${current_abi}/${remainder}"
+          mkdir -p "$(dirname "$destination_path")"
+          if [ -f "$destination_path" ]; then
+            continue
+          fi
+          cp "$lib_path" "$destination_path"
+          saved_any=true
+        done < <(find "$temp_dir/lib" -type f -name '*.so' -print)
+      fi
+    else
+      log "No native libraries for ${active_abis[*]} found in ${apk_name}"
+    fi
+
+    rm -rf "$temp_dir"
+  done <<< "$apk_paths"
+
+  if [ "$saved_any" = true ]; then
+    log "Saved native libraries for $package to ${libs_output_dir}"
+  else
+    log "No native libraries extracted for $package"
+  fi
 }
 
 pdfium_only="${PDFIUM_ONLY:-true}"
@@ -186,6 +313,17 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 PY
+
+case "${collect_native_libs,,}" in
+  ""|"0"|"false"|"no")
+    ;;
+  *)
+    extract_native_libs_for_package "$package_name" "$native_lib_root"
+    if [ -n "$test_package_name" ] && [ "$test_package_name" != "$package_name" ]; then
+      extract_native_libs_for_package "$test_package_name" "$native_lib_root"
+    fi
+    ;;
+esac
 
 log "Wrote Pdfium native backtrace summary to $backtrace_path"
 exit 0
