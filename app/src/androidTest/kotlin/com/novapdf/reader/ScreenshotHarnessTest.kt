@@ -3,9 +3,12 @@ package com.novapdf.reader
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.novapdf.reader.logging.NovaLog
@@ -26,9 +29,11 @@ import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.collections.buildList
 import org.json.JSONObject
 import org.junit.After
@@ -40,6 +45,9 @@ import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.text.Charsets
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
@@ -232,33 +240,7 @@ class ScreenshotHarnessTest {
         )
 
         val start = System.currentTimeMillis()
-        var lastLog = start
-        var completedFlag: File? = null
-        while (completedFlag == null) {
-            if (!activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)) {
-                val error = IllegalStateException(
-                    "ReaderActivity unexpectedly stopped while waiting for screenshots"
-                )
-                logHarnessError(error.message ?: "ReaderActivity stopped unexpectedly", error)
-                throw error
-            }
-            if (System.currentTimeMillis() - start > TimeUnit.MINUTES.toMillis(5)) {
-                val error = IllegalStateException("Timed out waiting for host screenshot completion signal")
-                logHarnessError(error.message ?: "Timed out waiting for screenshot completion", error)
-                throw error
-            }
-            completedFlag = doneFlags.firstOrNull(::flagExists)
-            val now = System.currentTimeMillis()
-            if (now - lastLog >= TimeUnit.SECONDS.toMillis(15)) {
-                logHarnessInfo(
-                    "Screenshot harness still waiting; ready flags present=${readyFlags.count(::flagExists)} " +
-                        "done flags present=${doneFlags.count(::flagExists)}"
-                )
-                lastLog = now
-            }
-            metricsRecorder?.sample()
-            Thread.sleep(250)
-        }
+        val completedFlag = awaitScreenshotCompletionFlag(readyFlags, doneFlags, start)
 
         withContext(Dispatchers.IO) {
             doneFlags.forEach { flag ->
@@ -269,6 +251,126 @@ class ScreenshotHarnessTest {
             }
         }
         logHarnessInfo("Screenshot harness handshake completed; flags cleared")
+    }
+
+    private suspend fun awaitScreenshotCompletionFlag(
+        readyFlags: List<File>,
+        doneFlags: List<File>,
+        startTimeMillis: Long,
+    ): File {
+        doneFlags.firstOrNull(::flagExists)?.let { return it }
+
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val resolver = instrumentation.targetContext.contentResolver
+        val directories = doneFlags.mapNotNull(File::getParentFile).distinct()
+
+        return suspendCancellableCoroutine { continuation ->
+            val handlerThread = HandlerThread("ScreenshotFlagObserver").apply { start() }
+            val handler = Handler(handlerThread.looper)
+            val finished = AtomicBoolean(false)
+            var observer: ContentObserver? = null
+            var pollRunnable: Runnable? = null
+            var backoffMillis = FLAG_OBSERVER_INITIAL_BACKOFF_MS
+            var lastLog = startTimeMillis
+
+            fun cleanup() {
+                pollRunnable?.let { handler.removeCallbacks(it) }
+                observer?.let { runCatching { resolver.unregisterContentObserver(it) } }
+                handlerThread.quitSafely()
+            }
+
+            fun finishWithSuccess(flag: File) {
+                if (!finished.compareAndSet(false, true)) return
+                cleanup()
+                if (continuation.isActive) {
+                    continuation.resume(flag)
+                }
+            }
+
+            fun finishWithError(error: Throwable) {
+                if (!finished.compareAndSet(false, true)) return
+                cleanup()
+                if (continuation.isActive) {
+                    continuation.resumeWithException(error)
+                }
+            }
+
+            fun maybeCheck(trigger: String) {
+                if (!continuation.isActive || finished.get()) {
+                    cleanup()
+                    return
+                }
+                val now = System.currentTimeMillis()
+                val elapsed = now - startTimeMillis
+                var activityRunning = true
+                instrumentation.runOnMainSync {
+                    activityRunning = activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)
+                }
+                if (!activityRunning) {
+                    val error = IllegalStateException(
+                        "ReaderActivity unexpectedly stopped while waiting for screenshots"
+                    )
+                    logHarnessError(error.message ?: "ReaderActivity stopped unexpectedly", error)
+                    finishWithError(error)
+                    return
+                }
+                if (elapsed > SCREENSHOT_COMPLETION_TIMEOUT_MS) {
+                    val error = IllegalStateException("Timed out waiting for host screenshot completion signal")
+                    logHarnessError(error.message ?: "Timed out waiting for screenshot completion", error)
+                    finishWithError(error)
+                    return
+                }
+                val completedFlag = doneFlags.firstOrNull(::flagExists)
+                metricsRecorder?.sample()
+                if (completedFlag != null) {
+                    finishWithSuccess(completedFlag)
+                    return
+                }
+                if (now - lastLog >= TimeUnit.SECONDS.toMillis(15)) {
+                    logHarnessInfo(
+                        "Screenshot harness still waiting; ready flags present=${readyFlags.count(::flagExists)} " +
+                            "done flags present=${doneFlags.count(::flagExists)}"
+                    )
+                    lastLog = now
+                }
+                backoffMillis = when (trigger) {
+                    "observer" -> FLAG_OBSERVER_INITIAL_BACKOFF_MS
+                    "initial" -> backoffMillis
+                    else -> min(backoffMillis * 2, FLAG_OBSERVER_MAX_BACKOFF_MS)
+                }
+                if (!finished.get() && continuation.isActive) {
+                    pollRunnable?.let { handler.removeCallbacks(it) }
+                    val runnable = Runnable { maybeCheck("poll") }
+                    pollRunnable = runnable
+                    handler.postDelayed(runnable, backoffMillis)
+                }
+            }
+
+            observer = object : ContentObserver(handler) {
+                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    maybeCheck("observer")
+                }
+            }
+
+            directories.forEach { directory ->
+                runCatching {
+                    resolver.registerContentObserver(Uri.fromFile(directory), true, observer!!)
+                }.onFailure { error ->
+                    logHarnessWarn(
+                        "Unable to register content observer for ${directory.absolutePath}; falling back to polling",
+                        error
+                    )
+                }
+            }
+
+            continuation.invokeOnCancellation {
+                if (finished.compareAndSet(false, true)) {
+                    cleanup()
+                }
+            }
+
+            maybeCheck("initial")
+        }
     }
 
     private fun publishPerformanceMetrics(report: PerformanceMetricsReport) {
@@ -893,6 +995,9 @@ class ScreenshotHarnessTest {
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
         private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
         private const val CAPTURE_VIDEO_OUTPUT_PERMISSION = "android.permission.CAPTURE_VIDEO_OUTPUT"
+        private val SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(5)
+        private const val FLAG_OBSERVER_INITIAL_BACKOFF_MS = 250L
+        private const val FLAG_OBSERVER_MAX_BACKOFF_MS = 5_000L
         // Opening a thousand-page stress document can take a while on CI devices, so give the
         // viewer ample time to finish rendering before failing the harness run.
         private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
