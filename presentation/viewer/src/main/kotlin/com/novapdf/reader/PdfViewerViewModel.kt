@@ -9,6 +9,9 @@ import android.util.Size
 import android.util.LruCache
 import android.os.Build
 import android.os.CancellationSignal
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.print.PrintAttributes
 import android.print.PrintManager
 import androidx.annotation.StringRes
@@ -44,6 +47,7 @@ import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.field
 import com.novapdf.reader.presentation.viewer.R
+import com.novapdf.reader.presentation.viewer.BuildConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -64,6 +68,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
+import kotlin.math.min
 
 private const val TAG = "PdfViewerViewModel"
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
@@ -75,6 +80,9 @@ private const val MAX_TILE_CACHE_BYTES = 24 * 1024 * 1024
 private const val MIN_CACHE_BYTES = 1 * 1024 * 1024
 private const val REMOTE_PDF_SAFE_SIZE_BYTES = 256L * 1024L * 1024L
 private const val VIEWPORT_PERSIST_THROTTLE_MS = 750L
+private const val DEV_ANR_STALL_DURATION_MS = 6_000L
+private const val DEV_ANR_REPEAT_DELAY_MS = 20_000L
+private const val DEV_ANR_SLEEP_CHUNK_MS = 50L
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -125,6 +133,9 @@ data class PdfViewerUiState(
     val renderQueueStats: RenderQueueStats = RenderQueueStats(),
     val malformedPages: Set<Int> = emptySet(),
     val pendingLargeDownload: PendingLargeDownload? = null,
+    val devDiagnosticsEnabled: Boolean = BuildConfig.DEBUG,
+    val devCachesEnabled: Boolean = true,
+    val devArtificialDelayEnabled: Boolean = false,
 )
 
 private data class DocumentContext(
@@ -238,6 +249,7 @@ open class PdfViewerViewModel @Inject constructor(
 
     private val pageCacheLock = Any()
     private val tileCacheLock = Any()
+    private val renderCachesEnabled = AtomicBoolean(true)
     private val pageCacheMaxBytes = computeCacheBudget(MAX_PAGE_CACHE_BYTES)
     private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
     private val pageBitmapCache = object : LruCache<PageCacheKey, Bitmap>(pageCacheMaxBytes) {
@@ -278,6 +290,24 @@ open class PdfViewerViewModel @Inject constructor(
     }
     @Volatile
     private var activeDocumentId: String? = null
+    private val artificialDelayHandler = Handler(Looper.getMainLooper())
+    @Volatile
+    private var devArtificialDelayEnabled: Boolean = false
+    private val artificialDelayRunnable = object : Runnable {
+        override fun run() {
+            if (!devArtificialDelayEnabled) return
+            NovaLog.w(
+                TAG,
+                "Artificial ANR stall triggered",
+                throwable = null,
+                field("durationMs", DEV_ANR_STALL_DURATION_MS)
+            )
+            stallMainThread(DEV_ANR_STALL_DURATION_MS)
+            if (devArtificialDelayEnabled) {
+                artificialDelayHandler.postDelayed(this, DEV_ANR_REPEAT_DELAY_MS)
+            }
+        }
+    }
     private val memoryCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) {
             val nightMode = isNightModeEnabled()
@@ -399,7 +429,7 @@ open class PdfViewerViewModel @Inject constructor(
                 context to bitmapMemory
             }.collect { (context, bitmapMemory) ->
                 val session = context.session
-                prefetchEnabled = session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true
+                recomputePrefetchEnabled(session)
                 val annotations = session?.let { annotationUseCase.annotationsFor(it.documentId) }
                     .orEmpty()
                 val bookmarks = if (session != null) {
@@ -478,6 +508,11 @@ open class PdfViewerViewModel @Inject constructor(
         if (!prefetchEnabled) return true
         if (!appInForeground) return true
         return adaptiveFlowUseCase.isUiUnderLoad()
+    }
+
+    private fun recomputePrefetchEnabled(session: PdfDocumentSession?) {
+        prefetchEnabled = renderCachesEnabled.get() &&
+            (session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true)
     }
 
     private fun updateForegroundState(isForeground: Boolean) {
@@ -1101,6 +1136,48 @@ open class PdfViewerViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(fontScale = clamped)
     }
 
+    fun setDevDiagnosticsEnabled(enabled: Boolean) {
+        if (_uiState.value.devDiagnosticsEnabled == enabled) return
+        NovaLog.i(TAG, "Developer diagnostics toggled", field("enabled", enabled))
+        _uiState.update { current -> current.copy(devDiagnosticsEnabled = enabled) }
+    }
+
+    fun setDevCachesEnabled(enabled: Boolean) {
+        val previous = renderCachesEnabled.getAndSet(enabled)
+        if (previous != enabled) {
+            NovaLog.i(TAG, "Developer caches toggled", field("enabled", enabled))
+            if (!enabled) {
+                clearRenderCaches()
+            }
+            recomputePrefetchEnabled(documentUseCase.session.value)
+        }
+        if (_uiState.value.devCachesEnabled != enabled) {
+            _uiState.update { current -> current.copy(devCachesEnabled = enabled) }
+        }
+    }
+
+    fun setDevArtificialDelayEnabled(enabled: Boolean) {
+        if (!BuildConfig.DEBUG && enabled) {
+            NovaLog.w(TAG, "Artificial delay unavailable in non-debug build")
+            if (_uiState.value.devArtificialDelayEnabled) {
+                _uiState.update { it.copy(devArtificialDelayEnabled = false) }
+            }
+            return
+        }
+        val changed = devArtificialDelayEnabled != enabled
+        devArtificialDelayEnabled = enabled
+        artificialDelayHandler.removeCallbacks(artificialDelayRunnable)
+        if (enabled) {
+            NovaLog.w(TAG, "Artificial ANR reproduction enabled")
+            artificialDelayHandler.post(artificialDelayRunnable)
+        } else if (changed) {
+            NovaLog.i(TAG, "Artificial ANR reproduction disabled")
+        }
+        if (_uiState.value.devArtificialDelayEnabled != enabled) {
+            _uiState.update { current -> current.copy(devArtificialDelayEnabled = enabled) }
+        }
+    }
+
     fun persistAnnotations() {
         val documentId = _uiState.value.documentId ?: return
         maintenanceUseCase.requestImmediateSync(documentId)
@@ -1242,6 +1319,8 @@ open class PdfViewerViewModel @Inject constructor(
         prefetchRequests.close()
         processLifecycleOwner?.lifecycle?.removeObserver(appLifecycleObserver)
         app.unregisterComponentCallbacks(memoryCallbacks)
+        devArtificialDelayEnabled = false
+        artificialDelayHandler.removeCallbacks(artificialDelayRunnable)
         clearRenderCaches()
     }
 
@@ -1264,19 +1343,23 @@ open class PdfViewerViewModel @Inject constructor(
         return allocation.coerceAtLeast(1)
     }
 
-    private fun getCachedPage(key: PageCacheKey): Bitmap? = synchronized(pageCacheLock) {
-        val bitmap = pageBitmapCache.get(key)
-        if (bitmap == null || bitmap.isRecycled) {
-            if (bitmap != null && bitmap.isRecycled) {
-                pageBitmapCache.remove(key)
+    private fun getCachedPage(key: PageCacheKey): Bitmap? {
+        if (!renderCachesEnabled.get()) return null
+        return synchronized(pageCacheLock) {
+            val bitmap = pageBitmapCache.get(key)
+            if (bitmap == null || bitmap.isRecycled) {
+                if (bitmap != null && bitmap.isRecycled) {
+                    pageBitmapCache.remove(key)
+                }
+                null
+            } else {
+                bitmap
             }
-            null
-        } else {
-            bitmap
         }
     }
 
     private fun cachePageBitmap(documentId: String, key: PageCacheKey, bitmap: Bitmap) {
+        if (!renderCachesEnabled.get()) return
         if (!bitmap.isRecycled && documentId == activeDocumentId) {
             synchronized(pageCacheLock) {
                 pageBitmapCache.put(key, bitmap)
@@ -1284,19 +1367,23 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    private fun getCachedTile(key: TileCacheKey): Bitmap? = synchronized(tileCacheLock) {
-        val bitmap = tileBitmapCache.get(key)
-        if (bitmap == null || bitmap.isRecycled) {
-            if (bitmap != null && bitmap.isRecycled) {
-                tileBitmapCache.remove(key)
+    private fun getCachedTile(key: TileCacheKey): Bitmap? {
+        if (!renderCachesEnabled.get()) return null
+        return synchronized(tileCacheLock) {
+            val bitmap = tileBitmapCache.get(key)
+            if (bitmap == null || bitmap.isRecycled) {
+                if (bitmap != null && bitmap.isRecycled) {
+                    tileBitmapCache.remove(key)
+                }
+                null
+            } else {
+                bitmap
             }
-            null
-        } else {
-            bitmap
         }
     }
 
     private fun cacheTileBitmap(documentId: String, key: TileCacheKey, bitmap: Bitmap) {
+        if (!renderCachesEnabled.get()) return
         if (!bitmap.isRecycled && documentId == activeDocumentId) {
             synchronized(tileCacheLock) {
                 tileBitmapCache.put(key, bitmap)
@@ -1426,6 +1513,24 @@ open class PdfViewerViewModel @Inject constructor(
         }
         synchronized(tileCacheLock) {
             tileBitmapCache.evictAll()
+        }
+    }
+
+    private fun stallMainThread(durationMs: Long) {
+        val start = SystemClock.uptimeMillis()
+        while (devArtificialDelayEnabled) {
+            val elapsed = SystemClock.uptimeMillis() - start
+            if (elapsed >= durationMs) {
+                break
+            }
+            val remaining = durationMs - elapsed
+            val sleepChunk = min(DEV_ANR_SLEEP_CHUNK_MS, remaining)
+            try {
+                Thread.sleep(sleepChunk)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
         }
     }
 
