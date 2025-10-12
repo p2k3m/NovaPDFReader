@@ -5,6 +5,7 @@ import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.TestPdfApp
 import com.novapdf.reader.asTestMainDispatcher
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +98,11 @@ class LuceneSearchCoordinatorMetadataTest {
     private fun createCoordinator(context: Application): LuceneSearchCoordinator {
         val repository = mock<PdfDocumentRepository>()
         val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
-        return LuceneSearchCoordinator(context, repository, dispatchers)
+        return LuceneSearchCoordinator(
+            context,
+            repository,
+            dispatchers,
+            DefaultCacheDirectories(context),
+        )
     }
 }

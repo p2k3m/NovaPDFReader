@@ -34,11 +34,12 @@ class PdfCacheRootTest {
             writeBytes(ByteArray(8))
         }
 
-        PdfCacheRoot.purgeDirectory(
+        CachePurger.purgeDirectory(
             directory = tempDir,
             maxBytes = Long.MAX_VALUE,
             maxAgeMs = TimeUnit.DAYS.toMillis(30),
             nowMs = System.currentTimeMillis(),
+            tag = "PdfCacheRootTest",
         )
 
         assertFalse("stale file should be deleted", stale.exists())
@@ -63,11 +64,12 @@ class PdfCacheRootTest {
         val totalSize = listOf(keep, purgeFirst, purgeSecond).sumOf { it.length() }
         assertEquals(16, totalSize)
 
-        PdfCacheRoot.purgeDirectory(
+        CachePurger.purgeDirectory(
             directory = tempDir,
             maxBytes = 8,
             maxAgeMs = Long.MAX_VALUE,
             nowMs = System.currentTimeMillis(),
+            tag = "PdfCacheRootTest",
         )
 
         assertTrue("recent file should remain", keep.exists())
