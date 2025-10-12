@@ -352,9 +352,12 @@ class ScreenshotHarnessTest {
                 }
             }
 
+            val observerInstance = checkNotNull(observer) {
+                "Screenshot flag observer should be initialised before registering directory observers."
+            }
             directories.forEach { directory ->
                 runCatching {
-                    resolver.registerContentObserver(Uri.fromFile(directory), true, observer!!)
+                    resolver.registerContentObserver(Uri.fromFile(directory), true, observerInstance)
                 }.onFailure { error ->
                     logHarnessWarn(
                         "Unable to register content observer for ${directory.absolutePath}; falling back to polling",
