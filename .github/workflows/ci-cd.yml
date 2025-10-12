@@ -1408,52 +1408,9 @@ jobs:
 
             if [ -f "$metadata" ]; then
               local resolved_path
-              resolved_path=$(python3 - "$variant_dir" <<'PY'
-import json
-import os
-import sys
-
-variant_dir = sys.argv[1]
-metadata_path = os.path.join(variant_dir, "output-metadata.json")
-
-preferred_abis = ["", "x86_64", "arm64-v8a"]
-candidates = []
-
-try:
-    with open(metadata_path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    data = None
-
-if data:
-    for element in data.get("elements", []):
-        output_file = element.get("outputFile")
-        if not output_file:
-            continue
-        path = os.path.join(variant_dir, output_file)
-        if not os.path.isfile(path):
-            continue
-        filters = element.get("filters") or []
-        abi = ""
-        for flt in filters:
-            if flt.get("filterType") == "ABI":
-                abi = (flt.get("value") or "").strip()
-                break
-        candidates.append((abi, path))
-
-if candidates:
-    def sort_key(item):
-        abi, path = item
-        try:
-            abi_index = preferred_abis.index(abi)
-        except ValueError:
-            abi_index = len(preferred_abis)
-        return (abi_index, path)
-
-    best = min(candidates, key=sort_key)
-    sys.stdout.write(best[1])
-PY
-              )
+              local python_script
+              python_script=$'import json\nimport os\nimport sys\n\nvariant_dir = sys.argv[1]\nmetadata_path = os.path.join(variant_dir, "output-metadata.json")\n\npreferred_abis = ["", "x86_64", "arm64-v8a"]\ncandidates = []\n\ntry:\n    with open(metadata_path, "r", encoding="utf-8") as fh:\n        data = json.load(fh)\nexcept Exception:\n    data = None\n\nif data:\n    for element in data.get("elements", []):\n        output_file = element.get("outputFile")\n        if not output_file:\n            continue\n        path = os.path.join(variant_dir, output_file)\n        if not os.path.isfile(path):\n            continue\n        filters = element.get("filters") or []\n        abi = ""\n        for flt in filters:\n            if flt.get("filterType") == "ABI":\n                abi = (flt.get("value") or "").strip()\n                break\n        candidates.append((abi, path))\n\nif candidates:\n    def sort_key(item):\n        abi, path = item\n        try:\n            abi_index = preferred_abis.index(abi)\n        except ValueError:\n            abi_index = len(preferred_abis)\n        return (abi_index, path)\n\n    best = min(candidates, key=sort_key)\n    sys.stdout.write(best[1])\n'
+              resolved_path=$(python3 - "$variant_dir" -c "$python_script")
               resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
               if [ -n "$resolved_path" ]; then
                 printf '%s' "$resolved_path"
@@ -2064,52 +2021,9 @@ PY
 
             if [ -f "$metadata" ]; then
               local resolved_path
-              resolved_path=$(python3 - "$variant_dir" <<'PY'
-import json
-import os
-import sys
-
-variant_dir = sys.argv[1]
-metadata_path = os.path.join(variant_dir, "output-metadata.json")
-
-preferred_abis = ["", "x86_64", "arm64-v8a"]
-candidates = []
-
-try:
-    with open(metadata_path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    data = None
-
-if data:
-    for element in data.get("elements", []):
-        output_file = element.get("outputFile")
-        if not output_file:
-            continue
-        path = os.path.join(variant_dir, output_file)
-        if not os.path.isfile(path):
-            continue
-        filters = element.get("filters") or []
-        abi = ""
-        for flt in filters:
-            if flt.get("filterType") == "ABI":
-                abi = (flt.get("value") or "").strip()
-                break
-        candidates.append((abi, path))
-
-if candidates:
-    def sort_key(item):
-        abi, path = item
-        try:
-            abi_index = preferred_abis.index(abi)
-        except ValueError:
-            abi_index = len(preferred_abis)
-        return (abi_index, path)
-
-    best = min(candidates, key=sort_key)
-    sys.stdout.write(best[1])
-PY
-              )
+              local python_script
+              python_script=$'import json\nimport os\nimport sys\n\nvariant_dir = sys.argv[1]\nmetadata_path = os.path.join(variant_dir, "output-metadata.json")\n\npreferred_abis = ["", "x86_64", "arm64-v8a"]\ncandidates = []\n\ntry:\n    with open(metadata_path, "r", encoding="utf-8") as fh:\n        data = json.load(fh)\nexcept Exception:\n    data = None\n\nif data:\n    for element in data.get("elements", []):\n        output_file = element.get("outputFile")\n        if not output_file:\n            continue\n        path = os.path.join(variant_dir, output_file)\n        if not os.path.isfile(path):\n            continue\n        filters = element.get("filters") or []\n        abi = ""\n        for flt in filters:\n            if flt.get("filterType") == "ABI":\n                abi = (flt.get("value") or "").strip()\n                break\n        candidates.append((abi, path))\n\nif candidates:\n    def sort_key(item):\n        abi, path = item\n        try:\n            abi_index = preferred_abis.index(abi)\n        except ValueError:\n            abi_index = len(preferred_abis)\n        return (abi_index, path)\n\n    best = min(candidates, key=sort_key)\n    sys.stdout.write(best[1])\n'
+              resolved_path=$(python3 - "$variant_dir" -c "$python_script")
               resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
               if [ -n "$resolved_path" ]; then
                 printf '%s' "$resolved_path"
@@ -2241,52 +2155,9 @@ PY
 
             if [ -f "$metadata" ]; then
               local resolved_path
-              resolved_path=$(python3 - "$variant_dir" <<'PY'
-import json
-import os
-import sys
-
-variant_dir = sys.argv[1]
-metadata_path = os.path.join(variant_dir, "output-metadata.json")
-
-preferred_abis = ["", "x86_64", "arm64-v8a"]
-candidates = []
-
-try:
-    with open(metadata_path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    data = None
-
-if data:
-    for element in data.get("elements", []):
-        output_file = element.get("outputFile")
-        if not output_file:
-            continue
-        path = os.path.join(variant_dir, output_file)
-        if not os.path.isfile(path):
-            continue
-        filters = element.get("filters") or []
-        abi = ""
-        for flt in filters:
-            if flt.get("filterType") == "ABI":
-                abi = (flt.get("value") or "").strip()
-                break
-        candidates.append((abi, path))
-
-if candidates:
-    def sort_key(item):
-        abi, path = item
-        try:
-            abi_index = preferred_abis.index(abi)
-        except ValueError:
-            abi_index = len(preferred_abis)
-        return (abi_index, path)
-
-    best = min(candidates, key=sort_key)
-    sys.stdout.write(best[1])
-PY
-              )
+              local python_script
+              python_script=$'import json\nimport os\nimport sys\n\nvariant_dir = sys.argv[1]\nmetadata_path = os.path.join(variant_dir, "output-metadata.json")\n\npreferred_abis = ["", "x86_64", "arm64-v8a"]\ncandidates = []\n\ntry:\n    with open(metadata_path, "r", encoding="utf-8") as fh:\n        data = json.load(fh)\nexcept Exception:\n    data = None\n\nif data:\n    for element in data.get("elements", []):\n        output_file = element.get("outputFile")\n        if not output_file:\n            continue\n        path = os.path.join(variant_dir, output_file)\n        if not os.path.isfile(path):\n            continue\n        filters = element.get("filters") or []\n        abi = ""\n        for flt in filters:\n            if flt.get("filterType") == "ABI":\n                abi = (flt.get("value") or "").strip()\n                break\n        candidates.append((abi, path))\n\nif candidates:\n    def sort_key(item):\n        abi, path = item\n        try:\n            abi_index = preferred_abis.index(abi)\n        except ValueError:\n            abi_index = len(preferred_abis)\n        return (abi_index, path)\n\n    best = min(candidates, key=sort_key)\n    sys.stdout.write(best[1])\n'
+              resolved_path=$(python3 - "$variant_dir" -c "$python_script")
               resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
               if [ -n "$resolved_path" ]; then
                 printf '%s' "$resolved_path"
@@ -2797,52 +2668,9 @@ PY
 
             if [ -f "$metadata" ]; then
               local resolved_path
-              resolved_path=$(python3 - "$variant_dir" <<'PY'
-import json
-import os
-import sys
-
-variant_dir = sys.argv[1]
-metadata_path = os.path.join(variant_dir, "output-metadata.json")
-
-preferred_abis = ["", "x86_64", "arm64-v8a"]
-candidates = []
-
-try:
-    with open(metadata_path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    data = None
-
-if data:
-    for element in data.get("elements", []):
-        output_file = element.get("outputFile")
-        if not output_file:
-            continue
-        path = os.path.join(variant_dir, output_file)
-        if not os.path.isfile(path):
-            continue
-        filters = element.get("filters") or []
-        abi = ""
-        for flt in filters:
-            if flt.get("filterType") == "ABI":
-                abi = (flt.get("value") or "").strip()
-                break
-        candidates.append((abi, path))
-
-if candidates:
-    def sort_key(item):
-        abi, path = item
-        try:
-            abi_index = preferred_abis.index(abi)
-        except ValueError:
-            abi_index = len(preferred_abis)
-        return (abi_index, path)
-
-    best = min(candidates, key=sort_key)
-    sys.stdout.write(best[1])
-PY
-              )
+              local python_script
+              python_script=$'import json\nimport os\nimport sys\n\nvariant_dir = sys.argv[1]\nmetadata_path = os.path.join(variant_dir, "output-metadata.json")\n\npreferred_abis = ["", "x86_64", "arm64-v8a"]\ncandidates = []\n\ntry:\n    with open(metadata_path, "r", encoding="utf-8") as fh:\n        data = json.load(fh)\nexcept Exception:\n    data = None\n\nif data:\n    for element in data.get("elements", []):\n        output_file = element.get("outputFile")\n        if not output_file:\n            continue\n        path = os.path.join(variant_dir, output_file)\n        if not os.path.isfile(path):\n            continue\n        filters = element.get("filters") or []\n        abi = ""\n        for flt in filters:\n            if flt.get("filterType") == "ABI":\n                abi = (flt.get("value") or "").strip()\n                break\n        candidates.append((abi, path))\n\nif candidates:\n    def sort_key(item):\n        abi, path = item\n        try:\n            abi_index = preferred_abis.index(abi)\n        except ValueError:\n            abi_index = len(preferred_abis)\n        return (abi_index, path)\n\n    best = min(candidates, key=sort_key)\n    sys.stdout.write(best[1])\n'
+              resolved_path=$(python3 - "$variant_dir" -c "$python_script")
               resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
               if [ -n "$resolved_path" ]; then
                 printf '%s' "$resolved_path"
