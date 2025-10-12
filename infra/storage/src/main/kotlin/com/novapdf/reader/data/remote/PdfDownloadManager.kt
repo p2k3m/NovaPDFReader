@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.core.content.FileProvider
-import com.novapdf.reader.cache.PdfCacheRoot
+import com.novapdf.reader.cache.CacheDirectories
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import java.io.File
@@ -21,14 +21,15 @@ import kotlin.text.Charsets
 class PdfDownloadManager(
     context: Context,
     private val storageClient: StorageClient,
+    private val cacheDirectories: CacheDirectories,
     private val authority: String = "${context.packageName}.fileprovider",
 ) {
     private val appContext = context.applicationContext
-    private val downloadDirectory = File(PdfCacheRoot.documents(appContext), "remote").apply { mkdirs() }
+    private val downloadDirectory = File(cacheDirectories.documents(), "remote").apply { mkdirs() }
     private val pdfiumCore = PdfiumCore(appContext)
 
     init {
-        PdfCacheRoot.ensureSubdirectories(appContext)
+        cacheDirectories.ensureSubdirectories()
     }
 
     suspend fun download(url: String, allowLargeFile: Boolean = false): Result<Uri> =

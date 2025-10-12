@@ -6,6 +6,7 @@ import android.graphics.RectF
 import android.util.Size
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.TestPdfApp
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
@@ -27,7 +28,11 @@ class PdfDocumentRepositoryTileMathTest {
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Application>()
-        repository = PdfDocumentRepository(context, StandardTestDispatcher())
+        repository = PdfDocumentRepository(
+            context,
+            StandardTestDispatcher(),
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
     }
 
     @After

@@ -23,7 +23,7 @@ import androidx.annotation.WorkerThread
 import androidx.core.net.toUri
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.RemovalCause
-import com.novapdf.reader.cache.PdfCacheRoot
+import com.novapdf.reader.cache.CacheDirectories
 import com.novapdf.reader.logging.LogContext
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.logging.LogField
@@ -157,6 +157,7 @@ class PdfDocumentRepository(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val crashReporter: CrashReporter? = null,
     private val storageClient: StorageClient? = null,
+    private val cacheDirectories: CacheDirectories,
 ) {
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
@@ -164,12 +165,12 @@ class PdfDocumentRepository(
     private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val repairedDocumentDir by lazy {
-        File(PdfCacheRoot.documents(appContext), "repairs").apply {
+        File(cacheDirectories.documents(), "repairs").apply {
             ensureCacheDirectory("PDF repair cache")
         }
     }
     private val remoteDocumentDir by lazy {
-        File(PdfCacheRoot.documents(appContext), "remote").apply {
+        File(cacheDirectories.documents(), "remote").apply {
             ensureCacheDirectory("remote PDF cache")
         }
     }
@@ -331,7 +332,7 @@ class PdfDocumentRepository(
     }
 
     init {
-        PdfCacheRoot.ensureSubdirectories(appContext)
+        cacheDirectories.ensureSubdirectories()
     }
 
     private var repairedDocumentFile: File? = null

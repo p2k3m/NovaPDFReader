@@ -5,6 +5,7 @@ import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -31,7 +32,11 @@ class PdfDocumentRepositoryEdgeCaseTest {
     @Test
     fun rejectsOversizedPdfDocuments() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         val oversized = File(context.cacheDir, "oversized.pdf")
         val limit = 100L * 1024L * 1024L
         RandomAccessFile(oversized, "rw").use { raf ->
@@ -49,7 +54,11 @@ class PdfDocumentRepositoryEdgeCaseTest {
     @Test
     fun clearsBitmapCacheWhenStorageLow() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
 
         val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
             isAccessible = true
@@ -85,7 +94,11 @@ class PdfDocumentRepositoryEdgeCaseTest {
     @Test
     fun trimsBitmapCacheWhenMemoryModerate() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
 
         val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
             isAccessible = true
@@ -119,7 +132,11 @@ class PdfDocumentRepositoryEdgeCaseTest {
     @Test
     fun encryptedMonsterPdfSurfacesAccessDenied() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         val monsterFile = File(context.cacheDir, "monster-encrypted.pdf")
         monsterFile.writeBytes(loadBase64Fixture("fixtures/monster-encrypted.base64"))
 
