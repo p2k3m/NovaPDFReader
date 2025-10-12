@@ -31,6 +31,7 @@ class PdfViewerScreenTest {
                     onOpenLocalDocument = {},
                     onOpenCloudDocument = {},
                     onOpenRemoteDocument = { _ -> },
+                    onOpenLastDocument = {},
                     onDismissError = {},
                     onConfirmLargeDownload = {},
                     onDismissLargeDownload = {},
