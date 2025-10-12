@@ -152,6 +152,26 @@ private data class PageBitmapKey(
     val profile: PageRenderProfile,
 )
 
+private data class CacheSnapshot(
+    val bitmapCount: Int,
+    val totalBytes: Long,
+)
+
+private data class BitmapPoolState(
+    val bitmapCount: Int,
+    val totalBytes: Long,
+)
+
+private data class CacheMaintenanceReport(
+    val action: String,
+    val requestedFraction: Float?,
+    val durationMs: Long,
+    val beforeCache: CacheSnapshot,
+    val afterCache: CacheSnapshot,
+    val beforePool: BitmapPoolState,
+    val afterPool: BitmapPoolState,
+)
+
 class PdfDocumentRepository(
     private val context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -1740,6 +1760,56 @@ class PdfDocumentRepository(
         crashReporter?.logBreadcrumb(message)
     }
 
+    private fun logCacheMaintenance(report: CacheMaintenanceReport) {
+        val extras = mutableListOf(
+            field("action", report.action),
+            field("durationMs", report.durationMs),
+            field("cacheBeforeCount", report.beforeCache.bitmapCount),
+            field("cacheBeforeBytes", report.beforeCache.totalBytes),
+            field("cacheAfterCount", report.afterCache.bitmapCount),
+            field("cacheAfterBytes", report.afterCache.totalBytes),
+            field("poolBeforeCount", report.beforePool.bitmapCount),
+            field("poolBeforeBytes", report.beforePool.totalBytes),
+            field("poolAfterCount", report.afterPool.bitmapCount),
+            field("poolAfterBytes", report.afterPool.totalBytes),
+        )
+        report.requestedFraction?.let { extras += field("requestedFraction", it) }
+        NovaLog.i(
+            TAG,
+            "Bitmap cache maintenance",
+            fields = logFields(
+                operation = "cacheMaintenance",
+                extras = extras.toTypedArray(),
+            )
+        )
+        val fractionText = report.requestedFraction?.let { String.format(Locale.US, "%.2f", it) } ?: "n/a"
+        val breadcrumb = buildString {
+            append("cacheMaintenance action=")
+            append(report.action)
+            append(" fraction=")
+            append(fractionText)
+            append(" cacheBefore=")
+            append(describeCacheSnapshot(report.beforeCache))
+            append(" cacheAfter=")
+            append(describeCacheSnapshot(report.afterCache))
+            append(" poolBefore=")
+            append(describePoolState(report.beforePool))
+            append(" poolAfter=")
+            append(describePoolState(report.afterPool))
+            append(" durationMs=")
+            append(report.durationMs)
+        }
+        crashReporter?.logBreadcrumb(breadcrumb)
+    }
+
+    private fun describeCacheSnapshot(snapshot: CacheSnapshot): String {
+        return "${snapshot.bitmapCount}@${formatMemoryForLog(snapshot.totalBytes)}"
+    }
+
+    private fun describePoolState(state: BitmapPoolState): String {
+        return "${state.bitmapCount}@${formatMemoryForLog(state.totalBytes)}"
+    }
+
     private fun logBitmapMemoryThreshold(level: BitmapMemoryLevel, stats: BitmapMemoryStats) {
         val levelLabel = level.name.lowercase(Locale.US)
         val message = String.format(
@@ -1933,7 +2003,23 @@ class PdfDocumentRepository(
 
     private fun scheduleCacheClear() {
         renderScope.launch {
-            cacheLock.withLock { clearBitmapCacheLocked() }
+            val report = cacheLock.withLock {
+                val beforeCache = bitmapCache.snapshot()
+                val beforePool = bitmapPool.snapshotState()
+                val start = SystemClock.elapsedRealtime()
+                clearBitmapCacheLocked()
+                val duration = SystemClock.elapsedRealtime() - start
+                CacheMaintenanceReport(
+                    action = "clear",
+                    requestedFraction = null,
+                    durationMs = duration,
+                    beforeCache = beforeCache,
+                    afterCache = bitmapCache.snapshot(),
+                    beforePool = beforePool,
+                    afterPool = bitmapPool.snapshotState(),
+                )
+            }
+            logCacheMaintenance(report)
         }
     }
 
@@ -1943,14 +2029,30 @@ class PdfDocumentRepository(
             return
         }
         renderScope.launch {
-            cacheLock.withLock {
-                if (clamped <= 0f) {
+            val report = cacheLock.withLock {
+                val beforeCache = bitmapCache.snapshot()
+                val beforePool = bitmapPool.snapshotState()
+                val start = SystemClock.elapsedRealtime()
+                val action = if (clamped <= 0f) {
                     clearBitmapCacheLocked()
+                    "trim_clear"
                 } else {
                     bitmapCache.trimToFraction(clamped)
                     bitmapPool.clear()
+                    "trim"
                 }
+                val duration = SystemClock.elapsedRealtime() - start
+                CacheMaintenanceReport(
+                    action = action,
+                    requestedFraction = clamped,
+                    durationMs = duration,
+                    beforeCache = beforeCache,
+                    afterCache = bitmapCache.snapshot(),
+                    beforePool = beforePool,
+                    afterPool = bitmapPool.snapshotState(),
+                )
             }
+            logCacheMaintenance(report)
         }
     }
 
@@ -2079,6 +2181,18 @@ class PdfDocumentRepository(
         }
 
         fun values(): Collection<Bitmap> = valuesInternal().filterNot(Bitmap::isRecycled)
+
+        fun snapshot(): CacheSnapshot {
+            val bitmaps = values()
+            var totalBytes = 0L
+            for (bitmap in bitmaps) {
+                val bytes = safeAllocationByteCount(bitmap).toLong()
+                if (bytes > 0L) {
+                    totalBytes += bytes
+                }
+            }
+            return CacheSnapshot(bitmaps.size, totalBytes)
+        }
 
         fun clearAll() {
             aliasMutex.withLockBlocking(this) {
@@ -2264,6 +2378,10 @@ class PdfDocumentRepository(
             }
             metrics.onRelease(accepted, totalBytesSnapshot, poolSizeSnapshot)
             return accepted
+        }
+
+        fun snapshotState(): BitmapPoolState = mutex.withLockBlocking(this) {
+            BitmapPoolState(bitmapCount = bitmapCount, totalBytes = totalBytes)
         }
 
         fun clear() {
