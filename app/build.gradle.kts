@@ -217,6 +217,11 @@ android {
             "novapdfTestAppId" to "$resolvedApplicationId.test"
         )
 
+        // Limit packaged locales to English to avoid bundling unused translations from
+        // transitive dependencies. Compose surfaces strings in code so additional locales
+        // would never be presented to users.
+        resourceConfigurations += listOf("en")
+
         buildConfigField("int", "LOW_END_MIN_PPM", "8")
         buildConfigField("int", "LOW_END_MAX_PPM", "90")
         buildConfigField("int", "HIGH_END_MIN_PPM", "12")
@@ -266,6 +271,8 @@ android {
             matchingFallbacks += listOf("release")
             signingConfig = signingConfigs.getByName("release")
             isDebuggable = true
+            // Ensure benchmark variants keep the same shrinker configuration as release.
+            isShrinkResources = true
         }
     }
 
