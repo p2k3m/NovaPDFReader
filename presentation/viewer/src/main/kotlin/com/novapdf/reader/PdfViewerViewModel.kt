@@ -50,6 +50,7 @@ import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.presentation.viewer.BuildConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -1409,7 +1410,7 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
     fun dumpRuntimeDiagnostics() {
         viewModelScope.launch(dispatchers.io) {
             val state = uiState.value

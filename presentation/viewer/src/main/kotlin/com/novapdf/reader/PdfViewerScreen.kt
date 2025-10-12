@@ -2661,9 +2661,11 @@ private fun announceFontScale(
     accessibilityManager.sendAnnouncement(message)
 }
 
+@Suppress("DEPRECATION")
 private fun AccessibilityManager?.sendAnnouncement(message: String) {
     val manager = this ?: return
-    val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_ANNOUNCEMENT).apply {
+    val event = AccessibilityEvent.obtain().apply {
+        eventType = AccessibilityEvent.TYPE_ANNOUNCEMENT
         text.add(message)
     }
     manager.sendAccessibilityEvent(event)
