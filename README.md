@@ -101,6 +101,13 @@ deliver actionable messaging:
 | Macrobenchmark & baseline profile | `./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace` | Measures cold start, frame pacing, and render performance budgets while guarding the committed baseline profile. | Fails the build if thresholds regress; follow up with `:app:generateReleaseBaselineProfile` to refresh shipped profiles.【F:README.md†L199-L238】 |
 | Screenshot harness | `adb shell am instrument …` (see below) | Captures deterministic device-side PNGs with metadata for documentation and regressions. | Also callable through `tools/capture_screenshots.py` for host-side captures and log synchronization.【F:README.md†L176-L197】 |
 
+### Regression documentation
+
+Record any instability you discover in [`docs/regressions`](docs/regressions) so the
+team can reproduce and verify fixes quickly. The [regression playbook](docs/regressions/README.md)
+explains when to file a note, which sections to include, and provides a ready-to-copy
+template that matches our existing Pdfium crash write-up.【F:docs/regressions/README.md†L1-L87】
+
 ## Adaptive Flow performance tooling
 
 Adaptive Flow now records frame pacing through `Choreographer` on the main thread so that preloading logic can back off when the UI is under pressure. Two dedicated Gradle tasks are available to exercise the timing heuristics and frame monitoring in isolation:
