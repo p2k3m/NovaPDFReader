@@ -126,6 +126,20 @@ val allowCiConnectedTests = parseOptionalBoolean(
 val isCiBuild = parseOptionalBoolean(System.getenv("CI")) ?: false
 val skipConnectedTestsOnCi = isCiBuild && allowCiConnectedTests != true && requireConnectedDevice != true
 
+fun parseAccelerationPreference(raw: String?): String? = raw
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.lowercase()
+
+val accelerationPreference = parseAccelerationPreference(System.getenv("ACTIONS_RUNNER_ACCELERATION_PREFERENCE"))
+val nestedVirtualizationDisabled = parseOptionalBoolean(System.getenv("ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION"))
+val virtualizationUnavailable = when {
+    requireConnectedDevice == true -> false
+    nestedVirtualizationDisabled == true -> true
+    accelerationPreference == "software" || accelerationPreference == "none" -> true
+    else -> false
+}
+
 val minimumSupportedApiLevel = runCatching {
     versionCatalog.findVersion("androidMinSdk").get().requiredVersion.toInt()
 }.getOrNull()
@@ -494,6 +508,7 @@ runCatching {
 val connectedDeviceCheck by lazy(LazyThreadSafetyMode.NONE) { computeConnectedDeviceCheck() }
 val deviceWarningLogged = AtomicBoolean(false)
 val skipWarningLogged = AtomicBoolean(false)
+val virtualizationSkipLogged = AtomicBoolean(false)
 val instrumentationSkipLogged = AtomicBoolean(false)
 
 subprojects {
@@ -610,8 +625,20 @@ subprojects {
         task.name.startsWith("connected", ignoreCase = true) && task.name.contains("AndroidTest")
     }
 
-    if (skipConnectedTestsOnCi) {
-        connectedAndroidTestTasks.configureEach {
+    when {
+        virtualizationUnavailable -> connectedAndroidTestTasks.configureEach {
+            onlyIf {
+                if (virtualizationSkipLogged.compareAndSet(false, true)) {
+                    logger.warn(
+                        "Skipping task $name because the current environment does not support Android emulator virtualization. " +
+                            "Unset ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION or set ACTIONS_RUNNER_ACCELERATION_PREFERENCE to a hardware-accelerated mode to enable connected tests."
+                    )
+                }
+                false
+            }
+        }
+
+        skipConnectedTestsOnCi -> connectedAndroidTestTasks.configureEach {
             onlyIf {
                 if (skipWarningLogged.compareAndSet(false, true)) {
                     logger.warn(
@@ -622,8 +649,8 @@ subprojects {
                 false
             }
         }
-    } else if (requireConnectedDevice != true) {
-        connectedAndroidTestTasks.configureEach {
+
+        requireConnectedDevice != true -> connectedAndroidTestTasks.configureEach {
             onlyIf {
                 val check = connectedDeviceCheck
                 if (!check.hasDevice && deviceWarningLogged.compareAndSet(false, true)) {
@@ -642,6 +669,15 @@ subprojects {
     @Suppress("UnstableApiUsage")
     tasks.withType(InstallVariantTask::class.java).configureEach {
         doFirst {
+            if (virtualizationUnavailable) {
+                if (virtualizationSkipLogged.compareAndSet(false, true)) {
+                    logger.warn(
+                        "Skipping task $name because the current environment does not support Android emulator virtualization."
+                    )
+                }
+                throw StopExecutionException("Android emulator virtualization is unavailable.")
+            }
+
             val executable = adbExecutable
             if (executable == null || !executable.exists()) {
                 logger.warn(
@@ -670,6 +706,15 @@ subprojects {
         doFirst {
             if (requireConnectedDevice == true) {
                 return@doFirst
+            }
+
+            if (virtualizationUnavailable) {
+                if (virtualizationSkipLogged.compareAndSet(false, true)) {
+                    logger.warn(
+                        "Skipping task $name because the current environment does not support Android emulator virtualization."
+                    )
+                }
+                throw StopExecutionException("Android emulator virtualization is unavailable.")
             }
 
             fun logSkip(message: String) {
