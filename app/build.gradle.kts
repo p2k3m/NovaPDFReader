@@ -1084,6 +1084,7 @@ dependencies {
     testImplementation(project(":presentation:compose"))
     testImplementation(project(":presentation:viewer"))
     testImplementation(project(":data:annotations"))
+    testImplementation(project(":core:cache"))
     testImplementation(project(":engine:pdf"))
     testImplementation(project(":infra:s3"))
     testImplementation(project(":infra:download"))
@@ -1101,6 +1102,7 @@ dependencies {
     testImplementation(libs.pdfbox)
 
     androidTestImplementation(project(":test-harness"))
+    androidTestImplementation(project(":core:cache"))
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.test.uiautomator)
