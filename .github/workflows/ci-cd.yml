@@ -654,6 +654,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7_pro
             device_label: pixel-7-pro
@@ -673,6 +674,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
@@ -692,6 +694,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 10240
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7
             device_label: galaxy-s23-ultra
@@ -711,6 +714,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_fold
             device_label: pixel-fold
@@ -730,6 +734,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_tablet
             device_label: pixel-tablet
@@ -1191,6 +1196,16 @@ jobs:
             emulator_memory="${{ matrix.ram_mb }}"
           fi
 
+          ensure_config_value "hw.gpu.mode" "$emulator_gpu"
+          if [ "$emulator_gpu" = "off" ]; then
+            ensure_config_value "hw.gpu.enabled" "no"
+          else
+            ensure_config_value "hw.gpu.enabled" "yes"
+          fi
+          if [[ "$emulator_memory" =~ ^[0-9]+$ ]]; then
+            ensure_config_value "hw.ramSize" "$emulator_memory"
+          fi
+
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu "$emulator_gpu" -memory "$emulator_memory" -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
@@ -1589,6 +1604,9 @@ jobs:
             local tmp="${dest}.tmp"
             local metadata_json=""
             local version_id=""
+            local metadata_etag=""
+            local metadata_size=""
+            local metadata_checksum=""
 
             if ! metadata_json=$(aws s3api head-object --bucket "$BUCKET" --key "$key" --output json); then
               echo "::error::Failed to query metadata for ${label} PDF fixture at s3://${BUCKET}/${key}" >&2
@@ -1596,7 +1614,33 @@ jobs:
             fi
 
             readarray -t metadata_fields < <(
-              python3 -c $'import json, sys\ntry:\n    data = json.load(sys.stdin)\nexcept Exception:\n    data = {}\nprint(data.get("VersionId") or "")\nprint((data.get("ETag") or "").strip(\'"\'))' <<< "$metadata_json"
+              METADATA_JSON="$metadata_json" python3 - <<'PY'
+import base64
+import json
+import os
+
+raw = os.environ.get("METADATA_JSON", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    data = {}
+
+version = data.get("VersionId") or ""
+etag = (data.get("ETag") or "").strip('"')
+size = data.get("ContentLength")
+checksum = data.get("ChecksumSHA256") or ""
+
+if checksum:
+    try:
+        checksum = base64.b64decode(checksum).hex()
+    except Exception:
+        checksum = ""
+
+print(version)
+print(etag)
+print("" if size is None else size)
+print(checksum)
+PY
             )
 
             if [ "${metadata_fields[0]:-}" != "" ] && [ "${metadata_fields[0]}" != "null" ]; then
@@ -1610,11 +1654,24 @@ jobs:
             fi
 
             if [ "${metadata_fields[1]:-}" != "" ] && [ "${metadata_fields[1]}" != "null" ]; then
-              echo "Resolved ${label} fixture ETag ${metadata_fields[1]}" >&2
+              metadata_etag="${metadata_fields[1]}"
+              echo "Resolved ${label} fixture ETag ${metadata_etag}" >&2
+            fi
+
+            if [ "${metadata_fields[2]:-}" != "" ] && [ "${metadata_fields[2]}" != "null" ]; then
+              metadata_size="${metadata_fields[2]}"
+              echo "Resolved ${label} fixture size ${metadata_size} bytes" >&2
+            fi
+
+            if [ "${metadata_fields[3]:-}" != "" ] && [ "${metadata_fields[3]}" != "null" ]; then
+              metadata_checksum="${metadata_fields[3]}"
+              echo "Resolved ${label} fixture SHA-256 checksum ${metadata_checksum}" >&2
             fi
 
             declare -g LAST_DOWNLOADED_VERSION="$version_id"
-            declare -g LAST_DOWNLOADED_ETAG="${metadata_fields[1]:-}"
+            declare -g LAST_DOWNLOADED_ETAG="$metadata_etag"
+            declare -g LAST_DOWNLOADED_SIZE="$metadata_size"
+            declare -g LAST_DOWNLOADED_CHECKSUM="$metadata_checksum"
 
             local version_args=()
             if [ -n "$version_id" ]; then
@@ -1623,15 +1680,37 @@ jobs:
 
             echo "Downloading ${label} fixture from s3://${BUCKET}/${key}" >&2
             if ! aws s3api get-object --bucket "$BUCKET" --key "$key" "${version_args[@]}" "$tmp" >/dev/null; then
-              echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}"
+              echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}" >&2
               rm -f "$tmp"
               exit 1
             fi
 
             if [ ! -s "$tmp" ]; then
-              echo "::error::Downloaded ${label} PDF fixture is empty or missing: $tmp"
+              echo "::error::Downloaded ${label} PDF fixture is empty or missing: $tmp" >&2
               rm -f "$tmp"
               exit 1
+            fi
+
+            if [ -n "$metadata_size" ] && [[ "$metadata_size" =~ ^[0-9]+$ ]]; then
+              local actual_size
+              actual_size=$(stat -c '%s' "$tmp")
+              if [ "$actual_size" -ne "$metadata_size" ]; then
+                echo "::error::${label} fixture size mismatch: expected ${metadata_size} bytes, downloaded ${actual_size} bytes" >&2
+                rm -f "$tmp"
+                exit 1
+              fi
+            fi
+
+            if [ -n "$metadata_checksum" ]; then
+              local actual_checksum
+              actual_checksum=$(sha256sum "$tmp" | awk '{print tolower($1)}')
+              local normalized_expected
+              normalized_expected=$(printf '%s' "$metadata_checksum" | tr 'A-F' 'a-f')
+              if [ "$actual_checksum" != "$normalized_expected" ]; then
+                echo "::error::${label} fixture checksum mismatch: expected ${normalized_expected}, downloaded ${actual_checksum}" >&2
+                rm -f "$tmp"
+                exit 1
+              fi
             fi
 
             mv "$tmp" "$dest"
@@ -1641,10 +1720,14 @@ jobs:
           stress_path=$(download_fixture "$STRESS_PDF_KEY" "stress")
           stress_version="${LAST_DOWNLOADED_VERSION:-}"
           stress_etag="${LAST_DOWNLOADED_ETAG:-}"
+          stress_size="${LAST_DOWNLOADED_SIZE:-}"
+          stress_checksum="${LAST_DOWNLOADED_CHECKSUM:-}"
 
           thousand_path=$(download_fixture "$THOUSAND_PDF_KEY" "thousand-page")
           thousand_version="${LAST_DOWNLOADED_VERSION:-}"
           thousand_etag="${LAST_DOWNLOADED_ETAG:-}"
+          thousand_size="${LAST_DOWNLOADED_SIZE:-}"
+          thousand_checksum="${LAST_DOWNLOADED_CHECKSUM:-}"
 
           {
             echo "stress_path=${stress_path}"
@@ -1655,11 +1738,23 @@ jobs:
             if [ -n "$stress_etag" ]; then
               echo "stress_etag=${stress_etag}"
             fi
+            if [ -n "$stress_size" ]; then
+              echo "stress_size=${stress_size}"
+            fi
+            if [ -n "$stress_checksum" ]; then
+              echo "stress_checksum=${stress_checksum}"
+            fi
             if [ -n "$thousand_version" ]; then
               echo "thousand_version=${thousand_version}"
             fi
             if [ -n "$thousand_etag" ]; then
               echo "thousand_etag=${thousand_etag}"
+            fi
+            if [ -n "$thousand_size" ]; then
+              echo "thousand_size=${thousand_size}"
+            fi
+            if [ -n "$thousand_checksum" ]; then
+              echo "thousand_checksum=${thousand_checksum}"
             fi
           } >> "$GITHUB_OUTPUT"
       - name: Download AI.pdf fixture from S3
@@ -2009,7 +2104,7 @@ jobs:
               print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
       - name: Collect and validate device logs after connected tests
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2037,7 +2132,7 @@ jobs:
           adb logcat -c || true
           ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
       - name: Collect and validate device logs after macrobenchmarks
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2065,7 +2160,7 @@ jobs:
           adb logcat -c || true
           ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
       - name: Collect and validate device logs after baseline profile generation
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
