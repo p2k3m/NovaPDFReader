@@ -1748,39 +1748,39 @@ jobs:
           export THOUSAND_CHECKSUM="$thousand_checksum"
 
           python3 - <<'PY'
-import json
-import os
-import pathlib
+          import json
+          import os
+          import pathlib
 
-manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
+          manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
 
-def _load_existing(path: pathlib.Path) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+          def _load_existing(path: pathlib.Path) -> dict:
+              if not path.exists():
+                  return {}
+              try:
+                  return json.loads(path.read_text(encoding="utf-8"))
+              except Exception:
+                  return {}
 
-data = _load_existing(manifest_path)
+          data = _load_existing(manifest_path)
 
-data["stress"] = {
-    "path": os.environ.get("STRESS_PATH", ""),
-    "version": os.environ.get("STRESS_VERSION", ""),
-    "etag": os.environ.get("STRESS_ETAG", ""),
-    "size": os.environ.get("STRESS_SIZE", ""),
-    "sha256": os.environ.get("STRESS_CHECKSUM", ""),
-}
+          data["stress"] = {
+              "path": os.environ.get("STRESS_PATH", ""),
+              "version": os.environ.get("STRESS_VERSION", ""),
+              "etag": os.environ.get("STRESS_ETAG", ""),
+              "size": os.environ.get("STRESS_SIZE", ""),
+              "sha256": os.environ.get("STRESS_CHECKSUM", ""),
+          }
 
-data["thousand_page"] = {
-    "path": os.environ.get("THOUSAND_PATH", ""),
-    "version": os.environ.get("THOUSAND_VERSION", ""),
-    "etag": os.environ.get("THOUSAND_ETAG", ""),
-    "size": os.environ.get("THOUSAND_SIZE", ""),
-    "sha256": os.environ.get("THOUSAND_CHECKSUM", ""),
-}
+          data["thousand_page"] = {
+              "path": os.environ.get("THOUSAND_PATH", ""),
+              "version": os.environ.get("THOUSAND_VERSION", ""),
+              "etag": os.environ.get("THOUSAND_ETAG", ""),
+              "size": os.environ.get("THOUSAND_SIZE", ""),
+              "sha256": os.environ.get("THOUSAND_CHECKSUM", ""),
+          }
 
-manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+          manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 PY
       - name: Download AI.pdf fixture from S3
         if: env.UNIT_TESTS_PASSED == 'true'
