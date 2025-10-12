@@ -1819,7 +1819,7 @@ jobs:
           trap 'rm -f "$tmp"' EXIT
 
           echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
-          local version_args=()
+          version_args=()
           if [ -n "$ai_pdf_version" ]; then
             version_args=(--version-id "$ai_pdf_version")
           fi
