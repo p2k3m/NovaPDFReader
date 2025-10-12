@@ -50,7 +50,9 @@ class RenderWorkQueue(
     private val visibleQueue = ArrayDeque<WorkItem>()
     private val nearbyQueue = ArrayDeque<WorkItem>()
     private val thumbnailQueue = ArrayDeque<WorkItem>()
+    private val activeItems = mutableSetOf<WorkItem>()
     private var activeCount = 0
+    private var backgroundWorkEnabled = true
 
     private val _stats = MutableStateFlow(RenderQueueStats())
     val stats: StateFlow<RenderQueueStats> = _stats.asStateFlow()
@@ -93,12 +95,14 @@ class RenderWorkQueue(
         while (activeCount < parallelism) {
             val next = pollNextLocked() ?: break
             activeCount++
+            activeItems += next
             output += next
         }
     }
 
     private fun pollNextLocked(): WorkItem? = when {
         visibleQueue.isNotEmpty() -> visibleQueue.removeFirst()
+        !backgroundWorkEnabled -> null
         nearbyQueue.isNotEmpty() -> nearbyQueue.removeFirst()
         thumbnailQueue.isNotEmpty() -> thumbnailQueue.removeFirst()
         else -> null
@@ -122,6 +126,7 @@ class RenderWorkQueue(
             scope.launch(dispatcher) {
                 val toLaunch = mutableListOf<WorkItem>()
                 mutex.withLock {
+                    activeItems.remove(item)
                     activeCount--
                     fillLaunchListLocked(toLaunch)
                     updateStatsLocked()
@@ -163,5 +168,30 @@ class RenderWorkQueue(
             nearby = nearbyQueue.size,
             thumbnail = thumbnailQueue.size,
         )
+    }
+
+    fun setBackgroundWorkEnabled(enabled: Boolean) {
+        scope.launch(dispatcher) {
+            val toLaunch = mutableListOf<WorkItem>()
+            val toCancel = mutableListOf<Job>()
+            var changed = false
+            mutex.withLock {
+                if (backgroundWorkEnabled != enabled) {
+                    backgroundWorkEnabled = enabled
+                    changed = true
+                    if (!enabled) {
+                        activeItems
+                            .filter { it.priority != Priority.VISIBLE_PAGE }
+                            .mapNotNullTo(toCancel) { it.job }
+                    } else {
+                        fillLaunchListLocked(toLaunch)
+                    }
+                    updateStatsLocked()
+                }
+            }
+            if (!changed) return@launch
+            toCancel.forEach { it.cancel() }
+            toLaunch.forEach { startItem(it) }
+        }
     }
 }

@@ -14,6 +14,10 @@ import android.print.PrintManager
 import androidx.annotation.StringRes
 import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentSession
@@ -196,6 +200,18 @@ open class PdfViewerViewModel @Inject constructor(
     private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
 
     private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, RENDER_POOL_PARALLELISM)
+    private val processLifecycleOwner = runCatching { ProcessLifecycleOwner.get() }.getOrNull()
+    @Volatile
+    private var appInForeground: Boolean = true
+    private val appLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            updateForegroundState(true)
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            updateForegroundState(false)
+        }
+    }
 
     private val thumbnailRenderProfile = resolveThumbnailRenderProfile()
 
@@ -324,6 +340,10 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     init {
+        val initialForeground = processLifecycleOwner?.lifecycle?.currentState
+            ?.isAtLeast(Lifecycle.State.STARTED) ?: true
+        updateForegroundState(initialForeground)
+        processLifecycleOwner?.lifecycle?.addObserver(appLifecycleObserver)
         app.registerComponentCallbacks(memoryCallbacks)
         val supportsDynamicColor = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _uiState.value = _uiState.value.copy(
@@ -456,7 +476,13 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun shouldThrottlePrefetch(): Boolean {
         if (!prefetchEnabled) return true
+        if (!appInForeground) return true
         return adaptiveFlowUseCase.isUiUnderLoad()
+    }
+
+    private fun updateForegroundState(isForeground: Boolean) {
+        appInForeground = isForeground
+        renderQueue.setBackgroundWorkEnabled(isForeground)
     }
 
     fun openDocument(uri: Uri) {
@@ -1214,6 +1240,7 @@ open class PdfViewerViewModel @Inject constructor(
         indexingJob?.cancel()
         remoteDownloadJob?.cancel()
         prefetchRequests.close()
+        processLifecycleOwner?.lifecycle?.removeObserver(appLifecycleObserver)
         app.unregisterComponentCallbacks(memoryCallbacks)
         clearRenderCaches()
     }
