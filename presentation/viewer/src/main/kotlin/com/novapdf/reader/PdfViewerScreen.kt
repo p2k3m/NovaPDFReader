@@ -259,6 +259,7 @@ fun PdfViewerRoute(
             onToggleHighContrast = { viewModel.setHighContrastEnabled(it) },
             onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
             onFontScaleChanged = { viewModel.setFontScale(it) },
+            onDumpDiagnostics = { viewModel.dumpRuntimeDiagnostics() },
             dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         )
     }
@@ -294,6 +295,7 @@ fun PdfViewerScreen(
     onToggleHighContrast: (Boolean) -> Unit,
     onToggleTalkBackIntegration: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
+    onDumpDiagnostics: () -> Unit,
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -505,6 +507,7 @@ fun PdfViewerScreen(
                     onPrefetchPages = onPrefetchPages,
                     onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
                     onBackFromDevOptions = { selectedDestination = MainDestination.Settings },
+                    onDumpDiagnostics = onDumpDiagnostics,
                     dynamicColorSupported = dynamicColorSupported,
                     accessibilityManager = accessibilityManager,
                     hapticFeedbackManager = hapticManager,
@@ -794,6 +797,7 @@ private fun PdfViewerDestinationContainer(
     onPrefetchPages: (List<Int>, Int) -> Unit,
     onOpenDevOptions: () -> Unit,
     onBackFromDevOptions: () -> Unit,
+    onDumpDiagnostics: () -> Unit,
     dynamicColorSupported: Boolean,
     accessibilityManager: AccessibilityManager?,
     hapticFeedbackManager: HapticFeedbackManager,
@@ -869,6 +873,7 @@ private fun PdfViewerDestinationContainer(
         MainDestination.DevOptions -> {
             DevOptionsContent(
                 stats = state.bitmapMemory,
+                onDumpDiagnostics = onDumpDiagnostics,
                 onBack = onBackFromDevOptions,
                 modifier = modifier
             )
@@ -1776,6 +1781,7 @@ private fun SettingsContent(
 @Composable
 private fun DevOptionsContent(
     stats: BitmapMemoryStats,
+    onDumpDiagnostics: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1867,7 +1873,23 @@ private fun DevOptionsContent(
             }
         }
         Spacer(modifier = Modifier.height(24.dp))
-        FilledTonalButton(onClick = onBack) {
+        Text(
+            text = stringResource(id = R.string.dev_options_dump_description),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = onDumpDiagnostics,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = stringResource(id = R.string.dev_options_dump_runtime))
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        FilledTonalButton(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text(text = stringResource(id = R.string.dev_options_back))
         }
     }

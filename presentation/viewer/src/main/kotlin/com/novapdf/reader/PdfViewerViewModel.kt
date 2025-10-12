@@ -5,7 +5,6 @@ import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
-import com.novapdf.reader.logging.NovaLog
 import android.util.Size
 import android.util.LruCache
 import android.os.Build
@@ -38,6 +37,8 @@ import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
+import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import com.novapdf.reader.presentation.viewer.R
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -60,6 +61,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
+private const val TAG = "PdfViewerViewModel"
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
 private const val RENDER_POOL_PARALLELISM = 2
@@ -157,6 +159,15 @@ private data class TileCacheKey(
     val right: Int,
     val bottom: Int,
     val scaleBits: Int,
+)
+
+private data class CacheStats(
+    val sizeBytes: Int,
+    val maxSizeBytes: Int,
+    val hitCount: Int,
+    val missCount: Int,
+    val putCount: Int,
+    val evictionCount: Int,
 )
 
 @HiltViewModel
@@ -1266,6 +1277,122 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun dumpRuntimeDiagnostics() {
+        viewModelScope.launch(dispatchers.io) {
+            val state = uiState.value
+            val renderStats = renderQueue.stats.value
+            val pageCacheStats = captureCacheStats(pageCacheLock, pageBitmapCache)
+            val tileCacheStats = captureCacheStats(tileCacheLock, tileBitmapCache)
+            val viewportCommit = pendingViewportCommit
+            val viewportJobActive = viewportCommitJob?.isActive == true
+
+            NovaLog.i(
+                TAG,
+                "Developer runtime dump",
+                field("documentId", state.documentId),
+                field("pageCount", state.pageCount),
+                field("currentPage", state.currentPage),
+                field("uiUnderLoad", state.uiUnderLoad),
+                field("searchIndexing", state.searchIndexing::class.simpleName),
+                field("renderProgress", state.renderProgress::class.simpleName)
+            )
+
+            NovaLog.i(
+                TAG,
+                "Render queue snapshot",
+                field("parallelism", RENDER_POOL_PARALLELISM),
+                field("active", renderStats.active),
+                field("visibleQueued", renderStats.visible),
+                field("nearbyQueued", renderStats.nearby),
+                field("thumbnailQueued", renderStats.thumbnail)
+            )
+
+            logCacheStats("page_bitmap", pageCacheStats)
+            logCacheStats("tile_bitmap", tileCacheStats)
+
+            NovaLog.i(
+                TAG,
+                "Bitmap memory stats",
+                field("currentBytes", state.bitmapMemory.currentBytes),
+                field("peakBytes", state.bitmapMemory.peakBytes),
+                field("warnThreshold", state.bitmapMemory.warnThresholdBytes),
+                field("criticalThreshold", state.bitmapMemory.criticalThresholdBytes),
+                field("level", state.bitmapMemory.level.name)
+            )
+
+            NovaLog.i(
+                TAG,
+                "Prefetch channel",
+                field("isClosedForSend", prefetchRequests.isClosedForSend),
+                field("isClosedForReceive", prefetchRequests.isClosedForReceive),
+                field("isEmpty", prefetchRequests.isEmpty)
+            )
+
+            NovaLog.i(
+                TAG,
+                "Viewport commit",
+                field("hasPending", viewportCommit != null),
+                field("jobActive", viewportJobActive),
+                field("throttleMs", VIEWPORT_PERSIST_THROTTLE_MS)
+            )
+            viewportCommit?.let { commit ->
+                NovaLog.i(
+                    TAG,
+                    "Pending viewport commit detail",
+                    field("documentId", commit.documentId),
+                    field("pageIndex", commit.pageIndex),
+                    field("zoom", commit.zoom)
+                )
+            }
+
+            val documentStatus = state.documentStatus
+            when (documentStatus) {
+                is DocumentStatus.Error -> NovaLog.i(
+                    TAG,
+                    "Document status: error",
+                    field("message", documentStatus.message)
+                )
+
+                is DocumentStatus.Loading -> NovaLog.i(
+                    TAG,
+                    "Document status: loading",
+                    field("progress", documentStatus.progress),
+                    field("messageRes", documentStatus.messageRes)
+                )
+
+                DocumentStatus.Idle -> NovaLog.i(TAG, "Document status: idle")
+            }
+
+            val threadStacks = Thread.getAllStackTraces()
+            NovaLog.i(TAG, "Thread dump start", field("threadCount", threadStacks.size))
+            threadStacks.entries
+                .sortedBy { (thread, _) -> thread.name }
+                .forEach { (thread, stack) ->
+                    val stackTrace = if (stack.isEmpty()) {
+                        "    <no stack>"
+                    } else {
+                        stack.joinToString(separator = "\n") { element -> "    at $element" }
+                    }
+                    val threadMessage = buildString {
+                        append("Thread \"")
+                        append(thread.name)
+                        append("\" (id=")
+                        append(thread.id)
+                        append(", state=")
+                        append(thread.state)
+                        if (thread.isDaemon) {
+                            append(", daemon")
+                        }
+                        append(")\n")
+                        append(stackTrace)
+                    }
+                    NovaLog.i(TAG, threadMessage)
+                }
+            NovaLog.i(TAG, "Thread dump end")
+        }
+    }
+
     private fun clearRenderCaches() {
         synchronized(pageCacheLock) {
             pageBitmapCache.evictAll()
@@ -1283,6 +1410,30 @@ open class PdfViewerViewModel @Inject constructor(
         synchronized(tileCacheLock) {
             tileBitmapCache.trimToFraction(clamped)
         }
+    }
+
+    private fun <K, V> captureCacheStats(lock: Any, cache: LruCache<K, V>): CacheStats = synchronized(lock) {
+        CacheStats(
+            sizeBytes = cache.size(),
+            maxSizeBytes = cache.maxSize(),
+            hitCount = cache.hitCount(),
+            missCount = cache.missCount(),
+            putCount = cache.putCount(),
+            evictionCount = cache.evictionCount(),
+        )
+    }
+
+    private fun logCacheStats(label: String, stats: CacheStats) {
+        NovaLog.i(
+            TAG,
+            "$label cache",
+            field("sizeBytes", stats.sizeBytes),
+            field("maxBytes", stats.maxSizeBytes),
+            field("hits", stats.hitCount),
+            field("misses", stats.missCount),
+            field("puts", stats.putCount),
+            field("evictions", stats.evictionCount)
+        )
     }
 
     private fun computeCacheBudget(limitBytes: Int): Int {
