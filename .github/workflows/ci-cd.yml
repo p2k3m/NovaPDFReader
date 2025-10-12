@@ -18,7 +18,7 @@ jobs:
       firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
     strategy:
       fail-fast: true
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
           - api: 32
@@ -26,6 +26,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7_pro
             device_label: pixel-7-pro
@@ -45,6 +46,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
@@ -64,6 +66,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 10240
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_7
             device_label: galaxy-s23-ultra
@@ -83,6 +86,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 8192
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_fold
             device_label: pixel-fold
@@ -102,6 +106,7 @@ jobs:
             tag: google_apis
             abi: x86_64
             ram_mb: 12288
+            gpu_mode: swiftshader_indirect
             disk_mb: 12288
             device_id: pixel_tablet
             device_label: pixel-tablet
@@ -1033,6 +1038,8 @@ jobs:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
           RUNNER_OS: ${{ runner.os }}
+          GPU_MODE: ${{ matrix.gpu_mode || 'swiftshader_indirect' }}
+          EMULATOR_RAM_MB: ${{ matrix.ram_mb }}
         run: |
           set -euo pipefail
 
@@ -1174,7 +1181,17 @@ jobs:
             fi
           fi
 
-          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu swiftshader_indirect -memory ${{ matrix.ram_mb }} -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
+          emulator_gpu="${GPU_MODE:-swiftshader_indirect}"
+          if [ -z "$emulator_gpu" ]; then
+            emulator_gpu="swiftshader_indirect"
+          fi
+
+          emulator_memory="${EMULATOR_RAM_MB:-${{ matrix.ram_mb }}}"
+          if [ -z "$emulator_memory" ]; then
+            emulator_memory="${{ matrix.ram_mb }}"
+          fi
+
+          $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu "$emulator_gpu" -memory "$emulator_memory" -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
           watchdog_log="$RUNNER_TEMP/emulator-watchdog.log"
@@ -1224,6 +1241,38 @@ jobs:
             if [ $boot_timeout -ge $boot_deadline ]; then
               echo "Emulator failed to boot within $((boot_deadline / 60)) minutes" >&2
               exit 1
+            fi
+          done
+
+          bootanim_timeout=0
+          bootanim_deadline=$((5 * 60))
+          until adb shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r' | grep -q '^stopped$'; do
+            sleep 5
+            bootanim_timeout=$((bootanim_timeout + 5))
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo "Emulator process exited while waiting for boot animation to stop" >&2
+              wait "$emulator_pid" || true
+              exit 1
+            fi
+            if [ $bootanim_timeout -ge $bootanim_deadline ]; then
+              echo "Boot animation service did not stop within $((bootanim_deadline / 60)) minutes" >&2
+              break
+            fi
+          done
+
+          dev_boot_timeout=0
+          dev_boot_deadline=$((5 * 60))
+          until adb shell getprop dev.bootcomplete 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
+            sleep 5
+            dev_boot_timeout=$((dev_boot_timeout + 5))
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo "Emulator process exited while waiting for dev.bootcomplete" >&2
+              wait "$emulator_pid" || true
+              exit 1
+            fi
+            if [ $dev_boot_timeout -ge $dev_boot_deadline ]; then
+              echo "dev.bootcomplete did not report completion within $((dev_boot_deadline / 60)) minutes" >&2
+              break
             fi
           done
           adb shell settings put global window_animation_scale 0 || true
@@ -1538,9 +1587,57 @@ jobs:
             local label="$2"
             local dest="$FIXTURE_DIR/$(basename "$key")"
             local tmp="${dest}.tmp"
+            local metadata_json=""
+            local version_id=""
+
+            if ! metadata_json=$(aws s3api head-object --bucket "$BUCKET" --key "$key" --output json); then
+              echo "::error::Failed to query metadata for ${label} PDF fixture at s3://${BUCKET}/${key}" >&2
+              exit 1
+            fi
+
+            readarray -t metadata_fields < <(
+              python3 - <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+
+version_id = data.get("VersionId") or ""
+etag = (data.get("ETag") or "").strip('"')
+
+print(version_id)
+print(etag)
+PY
+            <<< "$metadata_json"
+            )
+
+            if [ "${metadata_fields[0]:-}" != "" ] && [ "${metadata_fields[0]}" != "null" ]; then
+              version_id="${metadata_fields[0]}"
+            fi
+
+            if [ -n "$version_id" ]; then
+              echo "Resolved ${label} fixture version ${version_id} for download" >&2
+            else
+              echo "Resolved ${label} fixture latest version (bucket not versioned)" >&2
+            fi
+
+            if [ "${metadata_fields[1]:-}" != "" ] && [ "${metadata_fields[1]}" != "null" ]; then
+              echo "Resolved ${label} fixture ETag ${metadata_fields[1]}" >&2
+            fi
+
+            declare -g LAST_DOWNLOADED_VERSION="$version_id"
+            declare -g LAST_DOWNLOADED_ETAG="${metadata_fields[1]:-}"
+
+            local version_args=()
+            if [ -n "$version_id" ]; then
+              version_args=(--version-id "$version_id")
+            fi
 
             echo "Downloading ${label} fixture from s3://${BUCKET}/${key}" >&2
-            if ! aws s3 cp --only-show-errors "s3://${BUCKET}/${key}" "$tmp"; then
+            if ! aws s3api get-object --bucket "$BUCKET" --key "$key" "${version_args[@]}" "$tmp" >/dev/null; then
               echo "::error::Failed to download ${label} PDF fixture from s3://${BUCKET}/${key}"
               rm -f "$tmp"
               exit 1
@@ -1557,11 +1654,28 @@ jobs:
           }
 
           stress_path=$(download_fixture "$STRESS_PDF_KEY" "stress")
+          stress_version="${LAST_DOWNLOADED_VERSION:-}"
+          stress_etag="${LAST_DOWNLOADED_ETAG:-}"
+
           thousand_path=$(download_fixture "$THOUSAND_PDF_KEY" "thousand-page")
+          thousand_version="${LAST_DOWNLOADED_VERSION:-}"
+          thousand_etag="${LAST_DOWNLOADED_ETAG:-}"
 
           {
             echo "stress_path=${stress_path}"
             echo "thousand_path=${thousand_path}"
+            if [ -n "$stress_version" ]; then
+              echo "stress_version=${stress_version}"
+            fi
+            if [ -n "$stress_etag" ]; then
+              echo "stress_etag=${stress_etag}"
+            fi
+            if [ -n "$thousand_version" ]; then
+              echo "thousand_version=${thousand_version}"
+            fi
+            if [ -n "$thousand_etag" ]; then
+              echo "thousand_etag=${thousand_etag}"
+            fi
           } >> "$GITHUB_OUTPUT"
       - name: Download AI.pdf fixture from S3
         if: env.UNIT_TESTS_PASSED == 'true'
@@ -1585,40 +1699,62 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$expected_sha" ] || [ -z "$expected_size" ]; then
-              if metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json 2>/dev/null); then
-                python_script=$(printf '%s\n' \
-                  "import base64" \
-                  "import json" \
-                  "import sys" \
-                  "" \
-                  "data = json.load(sys.stdin)" \
-                  "" \
-                  "size = data.get(\"ContentLength\")" \
-                  "checksum = data.get(\"ChecksumSHA256\") or \"\"" \
-                  "" \
-                  "if checksum:" \
-                  "    try:" \
-                  "        checksum = base64.b64decode(checksum).hex()" \
-                  "    except Exception:" \
-                  "        checksum = \"\"" \
-                  "" \
-                  "print(\"\" if size is None else size)" \
-                  "print(checksum)"
-                )
+          metadata_json=""
+          if ! metadata_json=$(aws s3api head-object --bucket "$bucket" --key "$key" --output json); then
+            echo "::error::Unable to query metadata for AI.pdf at s3://${bucket}/${key}" >&2
+            exit 1
+          fi
 
-                readarray -t metadata_fields < <(python3 -c "$python_script" <<< "$metadata_json")
-              if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
-                echo "::notice::Using AI.pdf size ${metadata_fields[0]} bytes from S3 metadata as the expected value."
-                expected_size="${metadata_fields[0]}"
-              fi
-              if [ -z "$expected_sha" ] && [ -n "${metadata_fields[1]:-}" ]; then
-                echo "::notice::Using AI.pdf checksum derived from S3 metadata as the expected value."
-                expected_sha="${metadata_fields[1]}"
-              fi
-            else
-              echo "::warning::Unable to derive AI.pdf metadata; proceeding without predefined checksum or size."
-            fi
+          readarray -t metadata_fields < <(
+            python3 - <<'PY' <<<"$metadata_json"
+import base64
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+
+size = data.get("ContentLength")
+checksum = data.get("ChecksumSHA256") or ""
+etag = (data.get("ETag") or "").strip('"')
+version_id = data.get("VersionId") or ""
+
+if checksum:
+    try:
+        checksum = base64.b64decode(checksum).hex()
+    except Exception:
+        checksum = ""
+
+print("" if size is None else size)
+print(checksum)
+print(etag)
+print(version_id)
+PY
+          )
+
+          if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
+            echo "::notice::Using AI.pdf size ${metadata_fields[0]} bytes from S3 metadata as the expected value."
+            expected_size="${metadata_fields[0]}"
+          fi
+          if [ -z "$expected_sha" ] && [ -n "${metadata_fields[1]:-}" ]; then
+            echo "::notice::Using AI.pdf checksum derived from S3 metadata as the expected value."
+            expected_sha="${metadata_fields[1]}"
+          fi
+
+          ai_pdf_etag="${metadata_fields[2]:-}"
+          ai_pdf_version="${metadata_fields[3]:-}"
+
+          if [ -n "$ai_pdf_version" ] && [ "$ai_pdf_version" != "null" ]; then
+            echo "Resolved AI.pdf version ${ai_pdf_version}" >&2
+          else
+            ai_pdf_version=""
+            echo "Resolved AI.pdf latest version (bucket not versioned)" >&2
+          fi
+
+          if [ -n "$ai_pdf_etag" ] && [ "$ai_pdf_etag" != "null" ]; then
+            echo "Resolved AI.pdf ETag ${ai_pdf_etag}" >&2
           fi
 
           mkdir -p "$FIXTURE_DIR"
@@ -1628,7 +1764,12 @@ jobs:
           trap 'rm -f "$tmp"' EXIT
 
           echo "Downloading AI.pdf fixture from s3://${bucket}/${key}" >&2
-          if ! aws s3 cp --only-show-errors "s3://${bucket}/${key}" "$tmp"; then
+          local version_args=()
+          if [ -n "$ai_pdf_version" ]; then
+            version_args=(--version-id "$ai_pdf_version")
+          fi
+
+          if ! aws s3api get-object --bucket "$bucket" --key "$key" "${version_args[@]}" "$tmp" >/dev/null; then
             echo "::error::Failed to download AI.pdf fixture from s3://${bucket}/${key}" >&2
             exit 1
           fi
@@ -1671,6 +1812,12 @@ jobs:
           fi
           if [ -n "$normalized_expected_sha" ]; then
             echo "ai_pdf_sha256=$normalized_expected_sha" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$ai_pdf_version" ]; then
+            echo "ai_pdf_version=$ai_pdf_version" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$ai_pdf_etag" ]; then
+            echo "ai_pdf_etag=$ai_pdf_etag" >> "$GITHUB_OUTPUT"
           fi
       - name: Stage stress PDFs on emulator
         if: env.UNIT_TESTS_PASSED == 'true'
@@ -2503,7 +2650,7 @@ jobs:
         if: always()
         run: |
           mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
-          adb logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/emulator.log" || true
+          adb -s emulator-5554 logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/emulator.log" || true
       - name: Stage device diagnostics
         if: always()
         run: |
@@ -2516,6 +2663,24 @@ jobs:
             else
               cp -R device-logs/. "$target_dir/"
             fi
+          fi
+      - name: Capture failure screenshot
+        if: failure()
+        run: |
+          set -euo pipefail
+          target_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$target_dir"
+          if adb -s emulator-5554 get-state >/dev/null 2>&1; then
+            timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+            screenshot_path="${target_dir}/failure-${timestamp}.png"
+            if adb -s emulator-5554 exec-out screencap -p > "$screenshot_path"; then
+              echo "Captured failure screenshot at $screenshot_path" >&2
+            else
+              echo "::warning::Failed to capture emulator screenshot on failure" >&2
+              rm -f "$screenshot_path"
+            fi
+          else
+            echo "::warning::Emulator not reachable for failure screenshot" >&2
           fi
       - name: Stop emulator
         if: always()
