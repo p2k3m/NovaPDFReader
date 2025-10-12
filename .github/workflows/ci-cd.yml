@@ -1401,11 +1401,82 @@ jobs:
             done
           }
 
-          apk_path="app/build/outputs/apk/debug/app-debug.apk"
+          resolve_apk_path() {
+            local variant_dir="$1"
+            local fallback="$2"
+            local metadata="${variant_dir}/output-metadata.json"
+
+            if [ -f "$metadata" ]; then
+              local resolved_path
+              resolved_path=$(python3 - "$variant_dir" <<'PY'
+import json
+import os
+import sys
+
+variant_dir = sys.argv[1]
+metadata_path = os.path.join(variant_dir, "output-metadata.json")
+
+preferred_abis = ["", "x86_64", "arm64-v8a"]
+candidates = []
+
+try:
+    with open(metadata_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = None
+
+if data:
+    for element in data.get("elements", []):
+        output_file = element.get("outputFile")
+        if not output_file:
+            continue
+        path = os.path.join(variant_dir, output_file)
+        if not os.path.isfile(path):
+            continue
+        filters = element.get("filters") or []
+        abi = ""
+        for flt in filters:
+            if flt.get("filterType") == "ABI":
+                abi = (flt.get("value") or "").strip()
+                break
+        candidates.append((abi, path))
+
+if candidates:
+    def sort_key(item):
+        abi, path = item
+        try:
+            abi_index = preferred_abis.index(abi)
+        except ValueError:
+            abi_index = len(preferred_abis)
+        return (abi_index, path)
+
+    best = min(candidates, key=sort_key)
+    sys.stdout.write(best[1])
+PY
+              )
+              resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
+              if [ -n "$resolved_path" ]; then
+                printf '%s' "$resolved_path"
+                return 0
+              fi
+            fi
+
+            printf '%s' "$fallback"
+          }
+
+          apk_path="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
+          printf 'Resolved debug APK path to %s\n' "$apk_path"
 
           if [ ! -f "$apk_path" ]; then
-            echo "Debug APK not found; assembling it now"
+            echo "Debug APK not found at $apk_path; assembling it now"
             ./gradlew :app:assembleDebug --stacktrace --no-build-cache
+            apk_path="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
+            printf 'Resolved debug APK path to %s after assemble\n' "$apk_path"
+          fi
+
+          if [ ! -f "$apk_path" ]; then
+            echo "::error::Debug APK is still missing at $apk_path after assembly"
+            exit 1
           fi
 
           echo "Waiting for emulator to report as online"
@@ -1986,11 +2057,82 @@ jobs:
         run: |
           set -euo pipefail
 
-          apk_path="app/build/outputs/apk/debug/app-debug.apk"
+          resolve_apk_path() {
+            local variant_dir="$1"
+            local fallback="$2"
+            local metadata="${variant_dir}/output-metadata.json"
+
+            if [ -f "$metadata" ]; then
+              local resolved_path
+              resolved_path=$(python3 - "$variant_dir" <<'PY'
+import json
+import os
+import sys
+
+variant_dir = sys.argv[1]
+metadata_path = os.path.join(variant_dir, "output-metadata.json")
+
+preferred_abis = ["", "x86_64", "arm64-v8a"]
+candidates = []
+
+try:
+    with open(metadata_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = None
+
+if data:
+    for element in data.get("elements", []):
+        output_file = element.get("outputFile")
+        if not output_file:
+            continue
+        path = os.path.join(variant_dir, output_file)
+        if not os.path.isfile(path):
+            continue
+        filters = element.get("filters") or []
+        abi = ""
+        for flt in filters:
+            if flt.get("filterType") == "ABI":
+                abi = (flt.get("value") or "").strip()
+                break
+        candidates.append((abi, path))
+
+if candidates:
+    def sort_key(item):
+        abi, path = item
+        try:
+            abi_index = preferred_abis.index(abi)
+        except ValueError:
+            abi_index = len(preferred_abis)
+        return (abi_index, path)
+
+    best = min(candidates, key=sort_key)
+    sys.stdout.write(best[1])
+PY
+              )
+              resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
+              if [ -n "$resolved_path" ]; then
+                printf '%s' "$resolved_path"
+                return 0
+              fi
+            fi
+
+            printf '%s' "$fallback"
+          }
+
+          apk_path="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
+          printf 'Resolved debug APK path to %s\n' "$apk_path"
 
           if [ ! -f "$apk_path" ]; then
-            echo "Debug APK not found; assembling it now"
+            echo "Debug APK not found at $apk_path; assembling it now"
             ./gradlew :app:assembleDebug --stacktrace
+            apk_path="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
+            printf 'Resolved debug APK path to %s after assemble\n' "$apk_path"
+          fi
+
+          if [ ! -f "$apk_path" ]; then
+            echo "::error::Debug APK is still missing at $apk_path after assembly"
+            exit 1
           fi
 
           echo "Waiting for emulator to report as online"
@@ -2092,11 +2234,82 @@ jobs:
         run: |
           set -euo pipefail
 
-          android_test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+          resolve_apk_path() {
+            local variant_dir="$1"
+            local fallback="$2"
+            local metadata="${variant_dir}/output-metadata.json"
+
+            if [ -f "$metadata" ]; then
+              local resolved_path
+              resolved_path=$(python3 - "$variant_dir" <<'PY'
+import json
+import os
+import sys
+
+variant_dir = sys.argv[1]
+metadata_path = os.path.join(variant_dir, "output-metadata.json")
+
+preferred_abis = ["", "x86_64", "arm64-v8a"]
+candidates = []
+
+try:
+    with open(metadata_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = None
+
+if data:
+    for element in data.get("elements", []):
+        output_file = element.get("outputFile")
+        if not output_file:
+            continue
+        path = os.path.join(variant_dir, output_file)
+        if not os.path.isfile(path):
+            continue
+        filters = element.get("filters") or []
+        abi = ""
+        for flt in filters:
+            if flt.get("filterType") == "ABI":
+                abi = (flt.get("value") or "").strip()
+                break
+        candidates.append((abi, path))
+
+if candidates:
+    def sort_key(item):
+        abi, path = item
+        try:
+            abi_index = preferred_abis.index(abi)
+        except ValueError:
+            abi_index = len(preferred_abis)
+        return (abi_index, path)
+
+    best = min(candidates, key=sort_key)
+    sys.stdout.write(best[1])
+PY
+              )
+              resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
+              if [ -n "$resolved_path" ]; then
+                printf '%s' "$resolved_path"
+                return 0
+              fi
+            fi
+
+            printf '%s' "$fallback"
+          }
+
+          android_test_apk="$(resolve_apk_path "app/build/outputs/apk/androidTest/debug" "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")"
+          printf 'Resolved androidTest APK path to %s\n' "$android_test_apk"
 
           if [ ! -f "$android_test_apk" ]; then
-            echo "AndroidTest APK not found; assembling it now"
+            echo "AndroidTest APK not found at $android_test_apk; assembling it now"
             ./gradlew :app:assembleDebugAndroidTest --stacktrace
+            android_test_apk="$(resolve_apk_path "app/build/outputs/apk/androidTest/debug" "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")"
+            printf 'Resolved androidTest APK path to %s after assemble\n' "$android_test_apk"
+          fi
+
+          if [ ! -f "$android_test_apk" ]; then
+            echo "::error::AndroidTest APK is still missing at $android_test_apk after assembly"
+            exit 1
           fi
 
           echo "Installing $android_test_apk onto the emulator"
@@ -2577,11 +2790,90 @@ jobs:
           results_path="$RESULTS_JSON"
           rm -f "$results_path"
 
+          resolve_apk_path() {
+            local variant_dir="$1"
+            local fallback="$2"
+            local metadata="${variant_dir}/output-metadata.json"
+
+            if [ -f "$metadata" ]; then
+              local resolved_path
+              resolved_path=$(python3 - "$variant_dir" <<'PY'
+import json
+import os
+import sys
+
+variant_dir = sys.argv[1]
+metadata_path = os.path.join(variant_dir, "output-metadata.json")
+
+preferred_abis = ["", "x86_64", "arm64-v8a"]
+candidates = []
+
+try:
+    with open(metadata_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    data = None
+
+if data:
+    for element in data.get("elements", []):
+        output_file = element.get("outputFile")
+        if not output_file:
+            continue
+        path = os.path.join(variant_dir, output_file)
+        if not os.path.isfile(path):
+            continue
+        filters = element.get("filters") or []
+        abi = ""
+        for flt in filters:
+            if flt.get("filterType") == "ABI":
+                abi = (flt.get("value") or "").strip()
+                break
+        candidates.append((abi, path))
+
+if candidates:
+    def sort_key(item):
+        abi, path = item
+        try:
+            abi_index = preferred_abis.index(abi)
+        except ValueError:
+            abi_index = len(preferred_abis)
+        return (abi_index, path)
+
+    best = min(candidates, key=sort_key)
+    sys.stdout.write(best[1])
+PY
+              )
+              resolved_path=$(printf '%s' "$resolved_path" | tr -d '\r\n')
+              if [ -n "$resolved_path" ]; then
+                printf '%s' "$resolved_path"
+                return 0
+              fi
+            fi
+
+            printf '%s' "$fallback"
+          }
+
+          app_apk="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
+          android_test_apk="$(resolve_apk_path "app/build/outputs/apk/androidTest/debug" "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")"
+
+          printf 'Resolved Firebase debug APK path to %s\n' "$app_apk"
+          printf 'Resolved Firebase androidTest APK path to %s\n' "$android_test_apk"
+
+          if [ ! -f "$app_apk" ]; then
+            echo "::error::Resolved debug APK missing at $app_apk" >&2
+            exit 1
+          fi
+
+          if [ ! -f "$android_test_apk" ]; then
+            echo "::error::Resolved androidTest APK missing at $android_test_apk" >&2
+            exit 1
+          fi
+
           set +e
           gcloud firebase test android run \
             --type instrumentation \
-            --app app/build/outputs/apk/debug/app-debug.apk \
-            --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --app "$app_apk" \
+            --test "$android_test_apk" \
             --device model="$DEVICE_MODEL",version="$DEVICE_VERSION",locale=en,orientation=portrait \
             --timeout 30m \
             --num-flaky-test-attempts=1 \
