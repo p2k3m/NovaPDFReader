@@ -2,6 +2,7 @@ import com.android.build.gradle.BaseExtension
 import com.android.build.gradle.internal.tasks.DeviceProviderInstrumentTestTask
 import com.android.build.gradle.internal.tasks.InstallVariantTask
 import com.diffplug.gradle.spotless.SpotlessExtension
+import com.android.ddmlib.DdmPreferences
 import io.gitlab.arturbosch.detekt.Detekt
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.StartParameter
@@ -439,6 +440,19 @@ fun computeConnectedDeviceCheck(): ConnectedDeviceCheck {
             warningMessage = "Unable to query connected Android devices via adb. Skipping connected Android tests."
         )
     }
+}
+
+val ddmlibTimeoutMs = 600_000
+
+runCatching {
+    if (DdmPreferences.getTimeOut() < ddmlibTimeoutMs) {
+        DdmPreferences.setTimeOut(ddmlibTimeoutMs)
+    }
+}.onFailure { error ->
+    logger.warn(
+        "Unable to configure ddmlib timeouts for connected Android tests; continuing with defaults.",
+        error
+    )
 }
 
 val connectedDeviceCheck by lazy(LazyThreadSafetyMode.NONE) { computeConnectedDeviceCheck() }
