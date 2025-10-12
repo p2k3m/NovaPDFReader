@@ -197,6 +197,13 @@ val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).
 
 val isCiEnvironment = parseOptionalBoolean(System.getenv("CI")) ?: false
 
+val supportedAbis = listOf("arm64-v8a", "x86_64")
+
+val enableAbiSplits = parseOptionalBoolean(
+    (findProperty("novapdf.enableAbiSplits") as? String)
+        ?: System.getenv("NOVAPDF_ENABLE_ABI_SPLITS")
+) ?: true
+
 android {
     namespace = "com.novapdf.reader"
     testNamespace = "$resolvedApplicationId.test"
@@ -236,10 +243,13 @@ android {
         )
 
         ndk {
-            // Restrict packaged ABIs to the architectures required for release devices and the CI
-            // emulator. Trimming unused native libraries keeps the debug APK small enough to avoid
-            // exhausting the emulator's virtual storage during installation.
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters.clear()
+            if (!enableAbiSplits) {
+                // Restrict packaged ABIs to the architectures required for release devices and the
+                // CI emulator. Trimming unused native libraries keeps the debug APK small enough to
+                // avoid exhausting the emulator's virtual storage during installation.
+                abiFilters += supportedAbis
+            }
         }
 
     }
@@ -320,10 +330,12 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            isEnable = enableAbiSplits
             reset()
-            include("arm64-v8a", "x86_64")
-            isUniversalApk = false
+            if (enableAbiSplits) {
+                include(*supportedAbis.toTypedArray())
+                isUniversalApk = false
+            }
         }
     }
 
