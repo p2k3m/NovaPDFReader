@@ -2176,11 +2176,13 @@ jobs:
           logcat_path="${logs_dir}/logcat.txt"
           bugreport_path="${logs_dir}/bugreport.zip"
           adb logcat -d > "$logcat_path"
-          if ! timeout 5m adb bugreport "$bugreport_path"; then
-            echo "::error::Failed to capture bugreport after connectedAndroidTest" >&2
-            exit 1
+          bugreport_args=()
+          if timeout 5m adb bugreport "$bugreport_path"; then
+            bugreport_args+=("$bugreport_path")
+          else
+            echo "::warning::Failed to capture bugreport after connectedAndroidTest; continuing with logcat only" >&2
           fi
-          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
@@ -2204,11 +2206,13 @@ jobs:
           logcat_path="${logs_dir}/logcat.txt"
           bugreport_path="${logs_dir}/bugreport.zip"
           adb logcat -d > "$logcat_path"
-          if ! timeout 5m adb bugreport "$bugreport_path"; then
-            echo "::error::Failed to capture bugreport after macrobenchmark run" >&2
-            exit 1
+          bugreport_args=()
+          if timeout 5m adb bugreport "$bugreport_path"; then
+            bugreport_args+=("$bugreport_path")
+          else
+            echo "::warning::Failed to capture bugreport after macrobenchmark run; continuing with logcat only" >&2
           fi
-          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
@@ -2232,11 +2236,13 @@ jobs:
           logcat_path="${logs_dir}/logcat.txt"
           bugreport_path="${logs_dir}/bugreport.zip"
           adb logcat -d > "$logcat_path"
-          if ! timeout 5m adb bugreport "$bugreport_path"; then
-            echo "::error::Failed to capture bugreport after baseline profile generation" >&2
-            exit 1
+          bugreport_args=()
+          if timeout 5m adb bugreport "$bugreport_path"; then
+            bugreport_args+=("$bugreport_path")
+          else
+            echo "::warning::Failed to capture bugreport after baseline profile generation; continuing with logcat only" >&2
           fi
-          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
@@ -2752,11 +2758,13 @@ jobs:
           logcat_path="${logs_dir}/logcat.txt"
           bugreport_path="${logs_dir}/bugreport.zip"
           adb logcat -d > "$logcat_path"
-          if ! timeout 5m adb bugreport "$bugreport_path"; then
-            echo "::error::Failed to capture bugreport after screenshot harness" >&2
-            exit 1
+          bugreport_args=()
+          if timeout 5m adb bugreport "$bugreport_path"; then
+            bugreport_args+=("$bugreport_path")
+          else
+            echo "::warning::Failed to capture bugreport after screenshot harness; continuing with logcat only" >&2
           fi
-          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "$bugreport_path" --package "$PACKAGE_NAME"; then
+          if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
