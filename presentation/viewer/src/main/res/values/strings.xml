@@ -175,4 +175,6 @@
     <string name="dev_options_threshold_unavailable">Not configured</string>
     <string name="dev_options_memory_value_format">%1$s (%2$d B)</string>
     <string name="dev_options_back">Back to settings</string>
+    <string name="dev_options_dump_description">Write queues, cache sizes, and thread stacks to the log for post-mortem debugging.</string>
+    <string name="dev_options_dump_runtime">Dump runtime state</string>
 </resources>

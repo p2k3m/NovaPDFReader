@@ -51,6 +51,7 @@ class PdfViewerScreenTest {
                     onToggleHighContrast = {},
                     onToggleTalkBackIntegration = {},
                     onFontScaleChanged = {},
+                    onDumpDiagnostics = {},
                     dynamicColorSupported = true
                 )
             }
