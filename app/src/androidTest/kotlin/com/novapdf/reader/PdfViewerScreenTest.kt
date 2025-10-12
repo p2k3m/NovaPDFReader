@@ -53,6 +53,9 @@ class PdfViewerScreenTest {
                     onToggleTalkBackIntegration = {},
                     onFontScaleChanged = {},
                     onDumpDiagnostics = {},
+                    onToggleDevDiagnostics = {},
+                    onToggleDevCaches = {},
+                    onToggleDevArtificialDelay = {},
                     dynamicColorSupported = true
                 )
             }

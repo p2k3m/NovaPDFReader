@@ -260,6 +260,9 @@ fun PdfViewerRoute(
             onToggleTalkBackIntegration = { viewModel.setTalkBackIntegrationEnabled(it) },
             onFontScaleChanged = { viewModel.setFontScale(it) },
             onDumpDiagnostics = { viewModel.dumpRuntimeDiagnostics() },
+            onToggleDevDiagnostics = { viewModel.setDevDiagnosticsEnabled(it) },
+            onToggleDevCaches = { viewModel.setDevCachesEnabled(it) },
+            onToggleDevArtificialDelay = { viewModel.setDevArtificialDelayEnabled(it) },
             dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         )
     }
@@ -296,6 +299,9 @@ fun PdfViewerScreen(
     onToggleTalkBackIntegration: (Boolean) -> Unit,
     onFontScaleChanged: (Float) -> Unit,
     onDumpDiagnostics: () -> Unit,
+    onToggleDevDiagnostics: (Boolean) -> Unit,
+    onToggleDevCaches: (Boolean) -> Unit,
+    onToggleDevArtificialDelay: (Boolean) -> Unit,
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -508,6 +514,9 @@ fun PdfViewerScreen(
                     onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
                     onBackFromDevOptions = { selectedDestination = MainDestination.Settings },
                     onDumpDiagnostics = onDumpDiagnostics,
+                    onToggleDevDiagnostics = onToggleDevDiagnostics,
+                    onToggleDevCaches = onToggleDevCaches,
+                    onToggleDevArtificialDelay = onToggleDevArtificialDelay,
                     dynamicColorSupported = dynamicColorSupported,
                     accessibilityManager = accessibilityManager,
                     hapticFeedbackManager = hapticManager,
@@ -543,7 +552,7 @@ fun PdfViewerScreen(
                     )
                 }
 
-                if (BuildConfig.DEBUG) {
+                if (BuildConfig.DEBUG && state.devDiagnosticsEnabled) {
                     HealthHud(
                         frameIntervalMillis = state.frameIntervalMillis,
                         queueStats = state.renderQueueStats,
@@ -798,6 +807,9 @@ private fun PdfViewerDestinationContainer(
     onOpenDevOptions: () -> Unit,
     onBackFromDevOptions: () -> Unit,
     onDumpDiagnostics: () -> Unit,
+    onToggleDevDiagnostics: (Boolean) -> Unit,
+    onToggleDevCaches: (Boolean) -> Unit,
+    onToggleDevArtificialDelay: (Boolean) -> Unit,
     dynamicColorSupported: Boolean,
     accessibilityManager: AccessibilityManager?,
     hapticFeedbackManager: HapticFeedbackManager,
@@ -873,8 +885,16 @@ private fun PdfViewerDestinationContainer(
         MainDestination.DevOptions -> {
             DevOptionsContent(
                 stats = state.bitmapMemory,
+                diagnosticsEnabled = state.devDiagnosticsEnabled,
+                cachesEnabled = state.devCachesEnabled,
+                artificialDelayEnabled = state.devArtificialDelayEnabled,
+                onDiagnosticsToggle = onToggleDevDiagnostics,
+                onCachesToggle = onToggleDevCaches,
+                onArtificialDelayToggle = onToggleDevArtificialDelay,
                 onDumpDiagnostics = onDumpDiagnostics,
                 onBack = onBackFromDevOptions,
+                accessibilityManager = accessibilityManager,
+                hapticFeedbackManager = hapticFeedbackManager,
                 modifier = modifier
             )
         }
@@ -1781,8 +1801,16 @@ private fun SettingsContent(
 @Composable
 private fun DevOptionsContent(
     stats: BitmapMemoryStats,
+    diagnosticsEnabled: Boolean,
+    cachesEnabled: Boolean,
+    artificialDelayEnabled: Boolean,
+    onDiagnosticsToggle: (Boolean) -> Unit,
+    onCachesToggle: (Boolean) -> Unit,
+    onArtificialDelayToggle: (Boolean) -> Unit,
     onDumpDiagnostics: () -> Unit,
     onBack: () -> Unit,
+    accessibilityManager: AccessibilityManager?,
+    hapticFeedbackManager: HapticFeedbackManager,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1828,6 +1856,85 @@ private fun DevOptionsContent(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(modifier = Modifier.height(24.dp))
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = stringResource(id = R.string.dev_options_tools_title),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = stringResource(id = R.string.dev_options_tools_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                DevOptionToggleRow(
+                    label = stringResource(id = R.string.dev_options_diagnostics_label),
+                    description = stringResource(id = R.string.dev_options_diagnostics_description),
+                    checked = diagnosticsEnabled,
+                    enabled = true,
+                    onToggle = { value ->
+                        hapticFeedbackManager.onToggleChange(value)
+                        onDiagnosticsToggle(value)
+                        announceToggleState(
+                            accessibilityManager,
+                            context,
+                            R.string.dev_options_diagnostics_label,
+                            value
+                        )
+                    }
+                )
+                DevOptionToggleRow(
+                    label = stringResource(id = R.string.dev_options_caches_label),
+                    description = stringResource(id = R.string.dev_options_caches_description),
+                    checked = cachesEnabled,
+                    enabled = true,
+                    onToggle = { value ->
+                        hapticFeedbackManager.onToggleChange(value)
+                        onCachesToggle(value)
+                        announceToggleState(
+                            accessibilityManager,
+                            context,
+                            R.string.dev_options_caches_label,
+                            value
+                        )
+                    }
+                )
+                val debugAvailable = BuildConfig.DEBUG
+                DevOptionToggleRow(
+                    label = stringResource(id = R.string.dev_options_delay_label),
+                    description = stringResource(id = R.string.dev_options_delay_description),
+                    checked = artificialDelayEnabled,
+                    enabled = debugAvailable,
+                    onToggle = { value ->
+                        hapticFeedbackManager.onToggleChange(value)
+                        onArtificialDelayToggle(value)
+                        announceToggleState(
+                            accessibilityManager,
+                            context,
+                            R.string.dev_options_delay_label,
+                            value
+                        )
+                    }
+                )
+                if (!debugAvailable) {
+                    Text(
+                        text = stringResource(id = R.string.dev_options_debug_only_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(24.dp))
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -1892,6 +1999,57 @@ private fun DevOptionsContent(
         ) {
             Text(text = stringResource(id = R.string.dev_options_back))
         }
+    }
+}
+
+@Composable
+private fun DevOptionToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val stateText = stringResource(
+        id = if (checked) {
+            R.string.accessibility_state_on
+        } else {
+            R.string.accessibility_state_off
+        }
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = stateText,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onToggle,
+            enabled = enabled,
+            modifier = Modifier.semantics {
+                contentDescription = label
+                stateDescription = stateText
+            }
+        )
     }
 }
 
