@@ -29,6 +29,7 @@ import java.util.LinkedHashSet
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.execution.TaskExecutionGraph
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import javax.inject.Inject
 
@@ -989,11 +990,55 @@ fun configureReleaseSigning() {
         val debugSigningConfig = androidExtension.signingConfigs.getByName("debug")
         releaseSigningConfig.initWith(debugSigningConfig)
         releaseSigningConfig.apply {
+            storeFile = debugSigningConfig.storeFile
             // Ensure modern signature schemes stay enabled after initWith.
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
             enableV4Signing = true
+
+            val fallbackStoreFile = storeFile
+            val storePassword = storePassword
+            val keyAlias = keyAlias
+            val keyPassword = keyPassword
+
+            if (
+                fallbackStoreFile != null &&
+                storePassword != null &&
+                keyAlias != null &&
+                keyPassword != null &&
+                !fallbackStoreFile.exists()
+            ) {
+                fallbackStoreFile.parentFile?.mkdirs()
+
+                runCatching {
+                    targetProject.exec {
+                        commandLine(
+                            "keytool",
+                            "-genkeypair",
+                            "-keystore",
+                            fallbackStoreFile.absolutePath,
+                            "-storepass",
+                            storePassword,
+                            "-alias",
+                            keyAlias,
+                            "-keypass",
+                            keyPassword,
+                            "-dname",
+                            "CN=Android Debug,O=Android,C=US",
+                            "-validity",
+                            "14000",
+                            "-keyalg",
+                            "RSA"
+                        )
+                    }
+                }.onFailure { generationError ->
+                    targetProject.logger.warn(
+                        "Unable to generate fallback debug keystore at " +
+                            "${fallbackStoreFile.absolutePath}: ${generationError.message}"
+                    )
+                }
+            }
         }
         targetProject.logger.warn(
             "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
@@ -1005,6 +1050,31 @@ fun configureReleaseSigning() {
 if (needsReleaseSigning) {
     configureReleaseSigning()
 }
+
+gradle.taskGraph.whenReady(object : Action<TaskExecutionGraph> {
+    override fun execute(taskGraph: TaskExecutionGraph) {
+        if (releaseSigningConfigured) {
+            return
+        }
+
+        val requiresReleaseSigning = taskGraph.allTasks.any { task: Task ->
+            if (task.project != targetProject) {
+                return@any false
+            }
+
+            val taskName = task.name
+            if (!taskName.isPackagingOrPublishingTask()) {
+                return@any false
+            }
+
+            taskName.targetsReleaseLikeVariant() || taskName.isAggregatePackagingTask()
+        }
+
+        if (requiresReleaseSigning) {
+            configureReleaseSigning()
+        }
+    }
+})
 
 // Pdfium 1.9.2 includes the upstream fix for large page trees
 // (see docs/regressions/2024-09-pdfium-crash.md).
