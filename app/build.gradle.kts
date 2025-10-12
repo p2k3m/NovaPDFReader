@@ -970,6 +970,8 @@ val needsReleaseSigning = gradle.startParameter.taskNames.any { taskPath ->
 }
 
 var releaseSigningConfigured = false
+var releaseSigningFallbackWarning: String? = null
+var releaseSigningFallbackWarningLogged = false
 
 fun configureReleaseSigning() {
     if (releaseSigningConfigured) {
@@ -986,6 +988,8 @@ fun configureReleaseSigning() {
             keyAlias = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_ALIAS")
             keyPassword = targetProject.resolveSigningCredential("NOVAPDF_RELEASE_KEY_PASSWORD")
         }
+        releaseSigningFallbackWarning = null
+        releaseSigningFallbackWarningLogged = false
     } else {
         val debugSigningConfig = androidExtension.signingConfigs.getByName("debug")
         releaseSigningConfig.initWith(debugSigningConfig)
@@ -1040,20 +1044,27 @@ fun configureReleaseSigning() {
                 }
             }
         }
-        targetProject.logger.warn(
+        releaseSigningFallbackWarning =
             "Release keystore unavailable (${releaseKeystoreResult.exceptionOrNull()?.message}). " +
                 "Falling back to the debug signing configuration."
-        )
+        releaseSigningFallbackWarningLogged = false
     }
 }
 
-if (needsReleaseSigning) {
+androidComponents.finalizeDsl {
     configureReleaseSigning()
+
+    if (!releaseSigningFallbackWarningLogged && needsReleaseSigning) {
+        releaseSigningFallbackWarning?.let { warning ->
+            targetProject.logger.warn(warning)
+            releaseSigningFallbackWarningLogged = true
+        }
+    }
 }
 
 gradle.taskGraph.whenReady(object : Action<TaskExecutionGraph> {
     override fun execute(taskGraph: TaskExecutionGraph) {
-        if (releaseSigningConfigured) {
+        if (releaseSigningFallbackWarning == null || releaseSigningFallbackWarningLogged) {
             return
         }
 
@@ -1071,7 +1082,10 @@ gradle.taskGraph.whenReady(object : Action<TaskExecutionGraph> {
         }
 
         if (requiresReleaseSigning) {
-            configureReleaseSigning()
+            releaseSigningFallbackWarning?.let { warning ->
+                targetProject.logger.warn(warning)
+                releaseSigningFallbackWarningLogged = true
+            }
         }
     }
 })
