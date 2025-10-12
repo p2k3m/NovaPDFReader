@@ -1596,18 +1596,7 @@ jobs:
             fi
 
             readarray -t metadata_fields < <(
-              python3 -c '
-import json
-import sys
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    data = {}
-
-print(data.get("VersionId") or "")
-print((data.get("ETag") or "").strip("\""))
-' <<< "$metadata_json"
+              python3 -c $'import json, sys\ntry:\n    data = json.load(sys.stdin)\nexcept Exception:\n    data = {}\nprint(data.get("VersionId") or "")\nprint((data.get("ETag") or "").strip(\'"\'))' <<< "$metadata_json"
             )
 
             if [ "${metadata_fields[0]:-}" != "" ] && [ "${metadata_fields[0]}" != "null" ]; then
@@ -1702,32 +1691,7 @@ print((data.get("ETag") or "").strip("\""))
           fi
 
           readarray -t metadata_fields < <(
-            python3 -c '
-import base64
-import json
-import sys
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    data = {}
-
-size = data.get("ContentLength")
-checksum = data.get("ChecksumSHA256") or ""
-etag = (data.get("ETag") or "").strip("\"")
-version_id = data.get("VersionId") or ""
-
-if checksum:
-    try:
-        checksum = base64.b64decode(checksum).hex()
-    except Exception:
-        checksum = ""
-
-print("" if size is None else size)
-print(checksum)
-print(etag)
-print(version_id)
-' <<< "$metadata_json"
+            python3 -c $'import base64, json, sys\ntry:\n    data = json.load(sys.stdin)\nexcept Exception:\n    data = {}\nsize = data.get("ContentLength")\nchecksum = (data.get("ChecksumSHA256") or "")\netag = (data.get("ETag") or "").strip(\'"\')\nversion_id = data.get("VersionId") or ""\nif checksum:\n    try:\n        checksum = base64.b64decode(checksum).hex()\n    except Exception:\n        checksum = ""\nprint("" if size is None else size)\nprint(checksum)\nprint(etag)\nprint(version_id)' <<< "$metadata_json"
           )
 
           if [ -z "$expected_size" ] && [ -n "${metadata_fields[0]:-}" ]; then
