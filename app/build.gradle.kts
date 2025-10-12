@@ -1,6 +1,7 @@
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import org.gradle.api.Action
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.StartParameter
@@ -334,7 +335,12 @@ android {
             reset()
             if (enableAbiSplits) {
                 include(*supportedAbis.toTypedArray())
-                isUniversalApk = false
+                // Always generate a universal APK so automation that expects
+                // app/build/outputs/apk/<variant>/app-<variant>.apk continues
+                // to function even when ABI splits are enabled. The per-ABI
+                // artifacts are still produced, so release packaging behaviour
+                // remains unchanged.
+                isUniversalApk = true
             }
         }
     }
@@ -388,6 +394,38 @@ jacoco {
 val androidExtension = extensions.getByType<ApplicationExtension>()
 val releaseSigningConfig = androidExtension.signingConfigs.getByName("release")
 val androidComponents = extensions.getByType<ApplicationAndroidComponentsExtension>()
+
+val ensureStandardDebugApk = tasks.register("ensureStandardDebugApk") {
+    val debugApkDirProvider = project.layout.buildDirectory.dir("outputs/apk/debug")
+    outputs.file(debugApkDirProvider.map { it.file("app-debug.apk") })
+
+    doLast {
+        val outputDir = debugApkDirProvider.get().asFile
+        val target = File(outputDir, "app-debug.apk")
+        val candidates = listOf(
+            "app-universal-debug.apk",
+            "app-x86_64-debug.apk",
+            "app-arm64-v8a-debug.apk"
+        ).map { candidate -> File(outputDir, candidate) }
+
+        val source = candidates.firstOrNull(File::exists)
+            ?: throw GradleException(
+                "Unable to locate a packaged debug APK to copy into ${target.absolutePath}."
+            )
+
+        if (!target.exists() || source.lastModified() != target.lastModified()) {
+            source.copyTo(target, overwrite = true)
+        }
+    }
+}
+
+tasks.whenTaskAdded(object : Action<Task> {
+    override fun execute(task: Task) {
+        if (task.name == "packageDebug") {
+            task.finalizedBy(ensureStandardDebugApk)
+        }
+    }
+})
 val minimumSupportedApiLevel: Int? = runCatching { androidExtension.defaultConfig.minSdk }.getOrNull()
 
 val targetProject = project
