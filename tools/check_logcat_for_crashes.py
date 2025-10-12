@@ -19,8 +19,20 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             f"Detected Application Not Responding dialog for {package_name} during instrumentation tests",
         ),
         (
+            re.compile(rf"E ActivityManager: ANR in {escaped}"),
+            f"ActivityManager reported an ANR for {package_name}",
+        ),
+        (
+            re.compile(rf"Not responding: .*{escaped}", re.IGNORECASE),
+            f"System server logged a generic ANR message referencing {package_name}",
+        ),
+        (
             re.compile(rf"Application is not responding: Process {escaped}"),
             f"Detected system level 'Application is not responding' warning for {package_name}",
+        ),
+        (
+            re.compile(r"Input dispatching timed out", re.IGNORECASE),
+            "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
         ),
         (
             re.compile(rf"FATAL EXCEPTION: .*Process: {escaped}"),
