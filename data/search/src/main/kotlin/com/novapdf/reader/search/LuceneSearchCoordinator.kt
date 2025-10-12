@@ -29,6 +29,7 @@ import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -163,6 +164,7 @@ private const val INDEX_WEIGHT = 0.1f
 
 private const val OCR_BASE = EXTRACTION_WEIGHT
 private const val INDEX_BASE = EXTRACTION_WEIGHT + OCR_WEIGHT
+private const val INDEX_PREPARE_DEFER_TIMEOUT_MS = 2_000L
 
 class LuceneSearchCoordinator(
     private val context: Context,
@@ -185,6 +187,8 @@ class LuceneSearchCoordinator(
     private var indexSearcher: IndexSearcher? = null
     private var currentDocumentId: String? = null
     private var prepareJob: Job? = null
+    @Volatile
+    private var prepareStartSignal: CompletableDeferred<Unit>? = null
     private val textRecognizer: TextRecognizer? = runCatching {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }.onFailure { error ->
@@ -266,6 +270,7 @@ class LuceneSearchCoordinator(
 
     override fun prepare(session: PdfDocumentSession): Job? {
         prepareJob?.cancel()
+        prepareStartSignal?.cancel()
         val documentId = session.documentId
         if (session.pageCount > MAX_INDEXED_PAGE_COUNT) {
             NovaLog.i(
@@ -279,17 +284,28 @@ class LuceneSearchCoordinator(
             pageContents = emptyList()
             clearIndexingState(documentId)
             prepareJob = null
+            prepareStartSignal = null
             return null
         }
         emitIndexingState(documentId, progress = 0f, phase = SearchIndexingPhase.PREPARING)
+        val startSignal = CompletableDeferred<Unit>()
+        prepareStartSignal = startSignal
         prepareJob = scope.launch {
             try {
+                withTimeoutOrNull(INDEX_PREPARE_DEFER_TIMEOUT_MS) {
+                    startSignal.await()
+                }
+                coroutineContext.ensureActive()
                 rebuildIndex(session)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
                 NovaLog.w(TAG, "Failed to pre-build index", error)
             } finally {
+                if (prepareStartSignal === startSignal) {
+                    prepareStartSignal = null
+                }
+                startSignal.cancel()
                 clearIndexingState(documentId)
             }
         }
@@ -350,6 +366,8 @@ class LuceneSearchCoordinator(
     override fun dispose() {
         prepareJob?.cancel()
         prepareJob = null
+        prepareStartSignal?.cancel()
+        prepareStartSignal = null
         scope.cancel()
         runCatching { textRecognizer?.close() }
         indexShards.values.forEach { shard ->
@@ -367,6 +385,7 @@ class LuceneSearchCoordinator(
     }
 
     private suspend fun ensureIndexReady(session: PdfDocumentSession) {
+        prepareStartSignal?.complete(Unit)
         prepareJob?.let { job -> if (job.isActive) job.join() }
         if (currentDocumentId == session.documentId && indexSearcher != null) {
             return

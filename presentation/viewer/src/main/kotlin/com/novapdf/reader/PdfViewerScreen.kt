@@ -1123,7 +1123,12 @@ private fun SearchIndexingBanner(
         SearchIndexingPhase.APPLYING_OCR -> stringResource(id = R.string.search_indexing_phase_ocr)
         SearchIndexingPhase.WRITING_INDEX -> stringResource(id = R.string.search_indexing_phase_writing)
     }
+    val titleText = stringResource(id = R.string.search_indexing_title)
+    val cancelLabel = stringResource(id = R.string.search_indexing_cancel)
     val progressPercent = state.progress?.let { (it * 100).roundToInt().coerceIn(0, 100) }
+    val progressDescription = progressPercent?.let { percent ->
+        stringResource(id = R.string.loading_progress, percent)
+    }
     Surface(
         shape = MaterialTheme.shapes.large,
         tonalElevation = 6.dp,
@@ -1132,11 +1137,18 @@ private fun SearchIndexingBanner(
         modifier = modifier
             .fillMaxWidth()
             .widthIn(max = 400.dp)
-            .semantics { liveRegion = LiveRegionMode.Polite }
+            .semantics {
+                liveRegion = LiveRegionMode.Polite
+                paneTitle = titleText
+                stateDescription = progressDescription ?: phaseText
+            }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+        ) {
             Text(
-                text = stringResource(id = R.string.search_indexing_title),
+                text = titleText,
                 style = MaterialTheme.typography.titleMedium,
             )
             Spacer(modifier = Modifier.height(4.dp))
@@ -1151,10 +1163,10 @@ private fun SearchIndexingBanner(
                     progress = { progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
-                progressPercent?.let { percent ->
+                progressDescription?.let { description ->
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = stringResource(id = R.string.loading_progress, percent),
+                        text = description,
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
@@ -1166,8 +1178,11 @@ private fun SearchIndexingBanner(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
-                TextButton(onClick = onCancel) {
-                    Text(text = stringResource(id = R.string.action_cancel))
+                TextButton(
+                    onClick = onCancel,
+                    modifier = Modifier.semantics { contentDescription = cancelLabel }
+                ) {
+                    Text(text = cancelLabel)
                 }
             }
         }

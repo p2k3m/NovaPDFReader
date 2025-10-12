@@ -644,6 +644,7 @@ open class PdfViewerViewModel @Inject constructor(
 
     fun cancelIndexing() {
         indexingJob?.cancel()
+        indexingJob = null
     }
 
     private suspend fun loadDocument(uri: Uri, resetError: Boolean) {
@@ -711,7 +712,13 @@ open class PdfViewerViewModel @Inject constructor(
             )
         }
         indexResult.onSuccess { result ->
-            indexingJob = result.job
+            val job = result.job
+            indexingJob = job
+            job?.invokeOnCompletion {
+                if (indexingJob === job) {
+                    indexingJob = null
+                }
+            }
         }.onFailure { throwable ->
             if (throwable is CancellationException) throw throwable
             if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
