@@ -23,12 +23,24 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             f"ActivityManager reported an ANR for {package_name}",
         ),
         (
+            re.compile(rf"E ActivityTaskManager: ANR in {escaped}"),
+            f"ActivityTaskManager reported an ANR for {package_name}",
+        ),
+        (
             re.compile(rf"Not responding: .*{escaped}", re.IGNORECASE),
             f"System server logged a generic ANR message referencing {package_name}",
         ),
         (
             re.compile(rf"Application is not responding: Process {escaped}"),
             f"Detected system level 'Application is not responding' warning for {package_name}",
+        ),
+        (
+            re.compile(rf"Application Not Responding: .*{escaped}", re.IGNORECASE),
+            f"Explicit Application Not Responding banner detected for {package_name}",
+        ),
+        (
+            re.compile(rf"ANR.*Process:\s*{escaped}", re.IGNORECASE),
+            f"ANR report referenced process {package_name}",
         ),
         (
             re.compile(r"Input dispatching timed out", re.IGNORECASE),
