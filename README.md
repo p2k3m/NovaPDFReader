@@ -4,6 +4,14 @@ NovaPDF Reader is a Jetpack Compose Android application that experiments with "A
 
 ## Architecture overview
 
+NovaPDF Reader follows a modular, clean-architecture layout so presentation code can
+iterate quickly without destabilizing low-level rendering, storage, or networking
+components. Compose screens consume domain use cases, which in turn depend on
+repositories, Pdfium-backed engines, and infrastructure services. Each layer enforces a
+clear dependency direction (presentation → domain → data/engine → infra/core) so new
+features can live behind stable APIs while native and network integrations evolve
+independently.【F:presentation/viewer/src/main/kotlin/com/novapdf/reader/PdfViewerViewModel.kt†L608-L858】【F:domain/usecases/src/main/kotlin/com/novapdf/reader/domain/usecase/PdfViewerUseCases.kt†L47-L200】【F:data/repositories/src/main/kotlin/com/novapdf/reader/data/PdfDocumentRepository.kt†L155-L236】【F:infra/storage/src/main/kotlin/com/novapdf/reader/data/remote/DocumentSourceGateway.kt†L7-L35】
+
 ### High-level diagram
 
 ```mermaid
@@ -65,12 +73,18 @@ flowchart LR
 
 ### Threading model
 
+NovaPDF leans on Kotlin coroutines with an explicit dispatcher abstraction so background
+I/O, Pdfium work, and UI rendering remain isolated yet testable. Key guarantees include:
+
 - Coroutine dispatchers flow through the `CoroutineDispatchers` abstraction so production builds stick to `Dispatchers.IO`, `Dispatchers.Default`, and `Dispatchers.Main` while tests can inject deterministic schedulers.【F:domain/model/src/main/kotlin/com/novapdf/reader/coroutines/CoroutineDispatchers.kt†L7-L28】
 - `PdfDocumentRepository` serializes Pdfium work onto a dedicated dispatcher created with `limitedParallelism(1)` to prevent native crashes and coordinate bitmap memory pressure while exposing state via `StateFlow` to the UI.【F:data/repositories/src/main/kotlin/com/novapdf/reader/data/PdfDocumentRepository.kt†L155-L241】
 - The presentation layer executes prioritized rendering through `RenderWorkQueue`, which multiplexes visible, nearby, and thumbnail jobs with bounded parallelism and cancellation awareness on the supplied dispatcher.【F:presentation/viewer/src/main/kotlin/com/novapdf/reader/RenderWorkQueue.kt†L15-L197】
 - `DefaultAdaptiveFlowManager` runs frame monitoring, sensor sampling, and preload computations on the injected default dispatcher while posting UI callbacks on the main thread, ensuring adaptive flow heuristics never block Compose rendering.【F:engine/pdf/src/main/kotlin/com/novapdf/reader/DefaultAdaptiveFlowManager.kt†L39-L200】
 
 ### Error taxonomy
+
+Errors surface with structured metadata so the UI can gracefully degrade rendering and
+deliver actionable messaging:
 
 - Remote retrieval failures surface as `RemotePdfException` values that capture the reason (network issues, retries exhausted, corruption, circuit breakers, unsafe content, and oversize files) alongside optional diagnostics for UI messaging.【F:infra/storage/src/main/kotlin/com/novapdf/reader/data/remote/RemotePdfException.kt†L5-L41】
 - The repository distinguishes between open-time errors (unsupported URI, denied access, corrupted documents) via `PdfOpenException` and render-time faults (pages that are too large or malformed) via `PdfRenderException` so the domain layer can react precisely.【F:data/repositories/src/main/kotlin/com/novapdf/reader/data/PdfDocumentRepository.kt†L120-L140】
@@ -82,10 +96,10 @@ flowchart LR
 | Suite | Command | Primary coverage | Notes |
 | --- | --- | --- | --- |
 | JVM unit tests | `./gradlew testDebugUnitTest` | View models, repositories, and utility layers using Robolectric and standard unit runners. | Runs quickly on the host and honors the injected coroutine dispatchers for deterministic scheduling.【F:domain/model/src/main/kotlin/com/novapdf/reader/coroutines/CoroutineDispatchers.kt†L7-L28】 |
-| Adaptive Flow performance probes | `./gradlew adaptiveFlowPerformance`<br>`./gradlew frameMonitoringPerformance` | Exercises frame pacing heuristics and adaptive flow backpressure logic without launching the full test matrix. | Both tasks reuse the dedicated Robolectric suites for the adaptive flow manager and report regressions immediately.【F:README.md†L90-L100】 |
-| Connected instrumentation | `./gradlew connectedAndroidTest` | Full UI automation, remote download flows, and screenshot harness validation on emulators or devices. | Requires API 32+ system images and benefits from the emulator launch arguments below. Logs can be post-processed with `tools/check_logcat_for_crashes.py` to surface ANR or crash signatures.【F:README.md†L107-L152】【F:tools/check_logcat_for_crashes.py†L9-L78】 |
-| Macrobenchmark & baseline profile | `./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace` | Measures cold start, frame pacing, and render performance budgets while guarding the committed baseline profile. | Fails the build if thresholds regress; follow up with `:app:generateReleaseBaselineProfile` to refresh shipped profiles.【F:README.md†L185-L214】 |
-| Screenshot harness | `adb shell am instrument …` (see below) | Captures deterministic device-side PNGs with metadata for documentation and regressions. | Also callable through `tools/capture_screenshots.py` for host-side captures and log synchronization.【F:README.md†L162-L183】 |
+| Adaptive Flow performance probes | `./gradlew adaptiveFlowPerformance`<br>`./gradlew frameMonitoringPerformance` | Exercises frame pacing heuristics and adaptive flow backpressure logic without launching the full test matrix. | Both tasks reuse the dedicated Robolectric suites for the adaptive flow manager and report regressions immediately.【F:README.md†L104-L113】 |
+| Connected instrumentation | `./gradlew connectedAndroidTest` | Full UI automation, remote download flows, and screenshot harness validation on emulators or devices. | Requires API 32+ system images and benefits from the emulator launch arguments below. Logs can be post-processed with `tools/check_logcat_for_crashes.py` to surface ANR or crash signatures.【F:README.md†L121-L166】【F:tools/check_logcat_for_crashes.py†L9-L78】 |
+| Macrobenchmark & baseline profile | `./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace` | Measures cold start, frame pacing, and render performance budgets while guarding the committed baseline profile. | Fails the build if thresholds regress; follow up with `:app:generateReleaseBaselineProfile` to refresh shipped profiles.【F:README.md†L199-L238】 |
+| Screenshot harness | `adb shell am instrument …` (see below) | Captures deterministic device-side PNGs with metadata for documentation and regressions. | Also callable through `tools/capture_screenshots.py` for host-side captures and log synchronization.【F:README.md†L176-L197】 |
 
 ## Adaptive Flow performance tooling
 
