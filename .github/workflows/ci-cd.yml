@@ -18,7 +18,7 @@ jobs:
       firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
     strategy:
       fail-fast: true
-      max-parallel: 1
+      max-parallel: ${{ vars.NOVAPDF_EMULATOR_MAX_PARALLEL || 1 }}
       matrix:
         include:
           - api: 32
@@ -134,6 +134,9 @@ jobs:
       NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
       ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
       ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
+      NOVAPDF_EMULATOR_GPU_MODE: ${{ vars.NOVAPDF_EMULATOR_GPU_MODE || '' }}
+      NOVAPDF_EMULATOR_RAM_MB: ${{ vars.NOVAPDF_EMULATOR_RAM_MB || '' }}
+      NOVAPDF_EMULATOR_READY_TIMEOUT: ${{ vars.NOVAPDF_EMULATOR_READY_TIMEOUT || 900 }}
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -646,7 +649,7 @@ jobs:
     if: needs.build-test.result == 'success'
     strategy:
       fail-fast: true
-      max-parallel: 1
+      max-parallel: ${{ vars.NOVAPDF_EMULATOR_MAX_PARALLEL || 1 }}
       matrix:
         include:
           - api: 32
@@ -762,6 +765,9 @@ jobs:
       NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
       ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
       ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
+      NOVAPDF_EMULATOR_GPU_MODE: ${{ vars.NOVAPDF_EMULATOR_GPU_MODE || '' }}
+      NOVAPDF_EMULATOR_RAM_MB: ${{ vars.NOVAPDF_EMULATOR_RAM_MB || '' }}
+      NOVAPDF_EMULATOR_READY_TIMEOUT: ${{ vars.NOVAPDF_EMULATOR_READY_TIMEOUT || 900 }}
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -1186,13 +1192,23 @@ jobs:
             fi
           fi
 
-          emulator_gpu="${GPU_MODE:-swiftshader_indirect}"
+          emulator_gpu="${NOVAPDF_EMULATOR_GPU_MODE:-}"
+          if [ -n "$emulator_gpu" ]; then
+            echo "Using emulator GPU mode override: $emulator_gpu"
+          else
+            emulator_gpu="${GPU_MODE:-swiftshader_indirect}"
+          fi
           if [ -z "$emulator_gpu" ]; then
             emulator_gpu="swiftshader_indirect"
           fi
 
-          emulator_memory="${EMULATOR_RAM_MB:-${{ matrix.ram_mb }}}"
-          if [ -z "$emulator_memory" ]; then
+          emulator_memory="${NOVAPDF_EMULATOR_RAM_MB:-}"
+          if [[ "$emulator_memory" =~ ^[0-9]+$ ]]; then
+            echo "Using emulator RAM override: ${emulator_memory} MB"
+          else
+            emulator_memory="${EMULATOR_RAM_MB:-${{ matrix.ram_mb }}}"
+          fi
+          if ! [[ "$emulator_memory" =~ ^[0-9]+$ ]]; then
             emulator_memory="${{ matrix.ram_mb }}"
           fi
 
@@ -1206,11 +1222,16 @@ jobs:
             ensure_config_value "hw.ramSize" "$emulator_memory"
           fi
 
+          echo "Launching emulator with GPU mode '$emulator_gpu' and ${emulator_memory} MB of RAM"
+
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu "$emulator_gpu" -memory "$emulator_memory" -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
 
           watchdog_log="$RUNNER_TEMP/emulator-watchdog.log"
           echo "EMULATOR_WATCHDOG_LOG=$watchdog_log" >> "$GITHUB_ENV"
+
+          echo "EMULATOR_PID=$emulator_pid" >> "$GITHUB_ENV"
+          echo "EMULATOR_SERIAL=emulator-5554" >> "$GITHUB_ENV"
 
           if [ -x "${GITHUB_WORKSPACE}/tools/emulator_watchdog.sh" ]; then
             nohup "${GITHUB_WORKSPACE}/tools/emulator_watchdog.sh" "$emulator_pid" emulator-5554 900 600 60 >"$watchdog_log" 2>&1 &
@@ -1220,80 +1241,33 @@ jobs:
             echo "Watchdog script not found or not executable; skipping watchdog startup" >&2
           fi
 
-          device_timeout=0
-          device_deadline=$((15 * 60))
-          while true; do
-            if ! kill -0 "$emulator_pid" 2>/dev/null; then
-              echo "Emulator process exited before it became available to ADB" >&2
-              wait "$emulator_pid" || true
-              exit 1
-            fi
+          echo "Waiting for emulator PID ${emulator_pid} to reach readiness markers in a subsequent step"
+      - name: Wait for emulator readiness
+        run: |
+          set -euo pipefail
+          serial="${EMULATOR_SERIAL:-emulator-5554}"
+          timeout="${NOVAPDF_EMULATOR_READY_TIMEOUT:-900}"
 
-            if adb devices |
-              tail -n +2 |
-              tr -d '\r' |
-              grep -qE '\sdevice$'; then
-              break
-            fi
+          if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+            echo "Invalid readiness timeout '${timeout}', defaulting to 900 seconds" >&2
+            timeout=900
+          fi
 
-            sleep 5
-            device_timeout=$((device_timeout + 5))
-            if [ $device_timeout -ge $device_deadline ]; then
-              echo "Emulator failed to appear in adb devices output within $((device_deadline / 60)) minutes" >&2
-              exit 1
-            fi
-          done
-          boot_timeout=0
-          boot_deadline=$((15 * 60))
-          until adb shell getprop sys.boot_completed 2>/dev/null | grep -q "1"; do
-            sleep 5
-            boot_timeout=$((boot_timeout + 5))
-            if ! kill -0 "$emulator_pid" 2>/dev/null; then
-              echo "Emulator process exited before boot completed" >&2
-              wait "$emulator_pid" || true
-              exit 1
-            fi
-            if [ $boot_timeout -ge $boot_deadline ]; then
-              echo "Emulator failed to boot within $((boot_deadline / 60)) minutes" >&2
-              exit 1
-            fi
-          done
+          echo "Waiting up to ${timeout} seconds for emulator ${serial} readiness"
+          if ! tools/wait_for_emulator_readiness.sh --serial "$serial" --timeout "$timeout"; then
+            echo "::error::Emulator ${serial} did not reach readiness within ${timeout} seconds" >&2
+            exit 1
+          fi
+      - name: Configure emulator system settings
+        run: |
+          set -euo pipefail
+          serial="${EMULATOR_SERIAL:-emulator-5554}"
 
-          bootanim_timeout=0
-          bootanim_deadline=$((5 * 60))
-          until adb shell getprop init.svc.bootanim 2>/dev/null | tr -d '\r' | grep -q '^stopped$'; do
-            sleep 5
-            bootanim_timeout=$((bootanim_timeout + 5))
-            if ! kill -0 "$emulator_pid" 2>/dev/null; then
-              echo "Emulator process exited while waiting for boot animation to stop" >&2
-              wait "$emulator_pid" || true
-              exit 1
-            fi
-            if [ $bootanim_timeout -ge $bootanim_deadline ]; then
-              echo "Boot animation service did not stop within $((bootanim_deadline / 60)) minutes" >&2
-              break
-            fi
-          done
-
-          dev_boot_timeout=0
-          dev_boot_deadline=$((5 * 60))
-          until adb shell getprop dev.bootcomplete 2>/dev/null | tr -d '\r' | grep -q '^1$'; do
-            sleep 5
-            dev_boot_timeout=$((dev_boot_timeout + 5))
-            if ! kill -0 "$emulator_pid" 2>/dev/null; then
-              echo "Emulator process exited while waiting for dev.bootcomplete" >&2
-              wait "$emulator_pid" || true
-              exit 1
-            fi
-            if [ $dev_boot_timeout -ge $dev_boot_deadline ]; then
-              echo "dev.bootcomplete did not report completion within $((dev_boot_deadline / 60)) minutes" >&2
-              break
-            fi
-          done
-          adb shell settings put global window_animation_scale 0 || true
-          adb shell settings put global transition_animation_scale 0 || true
-          adb shell settings put global animator_duration_scale 0 || true
-          adb shell input keyevent 82 || true
+          adb -s "$serial" wait-for-device
+          adb -s "$serial" shell settings put global window_animation_scale 0 || true
+          adb -s "$serial" shell settings put global transition_animation_scale 0 || true
+          adb -s "$serial" shell settings put global animator_duration_scale 0 || true
+          adb -s "$serial" shell input keyevent 82 || true
       - name: Install app under test
         run: |
           set -euo pipefail
@@ -1757,6 +1731,57 @@ jobs:
               echo "thousand_checksum=${thousand_checksum}"
             fi
           } >> "$GITHUB_OUTPUT"
+
+          manifest_dir="${ARTIFACTS_DIR}/fixtures/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$manifest_dir"
+
+          export MANIFEST_PATH="${manifest_dir}/pdf-fixtures.json"
+          export STRESS_PATH="$stress_path"
+          export STRESS_VERSION="$stress_version"
+          export STRESS_ETAG="$stress_etag"
+          export STRESS_SIZE="$stress_size"
+          export STRESS_CHECKSUM="$stress_checksum"
+          export THOUSAND_PATH="$thousand_path"
+          export THOUSAND_VERSION="$thousand_version"
+          export THOUSAND_ETAG="$thousand_etag"
+          export THOUSAND_SIZE="$thousand_size"
+          export THOUSAND_CHECKSUM="$thousand_checksum"
+
+          python3 - <<'PY'
+import json
+import os
+import pathlib
+
+manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
+
+def _load_existing(path: pathlib.Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+data = _load_existing(manifest_path)
+
+data["stress"] = {
+    "path": os.environ.get("STRESS_PATH", ""),
+    "version": os.environ.get("STRESS_VERSION", ""),
+    "etag": os.environ.get("STRESS_ETAG", ""),
+    "size": os.environ.get("STRESS_SIZE", ""),
+    "sha256": os.environ.get("STRESS_CHECKSUM", ""),
+}
+
+data["thousand_page"] = {
+    "path": os.environ.get("THOUSAND_PATH", ""),
+    "version": os.environ.get("THOUSAND_VERSION", ""),
+    "etag": os.environ.get("THOUSAND_ETAG", ""),
+    "size": os.environ.get("THOUSAND_SIZE", ""),
+    "sha256": os.environ.get("THOUSAND_CHECKSUM", ""),
+}
+
+manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+PY
       - name: Download AI.pdf fixture from S3
         if: env.UNIT_TESTS_PASSED == 'true'
         id: download_ai_pdf
@@ -1874,6 +1899,43 @@ jobs:
           if [ -n "$ai_pdf_etag" ]; then
             echo "ai_pdf_etag=$ai_pdf_etag" >> "$GITHUB_OUTPUT"
           fi
+          manifest_dir="${ARTIFACTS_DIR}/fixtures/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$manifest_dir"
+
+          export MANIFEST_PATH="${manifest_dir}/pdf-fixtures.json"
+          export AI_PATH="$dest"
+          export AI_VERSION="$ai_pdf_version"
+          export AI_ETAG="$ai_pdf_etag"
+          export AI_SIZE="$expected_size"
+          export AI_SHA="$normalized_expected_sha"
+
+          python3 - <<'PY'
+import json
+import os
+import pathlib
+
+manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
+
+def _load_existing(path: pathlib.Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+data = _load_existing(manifest_path)
+
+data["ai_pdf"] = {
+    "path": os.environ.get("AI_PATH", ""),
+    "version": os.environ.get("AI_VERSION", ""),
+    "etag": os.environ.get("AI_ETAG", ""),
+    "size": os.environ.get("AI_SIZE", ""),
+    "sha256": os.environ.get("AI_SHA", ""),
+}
+
+manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+PY
       - name: Stage stress PDFs on emulator
         if: env.UNIT_TESTS_PASSED == 'true'
         env:
@@ -2704,8 +2766,27 @@ jobs:
       - name: Collect emulator logs
         if: always()
         run: |
-          mkdir -p "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
-          adb -s emulator-5554 logcat -d > "${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}/emulator.log" || true
+          set -euo pipefail
+          log_dir="${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$log_dir"
+
+          adb -s emulator-5554 logcat -d > "$log_dir/emulator.log" || true
+
+          if adb -s emulator-5554 get-state >/dev/null 2>&1; then
+            adb -s emulator-5554 shell dumpsys activity processes > "$log_dir/dumpsys-activity.txt" || true
+
+            timeout_cmd=(timeout 5m)
+            if ! command -v timeout >/dev/null 2>&1; then
+              timeout_cmd=()
+            fi
+
+            if "${timeout_cmd[@]}" adb -s emulator-5554 bugreport "$log_dir/emulator-bugreport.zip"; then
+              echo "Captured emulator bugreport at $log_dir/emulator-bugreport.zip" >&2
+            else
+              echo "::warning::Failed to capture emulator bugreport" >&2
+              rm -f "$log_dir/emulator-bugreport.zip"
+            fi
+          fi
       - name: Stage device diagnostics
         if: always()
         run: |
