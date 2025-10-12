@@ -1,3 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@font/roboto_flex_variable" />
+    tools:keep="@font/roboto_flex_variable">
+    <!--
+        Roboto Flex is loaded via ResourcesCompat.getFont at runtime. Resource shrinking is
+        enabled for release and benchmark variants, so mark the font for retention to ensure the
+        reflective lookup keeps working.
+    -->
+</resources>
