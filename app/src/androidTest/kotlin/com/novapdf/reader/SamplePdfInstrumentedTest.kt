@@ -6,6 +6,7 @@ import com.novapdf.reader.logging.NovaLog
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.novapdf.reader.CacheFileNames
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import com.novapdf.reader.data.PdfDocumentRepository
 import java.io.File
 import java.io.FileOutputStream
@@ -38,7 +39,10 @@ class SamplePdfInstrumentedTest {
     @Test
     fun openSampleDocumentAndCaptureScreenshot() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val repository = PdfDocumentRepository(context)
+        val repository = PdfDocumentRepository(
+            context,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         try {
             val sampleUri = sampleDocument.installIntoCache(context)
             val session = repository.open(sampleUri)

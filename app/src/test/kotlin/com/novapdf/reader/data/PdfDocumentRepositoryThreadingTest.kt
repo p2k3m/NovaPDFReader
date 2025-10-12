@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Handler
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import com.novapdf.reader.model.PdfRenderProgress
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -27,7 +28,11 @@ class PdfDocumentRepositoryThreadingTest {
     @Test
     fun renderProgressUpdatesRequireWorkerThread() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         val latch = CountDownLatch(1)
         var captured: Throwable? = null
         Handler(Looper.getMainLooper()).post {
@@ -47,7 +52,11 @@ class PdfDocumentRepositoryThreadingTest {
     @Test
     fun renderProgressUpdatesPropagateOffMainThread() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(context, dispatcher)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         val backgroundLatch = CountDownLatch(1)
         Thread {
             repository.emitRenderProgressForTesting(PdfRenderProgress.Rendering(3, 0.25f))

@@ -2,73 +2,53 @@ package com.novapdf.reader.cache
 
 import android.content.Context
 import com.novapdf.reader.logging.NovaLog
-import androidx.annotation.VisibleForTesting
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-object PdfCacheRoot {
-    private const val TAG = "PdfCacheRoot"
+/**
+ * Provides strongly-typed accessors for the on-device cache hierarchy used by the reader.
+ * Consumers should request this interface from DI rather than touching directory structure
+ * constants directly so unit tests can substitute fake implementations when needed.
+ */
+interface CacheDirectories {
+    fun root(): File
+    fun documents(): File
+    fun thumbnails(): File
+    fun tiles(): File
+    fun indexes(): File
+    fun ensureSubdirectories()
+    fun purge(nowMs: Long = System.currentTimeMillis())
+}
 
-    const val ROOT_DIRECTORY = "pdf-cache"
-    const val DOCUMENTS_DIRECTORY = "docs"
-    const val THUMBNAILS_DIRECTORY = "thumbs"
-    const val TILES_DIRECTORY = "tiles"
-    const val INDEXES_DIRECTORY = "indexes"
+class DefaultCacheDirectories(
+    context: Context,
+) : CacheDirectories {
 
-    private val SUBDIRECTORIES = listOf(
-        DOCUMENTS_DIRECTORY,
-        THUMBNAILS_DIRECTORY,
-        TILES_DIRECTORY,
-        INDEXES_DIRECTORY,
-    )
+    private val appContext = context.applicationContext
 
-    private val MAX_DIRECTORY_BYTES = mapOf(
-        DOCUMENTS_DIRECTORY to 256L * 1024L * 1024L,
-        THUMBNAILS_DIRECTORY to 96L * 1024L * 1024L,
-        TILES_DIRECTORY to 192L * 1024L * 1024L,
-        INDEXES_DIRECTORY to 128L * 1024L * 1024L,
-    )
+    override fun root(): File = File(appContext.cacheDir, ROOT_DIRECTORY).also(::ensureDirectory)
 
-    private val MAX_DIRECTORY_AGE_MS = mapOf(
-        DOCUMENTS_DIRECTORY to TimeUnit.DAYS.toMillis(30),
-        THUMBNAILS_DIRECTORY to TimeUnit.DAYS.toMillis(14),
-        TILES_DIRECTORY to TimeUnit.DAYS.toMillis(14),
-        INDEXES_DIRECTORY to TimeUnit.DAYS.toMillis(45),
-    )
+    override fun documents(): File = ensureSubDirectory(root(), DOCUMENTS_DIRECTORY)
 
-    fun root(context: Context): File = File(context.cacheDir, ROOT_DIRECTORY).also(::ensureDirectory)
+    override fun thumbnails(): File = ensureSubDirectory(root(), THUMBNAILS_DIRECTORY)
 
-    fun documents(context: Context): File = ensureSubDirectory(root(context), DOCUMENTS_DIRECTORY)
+    override fun tiles(): File = ensureSubDirectory(root(), TILES_DIRECTORY)
 
-    fun thumbnails(context: Context): File = ensureSubDirectory(root(context), THUMBNAILS_DIRECTORY)
+    override fun indexes(): File = ensureSubDirectory(root(), INDEXES_DIRECTORY)
 
-    fun tiles(context: Context): File = ensureSubDirectory(root(context), TILES_DIRECTORY)
-
-    fun indexes(context: Context): File = ensureSubDirectory(root(context), INDEXES_DIRECTORY)
-
-    fun ensureSubdirectories(context: Context) {
-        val rootDir = root(context)
+    override fun ensureSubdirectories() {
+        val rootDir = root()
         SUBDIRECTORIES.forEach { ensureSubDirectory(rootDir, it) }
     }
 
-    fun purge(context: Context, nowMs: Long = System.currentTimeMillis()) {
-        val rootDir = root(context)
+    override fun purge(nowMs: Long) {
+        val rootDir = root()
         SUBDIRECTORIES.forEach { name ->
             val directory = File(rootDir, name)
             val budget = MAX_DIRECTORY_BYTES[name] ?: 0L
             val maxAge = MAX_DIRECTORY_AGE_MS[name] ?: 0L
-            purgeDirectory(directory, budget, maxAge, nowMs)
+            CachePurger.purgeDirectory(directory, budget, maxAge, nowMs, TAG)
         }
-    }
-
-    @VisibleForTesting
-    internal fun purgeDirectory(
-        directory: File,
-        maxBytes: Long,
-        maxAgeMs: Long,
-        nowMs: Long,
-    ) {
-        CachePurger.purgeDirectory(directory, maxBytes, maxAgeMs, nowMs, TAG)
     }
 
     private fun ensureSubDirectory(root: File, name: String): File {
@@ -88,9 +68,40 @@ object PdfCacheRoot {
             NovaLog.w(TAG, "Unable to create cache directory at ${directory.absolutePath}")
         }
     }
+
+    private companion object {
+        private const val TAG = "CacheDirectories"
+
+        private const val ROOT_DIRECTORY = "pdf-cache"
+        private const val DOCUMENTS_DIRECTORY = "docs"
+        private const val THUMBNAILS_DIRECTORY = "thumbs"
+        private const val TILES_DIRECTORY = "tiles"
+        private const val INDEXES_DIRECTORY = "indexes"
+
+        private val SUBDIRECTORIES = listOf(
+            DOCUMENTS_DIRECTORY,
+            THUMBNAILS_DIRECTORY,
+            TILES_DIRECTORY,
+            INDEXES_DIRECTORY,
+        )
+
+        private val MAX_DIRECTORY_BYTES = mapOf(
+            DOCUMENTS_DIRECTORY to 256L * 1024L * 1024L,
+            THUMBNAILS_DIRECTORY to 96L * 1024L * 1024L,
+            TILES_DIRECTORY to 192L * 1024L * 1024L,
+            INDEXES_DIRECTORY to 128L * 1024L * 1024L,
+        )
+
+        private val MAX_DIRECTORY_AGE_MS = mapOf(
+            DOCUMENTS_DIRECTORY to TimeUnit.DAYS.toMillis(30),
+            THUMBNAILS_DIRECTORY to TimeUnit.DAYS.toMillis(14),
+            TILES_DIRECTORY to TimeUnit.DAYS.toMillis(14),
+            INDEXES_DIRECTORY to TimeUnit.DAYS.toMillis(45),
+        )
+    }
 }
 
-private object CachePurger {
+internal object CachePurger {
 
     fun purgeDirectory(
         directory: File,
@@ -159,8 +170,10 @@ private object CachePurger {
                     NovaLog.w(tag, "Unable to list contents of ${dir.absolutePath}")
                     return@forEach
                 }
-                if (children.isEmpty() && !dir.delete()) {
-                    NovaLog.w(tag, "Unable to delete empty cache directory at ${dir.absolutePath}")
+                if (children.isEmpty()) {
+                    if (!dir.delete()) {
+                        NovaLog.w(tag, "Unable to delete empty cache directory at ${dir.absolutePath}")
+                    }
                 }
             }
     }

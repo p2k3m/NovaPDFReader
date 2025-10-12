@@ -3,6 +3,7 @@ package com.novapdf.reader.data
 import android.app.Application
 import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import com.novapdf.reader.logging.CrashReporter
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -26,7 +27,12 @@ class BitmapPoolBehaviorTest {
     fun reusesBitmapForSmallerDimensions() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val crashReporter = RecordingCrashReporter()
-        val repository = PdfDocumentRepository(context, dispatcher, crashReporter)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            crashReporter,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         try {
             val obtainBitmap = PdfDocumentRepository::class.java.getDeclaredMethod(
                 "obtainBitmap",
@@ -57,7 +63,12 @@ class BitmapPoolBehaviorTest {
     fun reportsBitmapPoolMetrics() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val crashReporter = RecordingCrashReporter()
-        val repository = PdfDocumentRepository(context, dispatcher, crashReporter)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            crashReporter,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         try {
             val obtainBitmap = PdfDocumentRepository::class.java.getDeclaredMethod(
                 "obtainBitmap",

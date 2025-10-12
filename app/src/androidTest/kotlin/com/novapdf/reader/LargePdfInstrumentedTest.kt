@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.novapdf.reader.CacheFileNames
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import com.novapdf.reader.data.PdfDocumentRepository
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -37,7 +38,10 @@ class LargePdfInstrumentedTest {
     @Test
     fun openLargeAndUnusualDocumentWithoutAnrOrCrash() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val repository = PdfDocumentRepository(context)
+        val repository = PdfDocumentRepository(
+            context,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
         try {
             val stressUri = stressDocumentFactory.installStressDocument(context)
             val session = withTimeout(60_000) { repository.open(stressUri) }

@@ -4,6 +4,7 @@ import android.content.Context
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.integration.aws.S3StorageClient
+import com.novapdf.reader.cache.CacheDirectories
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -31,5 +32,6 @@ object S3Module {
     fun providePdfDownloadManager(
         @ApplicationContext context: Context,
         storageClient: StorageClient,
-    ): PdfDownloadManager = PdfDownloadManager(context, storageClient)
+        cacheDirectories: CacheDirectories,
+    ): PdfDownloadManager = PdfDownloadManager(context, storageClient, cacheDirectories)
 }

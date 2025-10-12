@@ -5,6 +5,7 @@ import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.LuceneSearchCoordinator
+import com.novapdf.reader.cache.CacheDirectories
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,5 +23,11 @@ object SearchModule {
         @ApplicationContext context: Context,
         repository: PdfDocumentRepository,
         dispatchers: CoroutineDispatchers,
-    ): DocumentSearchCoordinator = LuceneSearchCoordinator(context, repository, dispatchers)
+        cacheDirectories: CacheDirectories,
+    ): DocumentSearchCoordinator = LuceneSearchCoordinator(
+        context,
+        repository,
+        dispatchers,
+        cacheDirectories,
+    )
 }
