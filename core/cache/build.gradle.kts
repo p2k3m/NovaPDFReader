@@ -4,6 +4,8 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 plugins {
     id("com.android.library")
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt.android)
 }
 
 val versionCatalog = extensions.getByType(VersionCatalogsExtension::class.java).named("libs")
@@ -29,6 +31,9 @@ android {
 dependencies {
     implementation(libs.androidx.annotation)
     implementation(project(":infra:logging"))
+    implementation(libs.hilt.android)
+
+    ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit4)
 }

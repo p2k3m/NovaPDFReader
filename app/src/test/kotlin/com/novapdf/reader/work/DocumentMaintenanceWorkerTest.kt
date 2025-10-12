@@ -13,6 +13,7 @@ import com.novapdf.reader.coroutines.TestCoroutineDispatchers
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.PointSnapshot
 import com.novapdf.reader.engine.AdaptiveFlowManager
+import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -90,6 +91,7 @@ class DocumentMaintenanceWorkerTest {
                     bookmarkManager,
                     adaptiveFlowManager,
                     dispatchers,
+                    DefaultCacheDirectories(appContext),
                 )
             }
         }

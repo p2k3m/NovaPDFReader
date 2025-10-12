@@ -5,7 +5,7 @@ import android.util.Base64
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.hilt.work.HiltWorker
-import com.novapdf.reader.cache.PdfCacheRoot
+import com.novapdf.reader.cache.CacheDirectories
 import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.engine.AdaptiveFlowManager
@@ -25,6 +25,7 @@ class DocumentMaintenanceWorker @AssistedInject constructor(
     private val bookmarkManager: BookmarkManager,
     private val adaptiveFlowManager: AdaptiveFlowManager,
     private val dispatchers: CoroutineDispatchers,
+    private val cacheDirectories: CacheDirectories,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val json = Json { prettyPrint = true }
@@ -35,8 +36,8 @@ class DocumentMaintenanceWorker @AssistedInject constructor(
         }
 
         withContext(dispatchers.io) {
-            PdfCacheRoot.ensureSubdirectories(applicationContext)
-            PdfCacheRoot.purge(applicationContext)
+            cacheDirectories.ensureSubdirectories()
+            cacheDirectories.purge()
         }
 
         val explicitTargets = inputData.getStringArray(KEY_DOCUMENT_IDS)

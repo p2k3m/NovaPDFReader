@@ -14,7 +14,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import com.novapdf.reader.cache.PdfCacheRoot
+import com.novapdf.reader.cache.CacheDirectories
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.PdfDocumentRepository
 import com.novapdf.reader.data.PdfDocumentSession
@@ -168,6 +168,7 @@ class LuceneSearchCoordinator(
     private val context: Context,
     private val pdfRepository: PdfDocumentRepository,
     private val dispatchers: CoroutineDispatchers,
+    private val cacheDirectories: CacheDirectories,
     scopeProvider: (CoroutineDispatcher) -> CoroutineScope = { dispatcher ->
         CoroutineScope(SupervisorJob() + dispatcher)
     }
@@ -178,7 +179,7 @@ class LuceneSearchCoordinator(
 
     private val scope = scopeProvider(indexDispatcher)
     private val appContext = context.applicationContext
-    private val indexRoot = PdfCacheRoot.indexes(appContext)
+    private val indexRoot = cacheDirectories.indexes()
     private val analyzer = StandardAnalyzer()
     private val shardLocks = ConcurrentHashMap<String, Mutex>()
     private val indexShards = ConcurrentHashMap<String, DocumentIndexShard>()
