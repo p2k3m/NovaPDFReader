@@ -178,7 +178,6 @@ class LuceneSearchCoordinator(
     private val indexDispatcher: CoroutineDispatcher = indexDispatcherHandle.dispatcher
 
     private val scope = scopeProvider(indexDispatcher)
-    private val appContext = context.applicationContext
     private val indexRoot = cacheDirectories.indexes()
     private val analyzer = StandardAnalyzer()
     private val shardLocks = ConcurrentHashMap<String, Mutex>()
