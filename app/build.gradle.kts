@@ -426,6 +426,13 @@ tasks.whenTaskAdded(object : Action<Task> {
         }
     }
 })
+
+tasks.matching { task ->
+    task.name.startsWith("connected", ignoreCase = true) &&
+        task.name.endsWith("AndroidTest")
+}.configureEach {
+    dependsOn(ensureStandardDebugApk)
+}
 val minimumSupportedApiLevel: Int? = runCatching { androidExtension.defaultConfig.minSdk }.getOrNull()
 
 val targetProject = project
