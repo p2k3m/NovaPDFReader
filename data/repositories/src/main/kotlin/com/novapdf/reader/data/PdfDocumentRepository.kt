@@ -105,7 +105,6 @@ private const val TRACE_SECTION_PREFIX = "PdfRepo#"
 private const val MAX_TRACE_SECTION_LENGTH = 127
 private const val PERSISTENT_REPAIR_PREFIX = "cached-"
 private val HEX_DIGITS = "0123456789abcdef".toCharArray()
-private val THREAD_CLASS_SIGNATURE = "L${Thread::class.java.name.replace('.', '/')};"
 
 class PdfOpenException(
     val reason: Reason,
