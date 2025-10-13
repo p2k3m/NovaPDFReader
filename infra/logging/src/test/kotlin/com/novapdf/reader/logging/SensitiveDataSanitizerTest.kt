@@ -36,6 +36,18 @@ class SensitiveDataSanitizerTest {
     }
 
     @Test
+    fun `redacts credential assignments inside structured payloads`() {
+        val sanitized = SensitiveDataSanitizer.sanitize("{\"sessionToken\":\"abc123\",\"metadata\":\"keep\"}")
+        assertEquals("{\"sessionToken\":\"<redacted>\",\"metadata\":\"keep\"}", sanitized)
+    }
+
+    @Test
+    fun `redacts credential assignments wrapped in single quotes`() {
+        val sanitized = SensitiveDataSanitizer.sanitize("api_key='secret-value-123'")
+        assertEquals("api_key='<redacted>'", sanitized)
+    }
+
+    @Test
     fun `formatMessage redacts embedded paths`() {
         val formatted = NovaLog.formatMessage(
             message = "Failed to persist /var/lib/app/cache.bin",
