@@ -2750,7 +2750,7 @@ jobs:
           adb shell am instrument -w -r \
             -e runScreenshotHarness true \
             -e class "$HARNESS_CLASS" \
-            ${PACKAGE_NAME}.test/androidx.test.runner.AndroidJUnitRunner \
+            ${PACKAGE_NAME}.test/dagger.hilt.android.testing.HiltTestRunner \
             >"$HARNESS_LOG" 2>&1 &
           harness_pid=$!
 

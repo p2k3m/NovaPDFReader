@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--instrumentation",
-        default="com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner",
+        default="com.novapdf.reader.test/dagger.hilt.android.testing.HiltTestRunner",
         help="Fully qualified instrumentation component to execute",
     )
     parser.add_argument(
