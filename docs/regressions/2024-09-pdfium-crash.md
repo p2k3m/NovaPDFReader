@@ -10,7 +10,7 @@
   adb shell am instrument -w -r \
       -e runScreenshotHarness true \
       -e class com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots \
-      com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner
+      com.novapdf.reader.test/dagger.hilt.android.testing.HiltTestRunner
   ```
   Inspect `adb logcat` for the fatal signal that terminates the app process before the viewer reaches its ready flag.
 

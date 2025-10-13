@@ -196,7 +196,7 @@ adb shell am instrument -w -r \
     -e runScreenshotHarness true \
     -e captureProgrammaticScreenshots true \
     -e class com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots \
-    com.novapdf.reader.test/androidx.test.runner.AndroidJUnitRunner
+    com.novapdf.reader.test/dagger.hilt.android.testing.HiltTestRunner
 ```
 
 When the `captureProgrammaticScreenshots` argument is `true`, the harness saves a PNG in the
