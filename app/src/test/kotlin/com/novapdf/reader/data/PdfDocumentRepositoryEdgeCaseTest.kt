@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -125,6 +126,26 @@ class PdfDocumentRepositoryEdgeCaseTest {
 
         assertNull(cached)
         assertTrue(bitmap.isRecycled)
+
+        repository.dispose()
+    }
+
+    @Test
+    @Config(sdk = [Build.VERSION_CODES.S])
+    fun disablesCaffeineBitmapCacheWhenThreadLocalProbeMissing() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+            isAccessible = true
+        }
+        val bitmapCache = bitmapCacheField.get(repository)
+
+        assertEquals("LruBitmapCache", bitmapCache.javaClass.simpleName)
 
         repository.dispose()
     }
