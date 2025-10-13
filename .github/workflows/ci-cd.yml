@@ -1563,6 +1563,40 @@ jobs:
             printf '%s' "$fallback"
           }
 
+          adb_install_with_fallback() {
+            local apk_path="$1"
+            shift || true
+
+            local allow_test_apk=false
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                --allow-test)
+                  allow_test_apk=true
+                  ;;
+              esac
+              shift || true
+            done
+
+            local install_args=(-r)
+            if [ "$allow_test_apk" = true ]; then
+              install_args+=(-t)
+            fi
+
+            if adb install "${install_args[@]}" "$apk_path"; then
+              return 0
+            fi
+
+            local exit_code=$?
+            echo "Streaming adb install failed with exit code $exit_code; retrying with --no-streaming" >&2
+
+            if adb install --no-streaming "${install_args[@]}" "$apk_path"; then
+              return 0
+            fi
+
+            local fallback_exit_code=$?
+            return $fallback_exit_code
+          }
+
           apk_path="$(resolve_apk_path "app/build/outputs/apk/debug" "app/build/outputs/apk/debug/app-debug.apk")"
           printf 'Resolved debug APK path to %s\n' "$apk_path"
 
@@ -1624,7 +1658,7 @@ jobs:
           install_attempts_max=3
 
           while true; do
-            if adb install --no-streaming -r "$apk_path"; then
+            if adb_install_with_fallback "$apk_path"; then
               break
             fi
 
@@ -2393,6 +2427,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          adb_install_with_fallback_screenshots() {
+            local apk_path="$1"
+
+            if adb install -r "$apk_path"; then
+              return 0
+            fi
+
+            local exit_code=$?
+            echo "Streaming adb install failed with exit code $exit_code; retrying with --no-streaming" >&2
+
+            if adb install --no-streaming -r "$apk_path"; then
+              return 0
+            fi
+
+            local fallback_exit_code=$?
+            return $fallback_exit_code
+          }
+
           resolve_apk_path() {
             local variant_dir="$1"
             local fallback="$2"
@@ -2478,7 +2530,7 @@ jobs:
           install_attempt=1
           install_attempts_max=3
           while true; do
-            if adb install --no-streaming -r "$apk_path"; then
+            if adb_install_with_fallback_screenshots "$apk_path"; then
               break
             fi
 
@@ -2547,6 +2599,24 @@ jobs:
             printf '%s' "$fallback"
           }
 
+          adb_install_with_fallback_android_test() {
+            local apk_path="$1"
+
+            if adb install -r -t "$apk_path"; then
+              return 0
+            fi
+
+            local exit_code=$?
+            echo "Streaming adb install failed with exit code $exit_code; retrying with --no-streaming" >&2
+
+            if adb install --no-streaming -r -t "$apk_path"; then
+              return 0
+            fi
+
+            local fallback_exit_code=$?
+            return $fallback_exit_code
+          }
+
           android_test_apk="$(resolve_apk_path "app/build/outputs/apk/androidTest/debug" "app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")"
           printf 'Resolved androidTest APK path to %s\n' "$android_test_apk"
 
@@ -2566,7 +2636,7 @@ jobs:
           install_attempt=1
           install_attempts_max=3
           while true; do
-            if adb install --no-streaming -r -t "$android_test_apk"; then
+            if adb_install_with_fallback_android_test "$android_test_apk"; then
               break
             fi
 
