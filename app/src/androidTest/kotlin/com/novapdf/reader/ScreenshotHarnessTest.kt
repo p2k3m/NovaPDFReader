@@ -530,11 +530,32 @@ class ScreenshotHarnessTest {
     }
 
     private fun cacheCandidatesForContext(context: Context): List<File> {
-        return listOfNotNull(
-            context.cacheDir,
-            context.codeCacheDir,
-            context.credentialProtectedStorageContext().cacheDir
-        )
+        val candidates = mutableListOf<File>()
+
+        fun tryAdd(label: String, provider: () -> File?) {
+            val directory = try {
+                provider()
+            } catch (error: Exception) {
+                logHarnessWarn(
+                    "Skipping $label for screenshot harness cache directory; unavailable on this device",
+                    error
+                )
+                null
+            }
+            if (directory != null) {
+                candidates += directory
+            }
+        }
+
+        tryAdd("cacheDir") { context.cacheDir }
+        tryAdd("codeCacheDir") { context.codeCacheDir }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            tryAdd("credentialProtectedStorage") {
+                context.credentialProtectedStorageContext().cacheDir
+            }
+        }
+
+        return candidates
     }
 
     private fun prepareCacheDirectory(directory: File?): Boolean {
