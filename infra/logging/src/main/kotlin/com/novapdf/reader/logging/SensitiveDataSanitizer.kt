@@ -27,11 +27,11 @@ internal object SensitiveDataSanitizer {
     private val basicAuthRegex = Regex("(?<=//)[^/\\s:@]+:[^/\\s@]+@")
     private val bearerRegex = Regex("\\b(bearer)\\s+([A-Za-z0-9\\-._~+/]+=*)", IGNORE_CASE)
     private val queryCredentialRegex = Regex(
-        "(?<=(?:${credentialKeywords.joinToString("|")})=)[^&\\s]+",
+        "(?<=[?&](?:${credentialKeywords.joinToString("|")})=)[^&\\s]+",
         IGNORE_CASE,
     )
     private val assignmentCredentialRegex = Regex(
-        "((?:${credentialKeywords.joinToString("|")})\\s*[=:]\\s*)([^\\s,;&]+)",
+        "((?:${credentialKeywords.joinToString("|")})\\s*(?:['\"]\\s*)?[=:]\\s*)(['\"]?)([^'\"\\s,;)&}\\]]+)(['\"]?)",
         IGNORE_CASE,
     )
     private val awsAccessKeyRegex = Regex("AKIA[0-9A-Z]{16}")
@@ -46,7 +46,19 @@ internal object SensitiveDataSanitizer {
         }
         sanitized = queryCredentialRegex.replace(sanitized) { "<redacted>" }
         sanitized = assignmentCredentialRegex.replace(sanitized) { match ->
-            "${match.groupValues[1]}<redacted>"
+            val prefix = match.groupValues[1]
+            val openingQuote = match.groupValues[2]
+            val closingQuote = match.groupValues[4]
+            val sanitizedValue = when {
+                openingQuote.isNotEmpty() && closingQuote == openingQuote ->
+                    "$openingQuote<redacted>$closingQuote"
+                openingQuote.isNotEmpty() && closingQuote.isEmpty() ->
+                    "$openingQuote<redacted>"
+                openingQuote.isEmpty() && closingQuote.isNotEmpty() ->
+                    "<redacted>$closingQuote"
+                else -> "<redacted>"
+            }
+            prefix + sanitizedValue
         }
         sanitized = awsAccessKeyRegex.replace(sanitized, "<redacted-aws-key>")
         return sanitized
