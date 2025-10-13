@@ -303,32 +303,75 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v4
-      - name: Warn when baseline profile snapshot was not refreshed
+      - name: Check baseline profile freshness
+        id: baseline_profile_freshness
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
+          baseline_path="app/src/main/baseline-prof.txt"
+          baseline_touched=false
+          needs_profile=false
+          reminder=false
+          skipped=false
+          message=""
+
+          write_outputs() {
+            {
+              printf 'baseline_touched=%s\n' "$baseline_touched"
+              printf 'needs_profile=%s\n' "$needs_profile"
+              printf 'reminder=%s\n' "$reminder"
+              printf 'skipped=%s\n' "$skipped"
+            } >>"$GITHUB_OUTPUT"
+
+            if [ -n "$message" ]; then
+              {
+                printf 'message<<__BASELINE_MESSAGE__\n'
+                printf '%s\n' "$message"
+                printf '__BASELINE_MESSAGE__\n'
+              } >>"$GITHUB_OUTPUT"
+            fi
+          }
+
+          append_summary() {
+            if [ -z "${GITHUB_STEP_SUMMARY:-}" ] || [ -z "$message" ]; then
+              return
+            fi
+
+            {
+              printf '## Baseline profile reminder\n'
+              printf '%s\n' "$message"
+            } >>"$GITHUB_STEP_SUMMARY"
+          }
+
           if [ -z "${BASE_REF:-}" ]; then
-            echo "Skipping baseline profile reminder because the pull request base ref is unavailable."
+            skipped=true
+            message="Skipping baseline profile reminder because the pull request base ref is unavailable."
+            append_summary
+            write_outputs
             exit 0
           fi
 
           if ! git fetch --no-tags --depth=50 origin "$BASE_REF"; then
-            echo "::warning::Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
+            skipped=true
+            message="Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
+            echo "::warning::${message}"
+            append_summary
+            write_outputs
             exit 0
           fi
 
           mapfile -t changed < <(git diff --name-only "origin/${BASE_REF}"...HEAD)
 
           if [ "${#changed[@]}" -eq 0 ]; then
+            skipped=true
+            message="Baseline profile reminder skipped because no files changed."
+            append_summary
+            write_outputs
             exit 0
           fi
-
-          baseline_path="app/src/main/baseline-prof.txt"
-          baseline_touched=false
-          needs_profile=false
 
           for path in "${changed[@]}"; do
             if [ "$path" = "$baseline_path" ]; then
@@ -361,10 +404,70 @@ jobs:
           done
 
           if [ "$needs_profile" = true ] && [ "$baseline_touched" = false ]; then
-            echo "::warning::Code or dependency changes detected without updating ${baseline_path}. Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile."
+            reminder=true
+            message="Code or dependency changes detected without updating ${baseline_path}. Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile."
+            echo "::warning::${message}"
           else
-            echo "Baseline profile reminder check passed (baseline_touched=${baseline_touched}, needs_profile=${needs_profile})."
+            message="Baseline profile reminder check passed (baseline_touched=${baseline_touched}, needs_profile=${needs_profile})."
+            echo "$message"
           fi
+
+          append_summary
+          write_outputs
+      - name: Comment on baseline profile reminder
+        if: github.event_name == 'pull_request' && steps.baseline_profile_freshness.outputs.reminder == 'true'
+        uses: actions/github-script@v7
+        env:
+          REMINDER_MESSAGE: ${{ steps.baseline_profile_freshness.outputs.message }}
+        with:
+          script: |
+            const marker = '<!-- baseline-profile-reminder -->';
+            const reminderMessage = (process.env.REMINDER_MESSAGE || '').trim();
+
+            if (!reminderMessage) {
+              core.info('Reminder message was empty; skipping comment.');
+              return;
+            }
+
+            const body = `${marker}
+⚠️ ${reminderMessage}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) =>
+              comment.body.includes(marker) && comment.user?.type === 'Bot'
+            );
+
+            if (existing) {
+              if (existing.body.trim() === body.trim()) {
+                core.info('Baseline profile reminder comment already up to date.');
+                return;
+              }
+
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info('Updated existing baseline profile reminder comment.');
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+            core.info('Created baseline profile reminder comment.');
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:

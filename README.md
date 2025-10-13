@@ -242,7 +242,10 @@ the `baselineprofile` module.
    ```
 
 The CI workflow repeats these steps on a matrix device and fails the build if the generated
-profile diverges from the committed snapshot, preventing stale artefacts from shipping.
+profile diverges from the committed snapshot, preventing stale artefacts from shipping. Pull
+requests also receive an automated warning (both as workflow annotations and a sticky bot
+comment) when they modify performance-sensitive code without refreshing
+`app/src/main/baseline-prof.txt`, making it harder to forget the regeneration step.
 
 ## CI validation for heavy PDF workloads
 
