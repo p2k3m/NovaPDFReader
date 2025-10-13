@@ -137,6 +137,7 @@ jobs:
       NOVAPDF_EMULATOR_GPU_MODE: ${{ vars.NOVAPDF_EMULATOR_GPU_MODE || '' }}
       NOVAPDF_EMULATOR_RAM_MB: ${{ vars.NOVAPDF_EMULATOR_RAM_MB || '' }}
       NOVAPDF_EMULATOR_READY_TIMEOUT: ${{ vars.NOVAPDF_EMULATOR_READY_TIMEOUT || 900 }}
+      BASELINE_DEVICE_LABEL: pixel-7-pro
     steps:
       - name: Validate required secrets
         id: validate_required_secrets
@@ -311,139 +312,45 @@ jobs:
         run: |
           set -euo pipefail
 
-          baseline_path="app/src/main/baseline-prof.txt"
-          baseline_touched=false
-          needs_profile=false
-          reminder=false
-          skipped=false
-          message=""
-          declare -a impacting_files=()
+          baseline_outputs="$GITHUB_OUTPUT"
+          summary_path="${GITHUB_STEP_SUMMARY:-}"
 
-          add_impacting_path() {
-            local candidate="$1"
-            for existing in "${impacting_files[@]}"; do
-              if [ "$existing" = "$candidate" ]; then
-                return
-              fi
-            done
-            impacting_files+=("$candidate")
-          }
-
-          emit_warning() {
-            local raw="$1"
-            local encoded="${raw//$'\n'/%0A}"
-            echo "::warning::${encoded}"
-          }
-
-          write_outputs() {
+          emit_skip() {
+            local message="$1"
             {
-              printf 'baseline_touched=%s\n' "$baseline_touched"
-              printf 'needs_profile=%s\n' "$needs_profile"
-              printf 'reminder=%s\n' "$reminder"
-              printf 'skipped=%s\n' "$skipped"
-            } >>"$GITHUB_OUTPUT"
-
-            if [ -n "$message" ]; then
-              {
-                printf 'message<<__BASELINE_MESSAGE__\n'
-                printf '%s\n' "$message"
-                printf '__BASELINE_MESSAGE__\n'
-              } >>"$GITHUB_OUTPUT"
-            fi
-          }
-
-          append_summary() {
-            if [ -z "${GITHUB_STEP_SUMMARY:-}" ] || [ -z "$message" ]; then
-              return
-            fi
-
-            {
-              printf '## Baseline profile reminder\n'
+              printf 'baseline_touched=false\n'
+              printf 'needs_profile=false\n'
+              printf 'reminder=false\n'
+              printf 'skipped=true\n'
+              printf 'message<<__BASELINE_MESSAGE__\n'
               printf '%s\n' "$message"
-            } >>"$GITHUB_STEP_SUMMARY"
+              printf '__BASELINE_MESSAGE__\n'
+            } >>"$baseline_outputs"
+
+            if [ -n "$summary_path" ]; then
+              {
+                printf '## Baseline profile reminder\n'
+                printf '%s\n' "$message"
+              } >>"$summary_path"
+            fi
+
+            local encoded="${message//%/%25}"
+            encoded="${encoded//$'\r'/%0D}"
+            encoded="${encoded//$'\n'/%0A}"
+            echo "::notice::${encoded}"
           }
 
           if [ -z "${BASE_REF:-}" ]; then
-            skipped=true
-            message="Skipping baseline profile reminder because the pull request base ref is unavailable."
-            append_summary
-            write_outputs
+            emit_skip "Skipping baseline profile reminder because the pull request base ref is unavailable."
             exit 0
           fi
 
           if ! git fetch --no-tags --depth=50 origin "$BASE_REF"; then
-            skipped=true
-            message="Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
-            emit_warning "$message"
-            append_summary
-            write_outputs
+            emit_skip "Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
             exit 0
           fi
 
-          mapfile -t changed < <(git diff --name-only "origin/${BASE_REF}"...HEAD)
-
-          if [ "${#changed[@]}" -eq 0 ]; then
-            skipped=true
-            message="Baseline profile reminder skipped because no files changed."
-            append_summary
-            write_outputs
-            exit 0
-          fi
-
-          for path in "${changed[@]}"; do
-            if [ "$path" = "$baseline_path" ]; then
-              baseline_touched=true
-              continue
-            fi
-
-            if [[ "$path" == */src/main/** ]]; then
-              needs_profile=true
-              add_impacting_path "$path"
-              continue
-            fi
-
-            case "$path" in
-              build.gradle|build.gradle.kts|settings.gradle|settings.gradle.kts|gradle.properties|gradle/libs.versions.toml|gradle/libs.versions.yaml|gradle/libs.versions.yml|gradle/libs.versions.json|gradle.lockfile)
-                needs_profile=true
-                add_impacting_path "$path"
-                continue
-                ;;
-            esac
-
-            if [[ "$path" == *build.gradle ]] || [[ "$path" == *build.gradle.kts ]]; then
-              needs_profile=true
-              add_impacting_path "$path"
-              continue
-            fi
-
-            case "$path" in
-              *.kt|*.kts|*.java|*.c|*.cpp|*.mm|*.m|*.h|*.hpp|*.rs|*.swift|*.xml|*.aidl)
-                needs_profile=true
-                add_impacting_path "$path"
-                ;;
-            esac
-          done
-
-          if [ "$needs_profile" = true ] && [ "$baseline_touched" = false ]; then
-            reminder=true
-            impacted_summary=""
-            if [ "${#impacting_files[@]}" -gt 0 ]; then
-              impacted_summary=$'The following files triggered the reminder:\n\n'
-              for impacted in "${impacting_files[@]}"; do
-                impacted_summary+="- ${impacted}\n"
-              done
-              impacted_summary+=$'\n'
-            fi
-
-            message=$'Code or dependency changes detected without updating '"${baseline_path}"$'.\n\n'"${impacted_summary}"$'Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile.\n\nEnsure the macrobenchmark scenarios continue to exercise the affected user flows so the refreshed profile captures the new execution paths.'
-            emit_warning "$message"
-          else
-            message="Baseline profile reminder check passed (baseline_touched=${baseline_touched}, needs_profile=${needs_profile})."
-            echo "$message"
-          fi
-
-          append_summary
-          write_outputs
+          python3 tools/scripts/baseline_profile_guard.py \n            --base "origin/${BASE_REF}" \n            --github-output "$baseline_outputs" \n            --github-step-summary "$summary_path"
       - name: Comment on baseline profile reminder
         if: github.event_name == 'pull_request' && steps.baseline_profile_freshness.outputs.reminder == 'true'
         uses: actions/github-script@v7
@@ -2384,13 +2291,18 @@ jobs:
             exit 1
           fi
       - name: Run macrobenchmark regression suite
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
+      - name: Verify macrobenchmark coverage
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
+        run: |
+          set -euo pipefail
+          python3 tools/verify_macrobenchmark_coverage.py
       - name: Collect and validate device logs after macrobenchmarks
-        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro' && always() }}
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2414,13 +2326,13 @@ jobs:
             exit 1
           fi
       - name: Generate release baseline profile
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
           set -euo pipefail
           adb logcat -c || true
           ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
       - name: Collect and validate device logs after baseline profile generation
-        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro' && always() }}
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2444,7 +2356,7 @@ jobs:
             exit 1
           fi
       - name: Verify committed baseline profile is current
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == 'pixel-7-pro'
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
           set -euo pipefail
           patterns=(
