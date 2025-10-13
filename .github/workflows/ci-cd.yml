@@ -2469,7 +2469,7 @@ jobs:
             exit 1
           fi
           echo "Generated baseline profile located at $generated"
-          if ! diff -u app/src/main/baseline-prof.txt "$generated"; then
+          if ! git --no-pager diff --no-index --color=always -- app/src/main/baseline-prof.txt "$generated"; then
             echo "::error::Generated baseline profile does not match the committed snapshot. Run ./gradlew :app:generateReleaseBaselineProfile and commit app/src/main/baseline-prof.txt" >&2
             exit 1
           fi
