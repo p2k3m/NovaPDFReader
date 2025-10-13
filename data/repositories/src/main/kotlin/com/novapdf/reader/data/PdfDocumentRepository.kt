@@ -1988,9 +1988,23 @@ class PdfDocumentRepository(
     }
 
     private fun caffeinePreconditionFailure(): Throwable? {
-        return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return IllegalStateException(
+                "Thread.threadLocalRandomProbe is not available on API ${Build.VERSION.SDK_INT}"
+            )
+        }
+
+        return try {
             Thread::class.java.getDeclaredField("threadLocalRandomProbe")
-        }.exceptionOrNull()
+            null
+        } catch (error: Throwable) {
+            when (error) {
+                is NoSuchFieldException, is NoSuchFieldError -> {
+                    IllegalStateException("Thread.threadLocalRandomProbe is not accessible", error)
+                }
+                else -> error
+            }
+        }
     }
 
     private fun clearBitmapCacheLocked() {
