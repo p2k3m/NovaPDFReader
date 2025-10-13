@@ -66,6 +66,7 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 import java.net.HttpURLConnection
 import java.net.URL
@@ -107,6 +108,7 @@ private const val TRACE_SECTION_PREFIX = "PdfRepo#"
 private const val MAX_TRACE_SECTION_LENGTH = 127
 private const val PERSISTENT_REPAIR_PREFIX = "cached-"
 private val HEX_DIGITS = "0123456789abcdef".toCharArray()
+private val THREAD_CLASS_SIGNATURE = "L${Thread::class.java.name.replace('.', '/')};"
 
 class PdfOpenException(
     val reason: Reason,
@@ -1995,9 +1997,21 @@ class PdfDocumentRepository(
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            return IllegalStateException(
-                "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}"
-            )
+            val probeAccessible = ThreadLocalRandomProbeAccess.isAccessible() ||
+                ThreadLocalRandomProbeAccess.ensureAccessible()
+            if (!probeAccessible) {
+                val cause = ThreadLocalRandomProbeAccess.lastError()
+                return if (cause != null) {
+                    IllegalStateException(
+                        "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}",
+                        cause
+                    )
+                } else {
+                    IllegalStateException(
+                        "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}"
+                    )
+                }
+            }
         }
 
         return try {
@@ -2752,6 +2766,82 @@ fun normalizedMimeType(
     } else {
         reported
     }
+}
+
+private object ThreadLocalRandomProbeAccess {
+    private val exemptionAttempted = AtomicBoolean(false)
+
+    @Volatile
+    private var exemptionGranted = false
+
+    @Volatile
+    private var lastFailure: Throwable? = null
+
+    fun isAccessible(): Boolean {
+        return isThreadLocalRandomProbeAccessible()
+    }
+
+    fun ensureAccessible(): Boolean {
+        if (isAccessible()) {
+            exemptionGranted = true
+            exemptionAttempted.set(true)
+            lastFailure = null
+            return true
+        }
+
+        if (exemptionAttempted.get()) {
+            return exemptionGranted
+        }
+
+        val invocationSucceeded = runCatching {
+            val runtimeClass = Class.forName("dalvik.system.VMRuntime")
+            val getRuntime = runtimeClass.getDeclaredMethod("getRuntime")
+            val runtime = getRuntime.invoke(null)
+            val setHiddenApiExemptions = runtimeClass.getDeclaredMethod(
+                "setHiddenApiExemptions",
+                Array<String>::class.java,
+            )
+            setHiddenApiExemptions.isAccessible = true
+            setHiddenApiExemptions.invoke(runtime, arrayOf(THREAD_CLASS_SIGNATURE))
+            true
+        }.onFailure { error ->
+            lastFailure = error
+            NovaLog.w(
+                TAG,
+                "Failed to exempt Thread.threadLocalRandomProbe from hidden API check",
+                error,
+            )
+        }.getOrDefault(false)
+
+        val accessible = invocationSucceeded && isAccessible()
+        if (!accessible) {
+            if (invocationSucceeded && lastFailure == null) {
+                lastFailure = IllegalStateException(
+                    "Hidden API exemption applied but Thread.threadLocalRandomProbe remains inaccessible",
+                )
+                NovaLog.w(
+                    TAG,
+                    "Hidden API exemption applied but Thread.threadLocalRandomProbe remains inaccessible",
+                    lastFailure,
+                )
+            }
+        } else {
+            lastFailure = null
+        }
+
+        exemptionGranted = accessible
+        exemptionAttempted.set(true)
+        return accessible
+    }
+
+    fun lastError(): Throwable? = lastFailure
+}
+
+private fun isThreadLocalRandomProbeAccessible(): Boolean {
+    return runCatching {
+        val field = Thread::class.java.getDeclaredField("threadLocalRandomProbe")
+        field.isAccessible = true
+    }.isSuccess
 }
 
 @VisibleForTesting
