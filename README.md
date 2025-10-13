@@ -119,6 +119,14 @@ Adaptive Flow now records frame pacing through `Choreographer` on the main threa
 
 Both tasks reuse the Robolectric unit tests backing the Adaptive Flow manager and give fast feedback without running the full unit test suite.
 
+## Fallback mode shortcuts
+
+When adaptive flow features misbehave in the field, engineers can toggle dedicated
+fallback shortcuts to keep the reader usable while investigating. The
+[fallback mode reference](docs/fallback-mode-shortcuts.md) explains each option—classic
+"safe" mode, simple legacy graphics, and the mid-run tutorial recovery flow—and
+outlines when to trigger them during debugging sessions.
+
 ## Sample PDF fixture
 
 Automated tests and screenshot generation rely on a tiny CC0 1.0 licensed document that now ships inline with the instrumentation test sources. The encoded fixture is decoded directly into the device cache before opening it in the viewer so rendering can be validated without relying on external network services or bundling binary blobs in git.
