@@ -245,7 +245,9 @@ The CI workflow repeats these steps on a matrix device and fails the build if th
 profile diverges from the committed snapshot, preventing stale artefacts from shipping. Pull
 requests also receive an automated warning (both as workflow annotations and a sticky bot
 comment) when they modify performance-sensitive code without refreshing
-`app/src/main/baseline-prof.txt`, making it harder to forget the regeneration step.
+`app/src/main/baseline-prof.txt`. The reminder highlights the files that triggered the check
+and reiterates the need for macrobenchmark coverage of real user journeys so the regenerated
+profile reflects the updated execution paths, making it harder to forget the regeneration step.
 
 ## CI validation for heavy PDF workloads
 
