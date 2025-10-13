@@ -429,8 +429,7 @@ jobs:
               return;
             }
 
-            const body = `${marker}
-⚠️ ${reminderMessage}`;
+            const body = `${marker}\n⚠️ ${reminderMessage}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
 
