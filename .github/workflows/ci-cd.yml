@@ -317,6 +317,23 @@ jobs:
           reminder=false
           skipped=false
           message=""
+          declare -a impacting_files=()
+
+          add_impacting_path() {
+            local candidate="$1"
+            for existing in "${impacting_files[@]}"; do
+              if [ "$existing" = "$candidate" ]; then
+                return
+              fi
+            done
+            impacting_files+=("$candidate")
+          }
+
+          emit_warning() {
+            local raw="$1"
+            local encoded="${raw//$'\n'/%0A}"
+            echo "::warning::${encoded}"
+          }
 
           write_outputs() {
             {
@@ -357,7 +374,7 @@ jobs:
           if ! git fetch --no-tags --depth=50 origin "$BASE_REF"; then
             skipped=true
             message="Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
-            echo "::warning::${message}"
+            emit_warning "$message"
             append_summary
             write_outputs
             exit 0
@@ -381,32 +398,45 @@ jobs:
 
             if [[ "$path" == */src/main/** ]]; then
               needs_profile=true
+              add_impacting_path "$path"
               continue
             fi
 
             case "$path" in
               build.gradle|build.gradle.kts|settings.gradle|settings.gradle.kts|gradle.properties|gradle/libs.versions.toml|gradle/libs.versions.yaml|gradle/libs.versions.yml|gradle/libs.versions.json|gradle.lockfile)
                 needs_profile=true
+                add_impacting_path "$path"
                 continue
                 ;;
             esac
 
             if [[ "$path" == *build.gradle ]] || [[ "$path" == *build.gradle.kts ]]; then
               needs_profile=true
+              add_impacting_path "$path"
               continue
             fi
 
             case "$path" in
               *.kt|*.kts|*.java|*.c|*.cpp|*.mm|*.m|*.h|*.hpp|*.rs|*.swift|*.xml|*.aidl)
                 needs_profile=true
+                add_impacting_path "$path"
                 ;;
             esac
           done
 
           if [ "$needs_profile" = true ] && [ "$baseline_touched" = false ]; then
             reminder=true
-            message="Code or dependency changes detected without updating ${baseline_path}. Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile."
-            echo "::warning::${message}"
+            impacted_summary=""
+            if [ "${#impacting_files[@]}" -gt 0 ]; then
+              impacted_summary=$'The following files triggered the reminder:\n\n'
+              for impacted in "${impacting_files[@]}"; do
+                impacted_summary+="- ${impacted}\n"
+              done
+              impacted_summary+=$'\n'
+            fi
+
+            message=$'Code or dependency changes detected without updating '"${baseline_path}"$'.\n\n'"${impacted_summary}"$'Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile.\n\nEnsure the macrobenchmark scenarios continue to exercise the affected user flows so the refreshed profile captures the new execution paths.'
+            emit_warning "$message"
           else
             message="Baseline profile reminder check passed (baseline_touched=${baseline_touched}, needs_profile=${needs_profile})."
             echo "$message"
