@@ -41,7 +41,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.annotation)
     implementation(libs.kotlinx.serialization.json)
-    implementation(libs.caffeine)
     implementation(libs.pdfbox.android)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.room.ktx)

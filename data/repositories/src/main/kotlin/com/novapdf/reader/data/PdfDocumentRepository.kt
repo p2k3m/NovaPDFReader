@@ -21,8 +21,6 @@ import android.util.SparseArray
 import androidx.annotation.VisibleForTesting
 import androidx.annotation.WorkerThread
 import androidx.core.net.toUri
-import com.github.benmanes.caffeine.cache.Caffeine
-import com.github.benmanes.caffeine.cache.RemovalCause
 import com.novapdf.reader.cache.CacheDirectories
 import com.novapdf.reader.logging.LogContext
 import com.novapdf.reader.data.remote.StorageClient
@@ -66,7 +64,6 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 import java.net.HttpURLConnection
 import java.net.URL
@@ -1959,71 +1956,29 @@ class PdfDocumentRepository(
     }
 
     private fun createBitmapCache(): BitmapCache {
-        val caffeinePreconditionError = caffeinePreconditionFailure()
-        if (caffeinePreconditionError != null) {
-            NovaLog.w(TAG, "Caffeine bitmap cache disabled; falling back to LruCache", caffeinePreconditionError)
-            reportNonFatal(
-                caffeinePreconditionError,
-                mapOf(
-                    "stage" to "bitmapCacheInit",
-                    "fallback" to "lru",
-                    "reason" to "caffeine_precondition_failed",
-                    "error_type" to caffeinePreconditionError::class.java.name
-                )
+        enforceNoCaffeineOnModernApis()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            NovaLog.w(
+                TAG,
+                "Using LruCache for bitmap caching on API ${Build.VERSION.SDK_INT}; " +
+                    "Caffeine is not supported on Android 9+"
             )
-            return LruBitmapCache(maxCacheBytes)
         }
 
-        return try {
-            CaffeineBitmapCache(maxCacheBytes)
-        } catch (error: Throwable) {
-            NovaLog.w(TAG, "Falling back to LruCache for bitmap caching", error)
-            reportNonFatal(
-                error,
-                mapOf(
-                    "stage" to "bitmapCacheInit",
-                    "fallback" to "lru"
-                )
-            )
-            LruBitmapCache(maxCacheBytes)
-        }
+        return LruBitmapCache(maxCacheBytes)
     }
 
-    private fun caffeinePreconditionFailure(): Throwable? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return IllegalStateException(
-                "Thread.threadLocalRandomProbe is not available on API ${Build.VERSION.SDK_INT}"
-            )
+    private fun enforceNoCaffeineOnModernApis() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val probeAccessible = ThreadLocalRandomProbeAccess.isAccessible() ||
-                ThreadLocalRandomProbeAccess.ensureAccessible()
-            if (!probeAccessible) {
-                val cause = ThreadLocalRandomProbeAccess.lastError()
-                return if (cause != null) {
-                    IllegalStateException(
-                        "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}",
-                        cause
-                    )
-                } else {
-                    IllegalStateException(
-                        "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}"
-                    )
-                }
-            }
-        }
+        val caffeinePresent = runCatching {
+            Class.forName("com.github.benmanes.caffeine.cache.Caffeine")
+        }.isSuccess
 
-        return try {
-            Thread::class.java.getDeclaredField("threadLocalRandomProbe")
-            null
-        } catch (error: Throwable) {
-            when (error) {
-                is NoSuchFieldException, is NoSuchFieldError, is SecurityException -> {
-                    IllegalStateException("Thread.threadLocalRandomProbe is not accessible", error)
-                }
-                else -> error
-            }
+        check(!caffeinePresent) {
+            "Caffeine cache detected on API ${Build.VERSION.SDK_INT}. Remove com.github.ben-manes.caffeine to avoid crashes."
         }
     }
 
@@ -2587,48 +2542,6 @@ class PdfDocumentRepository(
             get() = if (requests <= 0L) 0.0 else hits.toDouble() / requests.toDouble()
     }
 
-    private inner class CaffeineBitmapCache(maxCacheBytes: Long) : BitmapCache() {
-        private val maximumWeight = maxCacheBytes.coerceAtLeast(0L)
-        private val delegate = Caffeine.newBuilder()
-            .maximumWeight(maxCacheBytes)
-            .weigher<PageBitmapKey, Bitmap> { _, bitmap -> safeByteCount(bitmap) }
-            .executor { it.run() }
-            .removalListener<PageBitmapKey, Bitmap> { _, bitmap, cause ->
-                if (cause == RemovalCause.REPLACED || cause == RemovalCause.EXPLICIT || cause.wasEvicted()) {
-                    bitmap?.let { recycleBitmap(it) }
-                }
-            }
-            .build<PageBitmapKey, Bitmap>()
-
-        override fun getInternal(key: PageBitmapKey): Bitmap? = delegate.getIfPresent(key)
-
-        override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
-            delegate.put(key, bitmap)
-        }
-
-        override fun valuesInternal(): Collection<Bitmap> = delegate.asMap().values
-
-        override fun clearInternal() {
-            delegate.invalidateAll()
-        }
-
-        override fun cleanUpInternal() {
-            delegate.cleanUp()
-        }
-
-        override fun trimInternal(fraction: Float) {
-            val eviction = delegate.policy().eviction().orElse(null) ?: return
-            val currentSize = eviction.weightedSize().orElse(0L)
-            if (currentSize <= 0L) {
-                return
-            }
-            val target = (currentSize.toDouble() * fraction.toDouble()).toLong().coerceAtLeast(0L)
-            eviction.setMaximum(target)
-            delegate.cleanUp()
-            eviction.setMaximum(maximumWeight)
-        }
-    }
-
     private inner class LruBitmapCache(maxCacheBytes: Long) : BitmapCache() {
         private val cacheSize = maxCacheBytes.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         private val mutex = Mutex()
@@ -2766,82 +2679,6 @@ fun normalizedMimeType(
     } else {
         reported
     }
-}
-
-private object ThreadLocalRandomProbeAccess {
-    private val exemptionAttempted = AtomicBoolean(false)
-
-    @Volatile
-    private var exemptionGranted = false
-
-    @Volatile
-    private var lastFailure: Throwable? = null
-
-    fun isAccessible(): Boolean {
-        return isThreadLocalRandomProbeAccessible()
-    }
-
-    fun ensureAccessible(): Boolean {
-        if (isAccessible()) {
-            exemptionGranted = true
-            exemptionAttempted.set(true)
-            lastFailure = null
-            return true
-        }
-
-        if (exemptionAttempted.get()) {
-            return exemptionGranted
-        }
-
-        val invocationSucceeded = runCatching {
-            val runtimeClass = Class.forName("dalvik.system.VMRuntime")
-            val getRuntime = runtimeClass.getDeclaredMethod("getRuntime")
-            val runtime = getRuntime.invoke(null)
-            val setHiddenApiExemptions = runtimeClass.getDeclaredMethod(
-                "setHiddenApiExemptions",
-                Array<String>::class.java,
-            )
-            setHiddenApiExemptions.isAccessible = true
-            setHiddenApiExemptions.invoke(runtime, arrayOf(THREAD_CLASS_SIGNATURE))
-            true
-        }.onFailure { error ->
-            lastFailure = error
-            NovaLog.w(
-                TAG,
-                "Failed to exempt Thread.threadLocalRandomProbe from hidden API check",
-                error,
-            )
-        }.getOrDefault(false)
-
-        val accessible = invocationSucceeded && isAccessible()
-        if (!accessible) {
-            if (invocationSucceeded && lastFailure == null) {
-                lastFailure = IllegalStateException(
-                    "Hidden API exemption applied but Thread.threadLocalRandomProbe remains inaccessible",
-                )
-                NovaLog.w(
-                    TAG,
-                    "Hidden API exemption applied but Thread.threadLocalRandomProbe remains inaccessible",
-                    lastFailure,
-                )
-            }
-        } else {
-            lastFailure = null
-        }
-
-        exemptionGranted = accessible
-        exemptionAttempted.set(true)
-        return accessible
-    }
-
-    fun lastError(): Throwable? = lastFailure
-}
-
-private fun isThreadLocalRandomProbeAccessible(): Boolean {
-    return runCatching {
-        val field = Thread::class.java.getDeclaredField("threadLocalRandomProbe")
-        field.isAccessible = true
-    }.isSuccess
 }
 
 @VisibleForTesting
