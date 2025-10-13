@@ -10,6 +10,7 @@ import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
+import androidx.test.uiautomator.UiObject2
 import kotlin.system.measureTimeMillis
 
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
@@ -82,7 +83,54 @@ internal fun MacrobenchmarkScope.exerciseReaderContent() {
         device.swipe(centerX, (centerY * 0.5).toInt(), centerX, centerY, 30)
     }
     device.waitForIdle()
+    openSearchIfAvailable()
+    openOverflowMenuIfAvailable()
+    openTableOfContentsIfAvailable()
+    device.waitForIdle()
 }
+
+private fun MacrobenchmarkScope.openSearchIfAvailable() {
+    val searchButton = findByTextOrDesc("Search", "Find")
+    if (searchButton?.safeClick() == true) {
+        device.waitForIdle()
+        device.pressBack()
+        device.waitForIdle()
+    }
+}
+
+private fun MacrobenchmarkScope.openOverflowMenuIfAvailable() {
+    val overflowButton = findByTextOrDesc("More options", "Menu", "Overflow")
+    if (overflowButton?.safeClick() == true) {
+        device.waitForIdle()
+        device.pressBack()
+        device.waitForIdle()
+    }
+}
+
+private fun MacrobenchmarkScope.openTableOfContentsIfAvailable() {
+    val tocButton = findByTextOrDesc("Table of contents", "Contents", "Outline")
+    if (tocButton?.safeClick() == true) {
+        device.waitForIdle()
+        device.pressBack()
+        device.waitForIdle()
+    }
+}
+
+private fun MacrobenchmarkScope.findByTextOrDesc(vararg tokens: String): UiObject2? {
+    for (token in tokens) {
+        device.findObject(By.descContains(token))?.let { return it }
+        device.findObject(By.descContains(token.lowercase()))?.let { return it }
+        device.findObject(By.textContains(token))?.let { return it }
+        device.findObject(By.textContains(token.lowercase()))?.let { return it }
+    }
+    return null
+}
+
+private fun UiObject2.safeClick(): Boolean = runCatching {
+    click()
+    true
+}.getOrDefault(false)
+
 
 private fun waitForReaderActivity(instrumentation: Instrumentation): Activity {
     val readerActivityClass = instrumentation.targetContext.classLoader.loadClass(
