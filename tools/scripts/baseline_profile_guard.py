@@ -90,6 +90,27 @@ class EvaluationResult:
         )
 
 
+class MissingGitReferenceError(RuntimeError):
+    """Raised when a Git reference cannot be resolved."""
+
+    def __init__(self, reference: str):
+        super().__init__(reference)
+        self.reference = reference
+
+
+def git_ref_exists(ref: str) -> bool:
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
 def run_git_diff(args: Sequence[str]) -> List[str]:
     try:
         completed = subprocess.run(
@@ -112,6 +133,8 @@ def discover_changed_files(base: Optional[str], staged: bool) -> List[str]:
     if staged:
         return run_git_diff(["--cached"])
     if base:
+        if not git_ref_exists(base):
+            raise MissingGitReferenceError(base)
         return run_git_diff([f"{base}...HEAD"])
     return run_git_diff([])
 
@@ -260,7 +283,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 1
 
-    changed_files = discover_changed_files(args.base, args.staged)
+    try:
+        changed_files = discover_changed_files(args.base, args.staged)
+    except MissingGitReferenceError as exc:
+        message = (
+            "Baseline profile reminder skipped because the Git reference "
+            f"{exc.reference} could not be resolved."
+        )
+        result = EvaluationResult(message=message)
+        result.skipped = True
+        write_github_outputs(args.github_output or "", result)
+        if not args.quiet:
+            print(message)
+        return 0
 
     if not changed_files:
         result = EvaluationResult(message="Baseline profile reminder skipped because no files changed.")
