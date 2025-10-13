@@ -4,11 +4,11 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -131,23 +131,30 @@ class PdfDocumentRepositoryEdgeCaseTest {
     }
 
     @Test
-    @Config(sdk = [Build.VERSION_CODES.S])
-    fun disablesCaffeineBitmapCacheWhenThreadLocalProbeMissing() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        val repository = PdfDocumentRepository(
-            context,
-            dispatcher,
-            cacheDirectories = DefaultCacheDirectories(context),
-        )
+    @Config(sdk = [29])
+    fun usesLruBitmapCacheOnApi29() = runTest {
+        assertBitmapCacheIsLru(StandardTestDispatcher(testScheduler))
+    }
 
-        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
-            isAccessible = true
+    @Test
+    @Config(sdk = [32])
+    fun usesLruBitmapCacheOnApi32() = runTest {
+        assertBitmapCacheIsLru(StandardTestDispatcher(testScheduler))
+    }
+
+    @Test
+    @Config(sdk = [34])
+    fun usesLruBitmapCacheOnApi34() = runTest {
+        assertBitmapCacheIsLru(StandardTestDispatcher(testScheduler))
+    }
+
+    @Test
+    fun caffeineDependencyIsRemoved() {
+        val result = runCatching {
+            Class.forName("com.github.benmanes.caffeine.cache.Caffeine")
         }
-        val bitmapCache = bitmapCacheField.get(repository)
 
-        assertEquals("LruBitmapCache", bitmapCache.javaClass.simpleName)
-
-        repository.dispose()
+        assertTrue("Caffeine dependency should be absent", result.isFailure)
     }
 
     @Test
@@ -186,5 +193,21 @@ class PdfDocumentRepositoryEdgeCaseTest {
             }
         }
         return Base64.getDecoder().decode(base64)
+    }
+    private suspend fun assertBitmapCacheIsLru(dispatcher: TestDispatcher) {
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+            isAccessible = true
+        }
+        val bitmapCache = bitmapCacheField.get(repository)
+
+        assertEquals("LruBitmapCache", bitmapCache.javaClass.simpleName)
+
+        repository.dispose()
     }
 }

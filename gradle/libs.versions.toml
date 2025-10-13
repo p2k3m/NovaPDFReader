@@ -26,7 +26,6 @@ androidxWork = "2.9.0"
 androidxStartup = "1.1.1"
 hilt = "2.52"
 androidxHiltWork = "1.2.0"
-caffeine = "2.9.3"
 coil = "3.0.0"
 errorproneAnnotations = "2.26.1"
 junit4 = "4.13.2"
@@ -108,7 +107,6 @@ androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidxWork" }
 androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "androidxWork" }
 androidx-hilt-work = { module = "androidx.hilt:hilt-work", version.ref = "androidxHiltWork" }
-caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }
 coil-android = { module = "io.coil-kt.coil3:coil-android", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 androidx-hilt-compiler = { module = "androidx.hilt:hilt-compiler", version.ref = "androidxHiltWork" }

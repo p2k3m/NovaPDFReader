@@ -3250,3 +3250,6 @@ jobs:
           name: firebase-${{ matrix.device_label }}
           path: firebase-results
           if-no-files-found: warn
+      - name: Verify Caffeine is absent from build outputs
+        if: always()
+        run: python3 tools/scripts/verify_no_caffeine.py --github

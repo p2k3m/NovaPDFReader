@@ -1137,8 +1137,6 @@ dependencies {
     implementation(libs.pdfium.android) {
         exclude(group = "com.android.support", module = "support-compat")
     }
-    // Caffeine 3.x requires MethodHandle support; stay on 2.x until we evaluate the upgrade impact
-    implementation(libs.caffeine)
     implementation(libs.lucene.core)
     implementation(libs.lucene.analyzers.common)
     implementation(libs.lucene.queryparser)
