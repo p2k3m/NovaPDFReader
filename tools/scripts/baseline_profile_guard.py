@@ -98,6 +98,15 @@ class MissingGitReferenceError(RuntimeError):
         self.reference = reference
 
 
+class MissingMergeBaseError(RuntimeError):
+    """Raised when the merge base between two refs cannot be determined."""
+
+    def __init__(self, base: str, details: str | None = None):
+        super().__init__(base)
+        self.base = base
+        self.details = details or ""
+
+
 def git_ref_exists(ref: str) -> bool:
     try:
         subprocess.run(
@@ -129,13 +138,31 @@ def run_git_diff(args: Sequence[str]) -> List[str]:
     return files
 
 
+def compute_merge_base(base: str) -> str:
+    completed = subprocess.run(
+        ["git", "merge-base", base, "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise MissingMergeBaseError(base, completed.stderr.strip())
+
+    merge_base = completed.stdout.strip()
+    if not merge_base:
+        raise MissingMergeBaseError(base)
+
+    return merge_base
+
+
 def discover_changed_files(base: Optional[str], staged: bool) -> List[str]:
     if staged:
         return run_git_diff(["--cached"])
     if base:
         if not git_ref_exists(base):
             raise MissingGitReferenceError(base)
-        return run_git_diff([f"{base}...HEAD"])
+        merge_base = compute_merge_base(base)
+        return run_git_diff([f"{merge_base}..HEAD"])
     return run_git_diff([])
 
 
@@ -290,6 +317,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "Baseline profile reminder skipped because the Git reference "
             f"{exc.reference} could not be resolved."
         )
+        result = EvaluationResult(message=message)
+        result.skipped = True
+        write_github_outputs(args.github_output or "", result)
+        if not args.quiet:
+            print(message)
+        return 0
+    except MissingMergeBaseError as exc:
+        message_lines = [
+            "Baseline profile reminder skipped because the merge base between",
+            f"HEAD and {exc.base} could not be determined.",
+        ]
+        if exc.details:
+            message_lines.append(" ".join(line.strip() for line in exc.details.splitlines()))
+        message_lines.append(
+            "This typically happens in shallow clones. Fetch a deeper history "
+            "and retry if the reminder is required."
+        )
+        message = " ".join(line.strip() for line in message_lines if line.strip())
         result = EvaluationResult(message=message)
         result.skipped = True
         write_github_outputs(args.github_output or "", result)
