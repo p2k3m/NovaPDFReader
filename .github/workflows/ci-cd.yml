@@ -350,7 +350,10 @@ jobs:
             exit 0
           fi
 
-          python3 tools/scripts/baseline_profile_guard.py \n            --base "origin/${BASE_REF}" \n            --github-output "$baseline_outputs" \n            --github-step-summary "$summary_path"
+          python3 tools/scripts/baseline_profile_guard.py \
+            --base "origin/${BASE_REF}" \
+            --github-output "$baseline_outputs" \
+            --github-step-summary "$summary_path"
       - name: Comment on baseline profile reminder
         if: github.event_name == 'pull_request' && steps.baseline_profile_freshness.outputs.reminder == 'true'
         uses: actions/github-script@v7
