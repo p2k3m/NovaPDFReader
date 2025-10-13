@@ -211,6 +211,9 @@ benefit from ahead-of-time compilation. The profile lives at
 the `baselineprofile` module.
 
 1. Boot a physical device or emulator running API 32+ with hardware acceleration enabled.
+   Always rerun baseline and macrobenchmark jobs on the exact same
+   hardware profile and system image (API level, RAM, and CPU) so
+   performance comparisons remain deterministic.
 2. Install the debug build once so shared test fixtures are staged:
 
    ```bash
