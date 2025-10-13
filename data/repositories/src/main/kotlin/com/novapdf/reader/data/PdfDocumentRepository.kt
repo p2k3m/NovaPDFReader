@@ -1994,12 +1994,18 @@ class PdfDocumentRepository(
             )
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return IllegalStateException(
+                "Thread.threadLocalRandomProbe is blocked on API ${Build.VERSION.SDK_INT}"
+            )
+        }
+
         return try {
             Thread::class.java.getDeclaredField("threadLocalRandomProbe")
             null
         } catch (error: Throwable) {
             when (error) {
-                is NoSuchFieldException, is NoSuchFieldError -> {
+                is NoSuchFieldException, is NoSuchFieldError, is SecurityException -> {
                     IllegalStateException("Thread.threadLocalRandomProbe is not accessible", error)
                 }
                 else -> error
