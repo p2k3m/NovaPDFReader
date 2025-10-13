@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+baseline_path="app/src/main/baseline-prof.txt"
+
+mapfile -t staged < <(git diff --cached --name-only)
+
+if [ "${#staged[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+baseline_staged=false
+needs_profile=false
+declare -a impacting_files=()
+
+add_impacting_path() {
+  local candidate="$1"
+  for existing in "${impacting_files[@]}"; do
+    if [ "$existing" = "$candidate" ]; then
+      return
+    fi
+  done
+  impacting_files+=("$candidate")
+}
+
+for path in "${staged[@]}"; do
+  if [ "$path" = "$baseline_path" ]; then
+    baseline_staged=true
+    continue
+  fi
+
+  if [[ "$path" == */src/main/* ]]; then
+    needs_profile=true
+    add_impacting_path "$path"
+    continue
+  fi
+
+  case "$path" in
+    build.gradle|build.gradle.kts|settings.gradle|settings.gradle.kts|gradle.properties|gradle/libs.versions.toml|gradle/libs.versions.yaml|gradle/libs.versions.yml|gradle/libs.versions.json|gradle.lockfile)
+      needs_profile=true
+      add_impacting_path "$path"
+      continue
+      ;;
+  esac
+
+  if [[ "$path" == *build.gradle ]] || [[ "$path" == *build.gradle.kts ]]; then
+    needs_profile=true
+    add_impacting_path "$path"
+    continue
+  fi
+
+  case "$path" in
+    *.kt|*.kts|*.java|*.c|*.cpp|*.mm|*.m|*.h|*.hpp|*.rs|*.swift|*.xml|*.aidl)
+      needs_profile=true
+      add_impacting_path "$path"
+      ;;
+  esac
+done
+
+if [ "$needs_profile" = true ] && [ "$baseline_staged" = false ]; then
+  {
+    echo "Baseline profile reminder: performance-sensitive changes detected without updating ${baseline_path}."
+    if [ "${#impacting_files[@]}" -gt 0 ]; then
+      echo "Impacted files that triggered this check:"
+      for impacted in "${impacting_files[@]}"; do
+        echo "  - ${impacted}"
+      done
+    fi
+    echo "Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and stage ${baseline_path}."
+    echo "Review the diff via git diff --staged -- ${baseline_path} before committing."
+  } >&2
+  exit 1
+fi
+
+exit 0

@@ -241,6 +241,17 @@ the `baselineprofile` module.
    git diff -- app/src/main/baseline-prof.txt
    ```
 
+To avoid forgetting this step, install the provided Git pre-commit hook once per clone:
+
+```bash
+git config core.hooksPath tools/git-hooks
+```
+
+The hook inspects staged changes and blocks commits that touch performance-sensitive
+code (Gradle configuration, source files under `src/main`, and other critical source
+types) without also staging the updated `app/src/main/baseline-prof.txt`. When it
+triggers, regenerate the profile, stage the file, and re-run the commit.
+
 The CI workflow repeats these steps on a matrix device and fails the build if the generated
 profile diverges from the committed snapshot, preventing stale artefacts from shipping. Pull
 requests also receive an automated warning (both as workflow annotations and a sticky bot
