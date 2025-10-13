@@ -303,6 +303,68 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v4
+      - name: Warn when baseline profile snapshot was not refreshed
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "Skipping baseline profile reminder because the pull request base ref is unavailable."
+            exit 0
+          fi
+
+          if ! git fetch --no-tags --depth=50 origin "$BASE_REF"; then
+            echo "::warning::Unable to fetch origin/${BASE_REF} to evaluate baseline profile freshness; skipping reminder check."
+            exit 0
+          fi
+
+          mapfile -t changed < <(git diff --name-only "origin/${BASE_REF}"...HEAD)
+
+          if [ "${#changed[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          baseline_path="app/src/main/baseline-prof.txt"
+          baseline_touched=false
+          needs_profile=false
+
+          for path in "${changed[@]}"; do
+            if [ "$path" = "$baseline_path" ]; then
+              baseline_touched=true
+              continue
+            fi
+
+            if [[ "$path" == */src/main/** ]]; then
+              needs_profile=true
+              continue
+            fi
+
+            case "$path" in
+              build.gradle|build.gradle.kts|settings.gradle|settings.gradle.kts|gradle.properties|gradle/libs.versions.toml|gradle/libs.versions.yaml|gradle/libs.versions.yml|gradle/libs.versions.json|gradle.lockfile)
+                needs_profile=true
+                continue
+                ;;
+            esac
+
+            if [[ "$path" == *build.gradle ]] || [[ "$path" == *build.gradle.kts ]]; then
+              needs_profile=true
+              continue
+            fi
+
+            case "$path" in
+              *.kt|*.kts|*.java|*.c|*.cpp|*.mm|*.m|*.h|*.hpp|*.rs|*.swift|*.xml|*.aidl)
+                needs_profile=true
+                ;;
+            esac
+          done
+
+          if [ "$needs_profile" = true ] && [ "$baseline_touched" = false ]; then
+            echo "::warning::Code or dependency changes detected without updating ${baseline_path}. Run ./gradlew :app:generateReleaseBaselineProfile --stacktrace and commit the refreshed profile."
+          else
+            echo "Baseline profile reminder check passed (baseline_touched=${baseline_touched}, needs_profile=${needs_profile})."
+          fi
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
