@@ -2803,6 +2803,62 @@ jobs:
               fi
             done <<< "$remote_files"
           }
+          resolve_harness_run_as_package() {
+            local timeout=$((2 * 60))
+            local elapsed=0
+            local resolved=""
+            local previous="$HARNESS_RUN_AS_PACKAGE"
+
+            while [ $elapsed -lt $timeout ]; do
+              if [ -f "$HARNESS_LOG" ]; then
+                resolved=$(python3 - "$HARNESS_LOG" <<'PY'
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(0)
+
+path = sys.argv[1]
+target = "ScreenshotHarness: Resolved screenshot harness package name:"
+package = ""
+
+try:
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if target in line:
+                candidate = line.split(target, 1)[1].strip()
+                if candidate:
+                    package = candidate.split()[0]
+except Exception:
+    package = ""
+
+if package:
+    sys.stdout.write(package)
+PY
+)
+                resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
+                if [ -n "$resolved" ]; then
+                  if [ "$resolved" != "$HARNESS_RUN_AS_PACKAGE" ]; then
+                    HARNESS_RUN_AS_PACKAGE="$resolved"
+                    echo "Updated screenshot harness run-as package to $HARNESS_RUN_AS_PACKAGE" >&2
+                    if [ "$previous" != "$HARNESS_RUN_AS_PACKAGE" ]; then
+                      cleanup_flags
+                    fi
+                  fi
+                  return 0
+                fi
+              fi
+
+              if ! kill -0 "$harness_pid" >/dev/null 2>&1; then
+                break
+              fi
+
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+
+            echo "Unable to determine screenshot harness package from instrumentation output; continuing with $HARNESS_RUN_AS_PACKAGE" >&2
+            return 1
+          }
           finish_harness() {
             if [ -n "${harness_pid:-}" ] && kill -0 "$harness_pid" >/dev/null 2>&1; then
               echo "Stopping screenshot harness instrumentation" >&2
@@ -2849,6 +2905,8 @@ jobs:
             ${PACKAGE_NAME}.test/dagger.hilt.android.testing.HiltTestRunner \
             >"$HARNESS_LOG" 2>&1 &
           harness_pid=$!
+
+          resolve_harness_run_as_package || true
 
           wait_for_harness() {
             local elapsed=0
