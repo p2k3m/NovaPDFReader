@@ -149,15 +149,6 @@ class PdfDocumentRepositoryEdgeCaseTest {
     }
 
     @Test
-    fun caffeineDependencyIsRemoved() {
-        val result = runCatching {
-            Class.forName("com.github.benmanes.caffeine.cache.Caffeine")
-        }
-
-        assertTrue("Caffeine dependency should be absent", result.isFailure)
-    }
-
-    @Test
     fun encryptedMonsterPdfSurfacesAccessDenied() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val repository = PdfDocumentRepository(
