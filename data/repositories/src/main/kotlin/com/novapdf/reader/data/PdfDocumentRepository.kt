@@ -170,6 +170,14 @@ private data class CacheMaintenanceReport(
     val afterPool: BitmapPoolState,
 )
 
+private interface BitmapPoolHandle {
+    fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap?
+    fun release(bitmap: Bitmap): Boolean
+    fun snapshotState(): BitmapPoolState
+    fun clear()
+    fun forceReport()
+}
+
 class PdfDocumentRepository(
     private val context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -183,14 +191,16 @@ class PdfDocumentRepository(
     private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val repairedDocumentDir by lazy {
-        File(cacheDirectories.documents(), "repairs").apply {
-            ensureCacheDirectory("PDF repair cache")
-        }
+        resolveCacheDirectory(
+            stage = "repairs",
+            label = "PDF repair cache",
+        ) { File(cacheDirectories.documents(), "repairs") }
     }
     private val remoteDocumentDir by lazy {
-        File(cacheDirectories.documents(), "remote").apply {
-            ensureCacheDirectory("remote PDF cache")
-        }
+        resolveCacheDirectory(
+            stage = "remote",
+            label = "remote PDF cache",
+        ) { File(cacheDirectories.documents(), "remote") }
     }
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
@@ -230,11 +240,7 @@ class PdfDocumentRepository(
         }.getOrNull()
     }
     private val bitmapCache = createBitmapCache()
-    private val bitmapPool = BitmapPool(
-        maxBytes = bitmapPoolMaxBytes,
-        reportInterval = BITMAP_POOL_REPORT_INTERVAL,
-        onSnapshot = ::reportBitmapPoolMetrics,
-    )
+    private val bitmapPool = createBitmapPool()
     private val _bitmapMemoryStats = MutableStateFlow(
         BitmapMemoryStats(
             currentBytes = 0L,
@@ -249,6 +255,9 @@ class PdfDocumentRepository(
         warnThresholdBytes = bitmapMemoryWarningThreshold,
         criticalThresholdBytes = bitmapMemoryCriticalThreshold,
     )
+    private val _cacheFallbackActive = MutableStateFlow(false)
+    val cacheFallbackActive: StateFlow<Boolean> = _cacheFallbackActive.asStateFlow()
+
     private val pageSizeCache = SparseArray<Size>()
     private val pageSizeLock = Mutex()
     private val openSession = MutableStateFlow<PdfDocumentSession?>(null)
@@ -350,16 +359,24 @@ class PdfDocumentRepository(
     }
 
     init {
-        cacheDirectories.ensureSubdirectories()
+        runCatching {
+            cacheDirectories.ensureSubdirectories()
+        }.onFailure { throwable ->
+            reportCacheInitializationFailure("directories", throwable)
+        }
     }
 
     private var repairedDocumentFile: File? = null
 
     private fun File.ensureCacheDirectory(label: String) {
-        if (!exists() && !mkdirs()) {
-            NovaLog.w(TAG, "Unable to create $label at ${absolutePath}")
-        } else if (exists() && !isDirectory) {
-            NovaLog.w(TAG, "$label path is not a directory: ${absolutePath}")
+        runCatching {
+            if (!exists() && !mkdirs()) {
+                NovaLog.w(TAG, "Unable to create $label at ${absolutePath}")
+            } else if (exists() && !isDirectory) {
+                NovaLog.w(TAG, "$label path is not a directory: ${absolutePath}")
+            }
+        }.onFailure { throwable ->
+            reportCacheInitializationFailure("directory_$label", throwable)
         }
     }
 
@@ -1954,7 +1971,72 @@ class PdfDocumentRepository(
         bitmapMemoryTracker.onReleased(bytes)
     }
 
-    private fun createBitmapCache(): BitmapCache = LruBitmapCache(maxCacheBytes)
+    private fun createBitmapCache(): BitmapCache {
+        return runCatching { LruBitmapCache(maxCacheBytes) }
+            .getOrElse { throwable ->
+                reportCacheInitializationFailure("bitmap_cache", throwable)
+                NoOpBitmapCache()
+            }
+    }
+
+    private fun createBitmapPool(): BitmapPoolHandle {
+        return runCatching {
+            ActiveBitmapPool(
+                maxBytes = bitmapPoolMaxBytes,
+                reportInterval = BITMAP_POOL_REPORT_INTERVAL,
+                onSnapshot = ::reportBitmapPoolMetrics,
+            )
+        }.getOrElse { throwable ->
+            reportCacheInitializationFailure("bitmap_pool", throwable)
+            NoOpBitmapPool()
+        }
+    }
+
+    private fun resolveCacheDirectory(stage: String, label: String, builder: () -> File): File {
+        val primary = runCatching(builder).getOrElse { throwable ->
+            reportCacheInitializationFailure(stage, throwable)
+            null
+        }
+        val directory = primary ?: createFallbackDirectory(stage)
+        directory.ensureCacheDirectory(label)
+        return directory
+    }
+
+    private fun createFallbackDirectory(stage: String): File {
+        val fallbackRoot = runCatching { appContext.cacheDir }.getOrElse { cacheError ->
+            reportCacheInitializationFailure("${stage}_fallback_root", cacheError)
+            runCatching { appContext.filesDir }.getOrElse { filesError ->
+                reportCacheInitializationFailure("${stage}_fallback_files", filesError)
+                File(appContext.applicationInfo.dataDir)
+            }
+        }
+        return File(fallbackRoot, "pdf-fallback/$stage")
+    }
+
+    private fun reportCacheInitializationFailure(stage: String, throwable: Throwable) {
+        val alreadyActive = _cacheFallbackActive.value
+        _cacheFallbackActive.value = true
+        val metadata = mapOf(
+            "stage" to stage,
+        )
+        crashReporter?.recordNonFatal(throwable, metadata)
+        crashReporter?.logBreadcrumb("render_cache_fallback:$stage")
+        val baseFields = logFields(operation = "cacheInit")
+        val stageFields = baseFields + field("stage", stage)
+        NovaLog.e(
+            TAG,
+            "Render cache initialization failed during $stage; falling back to safe defaults",
+            throwable,
+            stageFields
+        )
+        if (!alreadyActive) {
+            NovaLog.w(
+                TAG,
+                "Render cache fallback active",
+                fields = stageFields + field("activated", true)
+            )
+        }
+    }
 
     private fun clearBitmapCacheLocked() {
         val bitmaps = bitmapCache.values().toList()
@@ -2205,6 +2287,22 @@ class PdfDocumentRepository(
         protected abstract fun trimInternal(fraction: Float)
     }
 
+    private inner class NoOpBitmapCache : BitmapCache() {
+        override fun getInternal(key: PageBitmapKey): Bitmap? = null
+
+        override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
+            // Intentionally drop the bitmap; caller retains ownership.
+        }
+
+        override fun valuesInternal(): Collection<Bitmap> = emptyList()
+
+        override fun clearInternal() = Unit
+
+        override fun cleanUpInternal() = Unit
+
+        override fun trimInternal(fraction: Float) = Unit
+    }
+
     private inner class BitmapMemoryTracker(
         private val warnThresholdBytes: Long,
         private val criticalThresholdBytes: Long,
@@ -2269,11 +2367,11 @@ class PdfDocumentRepository(
         }
     }
 
-    private inner class BitmapPool(
+    private inner class ActiveBitmapPool(
         maxBytes: Long,
         private val reportInterval: Int,
         private val onSnapshot: (BitmapPoolSnapshot) -> Unit,
-    ) {
+    ) : BitmapPoolHandle {
         private val maxPoolBytes = maxBytes.coerceAtLeast(0L)
         private val mutex = Mutex()
         private val buckets = java.util.TreeMap<Int, ArrayDeque<Bitmap>>()
@@ -2282,7 +2380,7 @@ class PdfDocumentRepository(
         private var totalBytes: Long = 0
         private var bitmapCount: Int = 0
 
-        fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap? {
+        override fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap? {
             if (maxPoolBytes <= 0L) {
                 metrics.onAcquire(hit = false, totalBytes = 0L, poolSize = 0)
                 return null
@@ -2301,7 +2399,7 @@ class PdfDocumentRepository(
             return bitmap
         }
 
-        fun release(bitmap: Bitmap): Boolean {
+        override fun release(bitmap: Bitmap): Boolean {
             if (maxPoolBytes <= 0L) {
                 metrics.onRelease(false, totalBytes = 0L, poolSize = 0)
                 return false
@@ -2343,11 +2441,11 @@ class PdfDocumentRepository(
             return accepted
         }
 
-        fun snapshotState(): BitmapPoolState = mutex.withLockBlocking(this) {
+        override fun snapshotState(): BitmapPoolState = mutex.withLockBlocking(this) {
             BitmapPoolState(bitmapCount = bitmapCount, totalBytes = totalBytes)
         }
 
-        fun clear() {
+        override fun clear() {
             val drained = mutableListOf<Bitmap>()
             var evicted = 0
             mutex.withLockBlocking(this) {
@@ -2369,7 +2467,7 @@ class PdfDocumentRepository(
             drained.forEach(::destroyBitmap)
         }
 
-        fun forceReport() {
+        override fun forceReport() {
             val (totalBytesSnapshot, poolSizeSnapshot) = mutex.withLockBlocking(this) {
                 totalBytes to bitmapCount
             }
@@ -2425,6 +2523,32 @@ class PdfDocumentRepository(
             val bytesPerPixel = bytesPerPixel(config)
             val total = (pixels * bytesPerPixel).coerceAtMost(Int.MAX_VALUE.toLong())
             return total.toInt()
+        }
+    }
+
+    private inner class NoOpBitmapPool : BitmapPoolHandle {
+        override fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap? = null
+
+        override fun release(bitmap: Bitmap): Boolean = false
+
+        override fun snapshotState(): BitmapPoolState = BitmapPoolState(bitmapCount = 0, totalBytes = 0L)
+
+        override fun clear() = Unit
+
+        override fun forceReport() {
+            reportBitmapPoolMetrics(
+                BitmapPoolSnapshot(
+                    requests = 0,
+                    hits = 0,
+                    misses = 0,
+                    releases = 0,
+                    rejects = 0,
+                    evictions = 0,
+                    poolSize = 0,
+                    poolBytes = 0L,
+                    maxPoolBytes = 0L,
+                )
+            )
         }
     }
 

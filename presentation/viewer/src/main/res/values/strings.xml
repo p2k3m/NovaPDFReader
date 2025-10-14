@@ -136,6 +136,7 @@
     <string name="error_pdf_permission">NovaPDF Reader doesn\'t have permission to read this file.</string>
     <string name="error_document_io_issue">We couldn\'t access the document. Check your connection or file permissions and try again.</string>
     <string name="error_document_render_limit">NovaPDF Reader ran out of memory while loading this PDF. Close other apps or restart the device, then try again.</string>
+    <string name="error_render_cache_unavailable">Render caches failed to initialize. Performance may be degraded.</string>
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_remote_open_failed_after_retries">Download failed after multiple attempts. Check your connection and try again.</string>
@@ -181,6 +182,8 @@
     <string name="dev_options_diagnostics_description">Show frame timing, render queue depth, and memory metrics while reading.</string>
     <string name="dev_options_caches_label">Render caches</string>
     <string name="dev_options_caches_description">Disable caches to stress-test rendering paths and memory pressure handling.</string>
+    <string name="dev_options_caches_fallback_description">Render caches were disabled automatically after a startup failure.</string>
+    <string name="dev_options_caches_fallback_hint">Caches are locked off until the app restarts. Inspect crash logs for the initialization failure.</string>
     <string name="dev_options_delay_label">Artificial main thread delay</string>
     <string name="dev_options_delay_description">Periodically block the UI thread to reproduce ANR watchdog behavior. Use only for local debugging.</string>
     <string name="dev_options_debug_only_hint">Artificial delays are only available on debug builds.</string>

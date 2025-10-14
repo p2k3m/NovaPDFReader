@@ -42,6 +42,7 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -160,7 +161,31 @@ class PdfViewerViewModelCacheAndErrorTest {
         assertEquals(fallback, fallbackResult)
     }
 
-    private fun createViewModel(): PdfViewerViewModel {
+    @Test
+    fun `cache fallback surfaces UI notification`() = runTest {
+        val cacheFallback = MutableStateFlow(false)
+        val viewModel = createViewModel(cacheFallback)
+        advanceUntilIdle()
+
+        val messages = mutableListOf<Int>()
+        val job = launch {
+            viewModel.messageEvents.collect { message ->
+                messages += message.messageRes
+            }
+        }
+
+        cacheFallback.value = true
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.renderCacheFallbackActive)
+        assertTrue(messages.contains(R.string.error_render_cache_unavailable))
+
+        job.cancel()
+    }
+
+    private fun createViewModel(
+        cacheFallback: MutableStateFlow<Boolean> = MutableStateFlow(false),
+    ): PdfViewerViewModel {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val annotationRepository = mock<AnnotationRepository>()
         val pdfRepository = mock<PdfDocumentRepository>()
@@ -190,6 +215,7 @@ class PdfViewerViewModelCacheAndErrorTest {
         whenever(pdfRepository.session).thenReturn(sessionFlow)
         whenever(pdfRepository.outline).thenReturn(outlineFlow)
         whenever(pdfRepository.bitmapMemory).thenReturn(bitmapStats)
+        whenever(pdfRepository.cacheFallbackActive).thenReturn(cacheFallback)
 
         val indexingState = MutableStateFlow<SearchIndexingState>(SearchIndexingState.Idle)
         whenever(searchCoordinator.indexingState).thenReturn(indexingState)
