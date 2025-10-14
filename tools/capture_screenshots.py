@@ -15,8 +15,9 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 SAFE_PUNCTUATION = {".", "-", "_"}
 MULTIPLE_UNDERSCORES = re.compile(r"_+")
@@ -151,6 +152,14 @@ class HarnessContext:
         self.ready_flags: List[str] = []
         self.done_flags: List[str] = []
         self.capture_completed: bool = False
+        self.system_crash_detected: bool = False
+
+    def observe_line(self, line: str) -> None:
+        stripped = line.strip()
+        if "System has crashed" in stripped:
+            self.system_crash_detected = True
+        if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
+            self.system_crash_detected = True
 
     def maybe_collect_ready_flag(self, line: str) -> None:
         match = re.search(r"Writing screenshot ready flag to (.+)", line)
@@ -242,31 +251,32 @@ def signal_completion(args: argparse.Namespace, ctx: HarnessContext) -> None:
             )
 
 
-def stream_instrumentation_output(process: subprocess.Popen) -> Iterable[str]:
+def stream_instrumentation_output(
+    process: subprocess.Popen, ctx: HarnessContext
+) -> Iterable[str]:
     assert process.stdout is not None
     for line in process.stdout:
         sys.stdout.write(line)
+        ctx.observe_line(line)
         yield line
 
 
-def main() -> int:
-    args = parse_args()
+def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessContext]:
     ctx = HarnessContext()
-
     process: Optional[subprocess.Popen] = None
     try:
         process = launch_instrumentation(args)
     except Exception as error:  # pragma: no cover - defensive
         print(f"Failed to start instrumentation: {error}", file=sys.stderr)
-        return 1
+        return 1, ctx
 
     if process is None or process.stdout is None:
         print("Instrumentation process failed to start", file=sys.stderr)
-        return 1
+        return 1, ctx
 
     return_code: Optional[int] = None
     try:
-        for line in stream_instrumentation_output(process):
+        for line in stream_instrumentation_output(process, ctx):
             ctx.maybe_collect_package(line)
             ctx.maybe_collect_ready_flag(line)
             ctx.maybe_collect_done_flags(line)
@@ -289,24 +299,73 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         process.kill()
         print("Instrumentation timed out", file=sys.stderr)
-        return 1
+        return 1, ctx
     finally:
         if process and process.stdout:
             process.stdout.close()
 
     if return_code is None:
         print("Instrumentation terminated unexpectedly", file=sys.stderr)
-        return 1
+        return 1, ctx
 
     if return_code != 0:
         print(f"Instrumentation exited with code {return_code}", file=sys.stderr)
-        return return_code
+        return return_code, ctx
 
     if not ctx.capture_completed:
         print("Did not capture any screenshots", file=sys.stderr)
-        return 1
+        return 1, ctx
 
-    return 0
+    return 0, ctx
+
+
+def wait_for_activity_manager(args: argparse.Namespace, timeout: int = 300) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            adb_command(args, "wait-for-device", text=False)
+        except subprocess.CalledProcessError:
+            time.sleep(5)
+            continue
+
+        try:
+            status = adb_command_output(
+                args, "shell", "service", "check", "activity"
+            ).strip()
+        except subprocess.CalledProcessError:
+            status = ""
+        if status.endswith(": found"):
+            return True
+        time.sleep(5)
+    return False
+
+
+def main() -> int:
+    args = parse_args()
+
+    max_system_crash_retries = 1
+
+    last_exit_code = 1
+    for attempt in range(max_system_crash_retries + 1):
+        exit_code, ctx = run_instrumentation_once(args)
+        last_exit_code = exit_code
+        if exit_code == 0:
+            return 0
+
+        if ctx.system_crash_detected and attempt < max_system_crash_retries:
+            print(
+                "Detected system server crash during instrumentation; waiting for recovery before retrying",
+                file=sys.stderr,
+            )
+            if wait_for_activity_manager(args):
+                continue
+            print(
+                "Unable to verify Activity Manager service after system crash; aborting",
+                file=sys.stderr,
+            )
+            break
+
+    return last_exit_code
 
 
 if __name__ == "__main__":
