@@ -85,6 +85,7 @@ interface PdfDocumentUseCase {
     val outline: StateFlow<List<PdfOutlineNode>>
     val renderProgress: StateFlow<PdfRenderProgress>
     val bitmapMemory: StateFlow<BitmapMemoryStats>
+    val cacheFallbackActive: StateFlow<Boolean>
 
     fun prefetchPages(indices: List<Int>, targetWidth: Int)
     suspend fun getPageSize(pageIndex: Int): Size?
@@ -104,6 +105,8 @@ class DefaultPdfDocumentUseCase @Inject constructor(
         get() = repository.renderProgress
     override val bitmapMemory: StateFlow<BitmapMemoryStats>
         get() = repository.bitmapMemory
+    override val cacheFallbackActive: StateFlow<Boolean>
+        get() = repository.cacheFallbackActive
 
     override fun prefetchPages(indices: List<Int>, targetWidth: Int) {
         repository.prefetchPages(indices, targetWidth)

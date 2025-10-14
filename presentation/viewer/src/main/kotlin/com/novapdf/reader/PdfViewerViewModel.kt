@@ -137,6 +137,7 @@ data class PdfViewerUiState(
     val devDiagnosticsEnabled: Boolean = BuildConfig.DEBUG,
     val devCachesEnabled: Boolean = true,
     val devArtificialDelayEnabled: Boolean = false,
+    val renderCacheFallbackActive: Boolean = false,
 )
 
 private data class DocumentContext(
@@ -255,6 +256,7 @@ open class PdfViewerViewModel @Inject constructor(
     private val pageCacheLock = Any()
     private val tileCacheLock = Any()
     private val renderCachesEnabled = AtomicBoolean(true)
+    private val cacheFallbackNotified = AtomicBoolean(false)
     private val pageCacheMaxBytes = computeCacheBudget(MAX_PAGE_CACHE_BYTES)
     private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
     private val pageBitmapCache = object : LruCache<PageCacheKey, Bitmap>(pageCacheMaxBytes) {
@@ -430,9 +432,14 @@ open class PdfViewerViewModel @Inject constructor(
                 context.copy(isUiUnderLoad = uiUnderLoad)
             }
 
-            contextFlow.combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
-                context to bitmapMemory
-            }.collect { (context, bitmapMemory) ->
+            contextFlow
+                .combine(documentUseCase.bitmapMemory) { context, bitmapMemory ->
+                    context to bitmapMemory
+                }
+                .combine(documentUseCase.cacheFallbackActive) { (context, bitmapMemory), cacheFallback ->
+                    Triple(context, bitmapMemory, cacheFallback)
+                }
+                .collect { (context, bitmapMemory, cacheFallback) ->
                 val session = context.session
                 recomputePrefetchEnabled(session)
                 uiUnderLoad = context.isUiUnderLoad
@@ -444,6 +451,12 @@ open class PdfViewerViewModel @Inject constructor(
                     emptyList()
                 }
                 val previous = _uiState.value
+                if (cacheFallback && cacheFallbackNotified.compareAndSet(false, true)) {
+                    crashReportingUseCase.logBreadcrumb("render_cache_fallback_active_ui")
+                    enqueueMessage(R.string.error_render_cache_unavailable)
+                } else if (!cacheFallback && cacheFallbackNotified.get()) {
+                    cacheFallbackNotified.set(false)
+                }
                 val documentId = session?.documentId
                 if (activeDocumentId != documentId) {
                     clearRenderCaches()
@@ -462,6 +475,7 @@ open class PdfViewerViewModel @Inject constructor(
                     outline = context.outline,
                     renderProgress = context.renderProgress,
                     bitmapMemory = bitmapMemory,
+                    renderCacheFallbackActive = cacheFallback,
                     malformedPages = if (shouldResetMalformed) emptySet() else previous.malformedPages
                 )
                 updateBackgroundWorkState()
@@ -1169,6 +1183,10 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     fun setDevCachesEnabled(enabled: Boolean) {
+        if (_uiState.value.renderCacheFallbackActive) {
+            NovaLog.w(TAG, "Render cache fallback active; cache toggle ignored")
+            return
+        }
         val previous = renderCachesEnabled.getAndSet(enabled)
         if (previous != enabled) {
             NovaLog.i(TAG, "Developer caches toggled", field("enabled", enabled))

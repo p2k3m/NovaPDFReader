@@ -887,6 +887,7 @@ private fun PdfViewerDestinationContainer(
                 stats = state.bitmapMemory,
                 diagnosticsEnabled = state.devDiagnosticsEnabled,
                 cachesEnabled = state.devCachesEnabled,
+                cachesFallbackActive = state.renderCacheFallbackActive,
                 artificialDelayEnabled = state.devArtificialDelayEnabled,
                 onDiagnosticsToggle = onToggleDevDiagnostics,
                 onCachesToggle = onToggleDevCaches,
@@ -1818,6 +1819,7 @@ private fun DevOptionsContent(
     stats: BitmapMemoryStats,
     diagnosticsEnabled: Boolean,
     cachesEnabled: Boolean,
+    cachesFallbackActive: Boolean,
     artificialDelayEnabled: Boolean,
     onDiagnosticsToggle: (Boolean) -> Unit,
     onCachesToggle: (Boolean) -> Unit,
@@ -1910,9 +1912,13 @@ private fun DevOptionsContent(
                 )
                 DevOptionToggleRow(
                     label = stringResource(id = R.string.dev_options_caches_label),
-                    description = stringResource(id = R.string.dev_options_caches_description),
+                    description = if (cachesFallbackActive) {
+                        stringResource(id = R.string.dev_options_caches_fallback_description)
+                    } else {
+                        stringResource(id = R.string.dev_options_caches_description)
+                    },
                     checked = cachesEnabled,
-                    enabled = true,
+                    enabled = !cachesFallbackActive,
                     onToggle = { value ->
                         hapticFeedbackManager.onToggleChange(value)
                         onCachesToggle(value)
@@ -1924,6 +1930,13 @@ private fun DevOptionsContent(
                         )
                     }
                 )
+                if (cachesFallbackActive) {
+                    Text(
+                        text = stringResource(id = R.string.dev_options_caches_fallback_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 val debugAvailable = BuildConfig.DEBUG
                 DevOptionToggleRow(
                     label = stringResource(id = R.string.dev_options_delay_label),
