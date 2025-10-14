@@ -517,9 +517,33 @@ class ScreenshotHarnessTest {
             .distinctBy { it.absolutePath }
 
         if (resolvedDirectories.isEmpty()) {
-            throw IllegalStateException(
-                "Instrumentation cache directory unavailable for screenshot handshake"
+            logHarnessWarn(
+                "Primary cache directory probes failed for screenshot handshake; attempting instrumentation cache fallback"
             )
+
+            val fallbackDirectories = buildList {
+                add(instrumentation.context.cacheDir)
+                add(instrumentation.context.applicationContext?.cacheDir)
+                add(instrumentation.targetContext.cacheDir)
+                add(instrumentation.targetContext.applicationContext?.cacheDir)
+            }
+                .filterNotNull()
+                .filter(::prepareCacheDirectory)
+                .mapNotNull { directory ->
+                    runCatching { directory.canonicalFile }.getOrElse { directory }
+                }
+                .distinctBy { it.absolutePath }
+
+            if (fallbackDirectories.isEmpty()) {
+                throw IllegalStateException(
+                    "Instrumentation cache directory unavailable for screenshot handshake"
+                )
+            }
+
+            logHarnessInfo(
+                "Resolved screenshot handshake cache directories ${fallbackDirectories.joinToString { it.absolutePath }} (fallback)"
+            )
+            return fallbackDirectories
         }
 
         logHarnessInfo(
