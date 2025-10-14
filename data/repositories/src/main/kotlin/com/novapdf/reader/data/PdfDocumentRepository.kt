@@ -90,7 +90,6 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
 private const val MAX_BITMAP_DIMENSION = 8_192
-private const val PRE_REPAIR_MIN_SIZE_BYTES = 2L * 1024L * 1024L
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val TAG = "PdfDocumentRepository"
@@ -1350,10 +1349,6 @@ class PdfDocumentRepository(
         }
 
         val size = resolveDocumentSize(uri)
-        if (size != null && size < PRE_REPAIR_MIN_SIZE_BYTES) {
-            return null
-        }
-
         cancellationSignal.throwIfCanceled()
         if (!detectOversizedPageTree(uri, size, cancellationSignal)) {
             return null
