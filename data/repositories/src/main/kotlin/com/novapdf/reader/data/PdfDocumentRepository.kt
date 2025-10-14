@@ -1954,32 +1954,7 @@ class PdfDocumentRepository(
         bitmapMemoryTracker.onReleased(bytes)
     }
 
-    private fun createBitmapCache(): BitmapCache {
-        enforceNoCaffeineOnModernApis()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            NovaLog.w(
-                TAG,
-                "Using LruCache for bitmap caching on API ${Build.VERSION.SDK_INT}; " +
-                    "Caffeine is not supported on Android 9+"
-            )
-        }
-
-        return LruBitmapCache(maxCacheBytes)
-    }
-
-    private fun enforceNoCaffeineOnModernApis() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            return
-        }
-
-        val caffeinePresent = runCatching {
-            Class.forName("com.github.benmanes.caffeine.cache.Caffeine")
-        }.isSuccess
-
-        check(!caffeinePresent) {
-            "Caffeine cache detected on API ${Build.VERSION.SDK_INT}. Remove com.github.ben-manes.caffeine to avoid crashes."
-        }
-    }
+    private fun createBitmapCache(): BitmapCache = LruBitmapCache(maxCacheBytes)
 
     private fun clearBitmapCacheLocked() {
         val bitmaps = bitmapCache.values().toList()
