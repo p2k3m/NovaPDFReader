@@ -1,6 +1,7 @@
 package com.novapdf.reader.data.di
 
 import android.content.Context
+import android.os.Build
 import androidx.room.Room
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.AnnotationRepository
@@ -38,13 +39,19 @@ object RepositoryModule {
         dispatchers: CoroutineDispatchers,
         storageClient: StorageClient,
         cacheDirectories: CacheDirectories,
-    ): PdfDocumentRepository = PdfDocumentRepository(
-        context,
-        ioDispatcher = dispatchers.io,
-        crashReporter = crashReporter,
-        storageClient = storageClient,
-        cacheDirectories = cacheDirectories,
-    )
+    ): PdfDocumentRepository {
+        val repository = PdfDocumentRepository(
+            context,
+            ioDispatcher = dispatchers.io,
+            crashReporter = crashReporter,
+            storageClient = storageClient,
+            cacheDirectories = cacheDirectories,
+        )
+
+        enforceNoCaffeineCaches(repository)
+
+        return repository
+    }
 
     @Provides
     @Singleton
@@ -83,5 +90,31 @@ object RepositoryModule {
         @ApplicationContext context: Context,
     ): DocumentMaintenanceScheduler = DocumentMaintenanceScheduler(context).also {
         it.ensurePeriodicSync()
+    }
+
+    private fun enforceNoCaffeineCaches(repository: PdfDocumentRepository) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+
+        val offendingField = repository::class.java.declaredFields.firstNotNullOfOrNull { field ->
+            field.isAccessible = true
+            val declaredType = field.type.name
+            if (declaredType.contains("caffeine", ignoreCase = true)) {
+                field.name to declaredType
+            } else {
+                val valueType = runCatching { field.get(repository)?.javaClass?.name }.getOrNull()
+                if (valueType?.contains("caffeine", ignoreCase = true) == true) {
+                    field.name to valueType
+                } else {
+                    null
+                }
+            }
+        }
+
+        check(offendingField == null) {
+            val (fieldName, typeName) = offendingField!!
+            "Caffeine caches are not supported on API 28+. Field '$fieldName' is backed by $typeName; replace it with an Android-safe alternative."
+        }
     }
 }
