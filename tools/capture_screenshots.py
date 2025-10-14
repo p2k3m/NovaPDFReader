@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 SAFE_PUNCTUATION = {".", "-", "_"}
 MULTIPLE_UNDERSCORES = re.compile(r"_+")
@@ -80,7 +80,9 @@ def adb_command_output(args: argparse.Namespace, *cmd: str) -> str:
     return result.stdout
 
 
-def launch_instrumentation(args: argparse.Namespace) -> subprocess.Popen:
+def launch_instrumentation(
+    args: argparse.Namespace, extra_args: Iterable[Tuple[str, str]]
+) -> subprocess.Popen:
     command: List[str] = [args.adb]
     if args.serial:
         command.extend(["-s", args.serial])
@@ -100,10 +102,7 @@ def launch_instrumentation(args: argparse.Namespace) -> subprocess.Popen:
         "class",
         args.test,
     ]
-    for item in args.extra_arg:
-        if "=" not in item:
-            raise ValueError(f"Invalid --extra-arg entry: {item!r}")
-        key, value = item.split("=", 1)
+    for key, value in extra_args:
         instrumentation_cmd.extend(["-e", key, value])
     instrumentation_cmd.append(args.instrumentation)
     command.extend(instrumentation_cmd)
@@ -146,13 +145,17 @@ def _sanitize(value: str) -> str:
     return normalized.strip("_.")
 
 
+PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
+
+
 class HarnessContext:
-    def __init__(self) -> None:
-        self.package: Optional[str] = None
+    def __init__(self, fallback_package: Optional[str] = None) -> None:
+        self.package: Optional[str] = fallback_package
         self.ready_flags: List[str] = []
         self.done_flags: List[str] = []
         self.capture_completed: bool = False
         self.system_crash_detected: bool = False
+        self._sanitized_package_warning_emitted: bool = False
 
     def observe_line(self, line: str) -> None:
         stripped = line.strip()
@@ -179,7 +182,20 @@ class HarnessContext:
     def maybe_collect_package(self, line: str) -> None:
         match = re.search(r"Resolved screenshot harness package name: (.+)", line)
         if match:
-            self.package = match.group(1).strip()
+            candidate = match.group(1).strip()
+            if not candidate:
+                return
+            if not PACKAGE_NAME_PATTERN.match(candidate):
+                if not self._sanitized_package_warning_emitted:
+                    fallback = self.package or "<unknown>"
+                    print(
+                        "Unable to determine screenshot harness package from instrumentation output; "
+                        f"continuing with {fallback}",
+                        file=sys.stderr,
+                    )
+                    self._sanitized_package_warning_emitted = True
+                return
+            self.package = candidate
 
 
 def read_ready_payload(args: argparse.Namespace, ctx: HarnessContext) -> Optional[str]:
@@ -261,11 +277,57 @@ def stream_instrumentation_output(
         yield line
 
 
+def parse_extra_args(extra_args: Iterable[str]) -> List[Tuple[str, str]]:
+    parsed: List[Tuple[str, str]] = []
+    for item in extra_args:
+        if "=" not in item:
+            raise ValueError(f"Invalid --extra-arg entry: {item!r}")
+        key, value = item.split("=", 1)
+        parsed.append((key, value))
+    return parsed
+
+
+def derive_fallback_package(
+    args: argparse.Namespace, extra_args: Iterable[Tuple[str, str]]
+) -> Optional[str]:
+    extras: Dict[str, str] = {key: value for key, value in extra_args}
+
+    explicit = extras.get("testPackageName")
+    if explicit:
+        explicit = explicit.strip()
+        if explicit:
+            return explicit
+
+    target_instrumentation = extras.get("targetInstrumentation")
+    if target_instrumentation:
+        target_package = target_instrumentation.split("/", 1)[0].strip()
+        if target_package:
+            return target_package
+
+    placeholder = extras.get("novapdfTestAppId")
+    if placeholder:
+        placeholder = placeholder.strip()
+        if placeholder:
+            return placeholder
+
+    instrumentation_component = args.instrumentation.split("/", 1)[0].strip()
+    if instrumentation_component:
+        return instrumentation_component
+
+    return None
+
+
 def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessContext]:
-    ctx = HarnessContext()
+    try:
+        parsed_extra_args = parse_extra_args(args.extra_arg)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 1, HarnessContext()
+
+    ctx = HarnessContext(derive_fallback_package(args, parsed_extra_args))
     process: Optional[subprocess.Popen] = None
     try:
-        process = launch_instrumentation(args)
+        process = launch_instrumentation(args, parsed_extra_args)
     except Exception as error:  # pragma: no cover - defensive
         print(f"Failed to start instrumentation: {error}", file=sys.stderr)
         return 1, ctx
