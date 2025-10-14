@@ -83,6 +83,10 @@ def adb_command_output(args: argparse.Namespace, *cmd: str) -> str:
 def launch_instrumentation(
     args: argparse.Namespace, extra_args: Iterable[Tuple[str, str]]
 ) -> subprocess.Popen:
+    if not ensure_instrumentation_available(args):
+        raise RuntimeError(
+            "Screenshot harness instrumentation is not installed on the target device"
+        )
     command: List[str] = [args.adb]
     if args.serial:
         command.extend(["-s", args.serial])
@@ -114,6 +118,46 @@ def launch_instrumentation(
         bufsize=1,
     )
     return process
+
+
+def ensure_instrumentation_available(args: argparse.Namespace) -> bool:
+    component = args.instrumentation.strip()
+    if not component:
+        return True
+
+    if "/" in component:
+        package, runner = component.split("/", 1)
+    else:
+        package, runner = component, ""
+    package = package.strip()
+    runner = runner.strip()
+
+    if not package:
+        return True
+
+    try:
+        output = adb_command_output(
+            args, "shell", "pm", "list", "instrumentation", package
+        )
+    except subprocess.CalledProcessError:
+        output = ""
+
+    component_signature = component if runner else f"{package}/"
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("instrumentation:"):
+            continue
+        if component_signature in stripped:
+            return True
+
+    message_lines = [
+        "Unable to locate the screenshot harness instrumentation on the device.",
+        "Install the debug APKs before capturing screenshots, for example:",
+        "  ./gradlew :app:installDebug :app:installDebugAndroidTest",
+    ]
+    for line in message_lines:
+        print(line, file=sys.stderr)
+    return False
 
 
 def sanitize_cache_name(value: str, fallback: Optional[str] = None) -> str:
