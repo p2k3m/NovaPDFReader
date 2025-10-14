@@ -1,5 +1,6 @@
 
 import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.dsl.ManagedVirtualDevice
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.Action
 import org.gradle.api.DefaultTask
@@ -352,6 +353,29 @@ android {
         }
         animationsDisabled = false
         execution = "ANDROIDX_TEST_ORCHESTRATOR"
+
+        managedDevices {
+            devices {
+                maybeCreate<ManagedVirtualDevice>("pixel4Api30").apply {
+                    device = "Pixel 4"
+                    apiLevel = 30
+                    systemImageSource = "google"
+                }
+
+                maybeCreate<ManagedVirtualDevice>("pixel6Api32").apply {
+                    device = "Pixel 6"
+                    apiLevel = 32
+                    systemImageSource = "google"
+                }
+
+                maybeCreate<ManagedVirtualDevice>("pixel8Api34").apply {
+                    device = "Pixel 8"
+                    apiLevel = 34
+                    systemImageSource = "google"
+                }
+            }
+
+        }
     }
 
     adbOptions {
@@ -390,6 +414,21 @@ android {
 
 jacoco {
     toolVersion = "0.8.11"
+}
+
+afterEvaluate {
+    val managedDeviceVariants = listOf("pixel4Api30", "pixel6Api32", "pixel8Api34")
+    val debugAndroidTestTasks = managedDeviceVariants.mapNotNull { deviceName ->
+        tasks.namedOrNull<Task>("${deviceName}DebugAndroidTest")
+    }
+
+    if (debugAndroidTestTasks.isNotEmpty()) {
+        tasks.register("nativeDependencyAndroidTestMatrix") {
+            group = "verification"
+            description = "Runs the debug androidTest suite across managed devices for API 30, 32, and 34."
+            dependsOn(debugAndroidTestTasks)
+        }
+    }
 }
 
 val androidExtension = extensions.getByType<ApplicationExtension>()
