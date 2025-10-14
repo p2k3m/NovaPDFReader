@@ -2815,6 +2815,32 @@ jobs:
           }
           trap finish_harness EXIT
 
+          wait_for_activity_manager() {
+            local elapsed=0
+            local timeout=$((5 * 60))
+            while true; do
+              if adb wait-for-device >/dev/null 2>&1; then
+                local status
+                status=$(adb shell service check activity 2>/dev/null | tr -d '\r' | tr -d '\n')
+                if printf '%s\n' "$status" | grep -qE ': found$'; then
+                  return 0
+                fi
+              fi
+
+              if [ $elapsed -ge $timeout ]; then
+                echo "::error::Timed out waiting for Activity Manager service before launching screenshot harness" >&2
+                collect_harness_logcat
+                collect_app_crash_logs
+                exit 1
+              fi
+
+              sleep 5
+              elapsed=$((elapsed + 5))
+            done
+          }
+
+          wait_for_activity_manager
+
           echo "Launching screenshot harness instrumentation to load thousand-page PDF"
           adb logcat -c >/dev/null 2>&1 || true
           adb shell am instrument -w -r \
