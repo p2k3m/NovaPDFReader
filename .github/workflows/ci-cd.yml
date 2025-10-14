@@ -2810,31 +2810,8 @@ jobs:
             local previous="$HARNESS_RUN_AS_PACKAGE"
 
             while [ $elapsed -lt $timeout ]; do
-              if [ -f "$HARNESS_LOG" ]; then
-                resolved=$(python3 - "$HARNESS_LOG" <<'PY'
-import sys
-
-if len(sys.argv) < 2:
-    sys.exit(0)
-
-path = sys.argv[1]
-target = "ScreenshotHarness: Resolved screenshot harness package name:"
-package = ""
-
-try:
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if target in line:
-                candidate = line.split(target, 1)[1].strip()
-                if candidate:
-                    package = candidate.split()[0]
-except Exception:
-    package = ""
-
-if package:
-    sys.stdout.write(package)
-PY
-)
+                if [ -f "$HARNESS_LOG" ]; then
+                  resolved=$(python3 -c $'import sys\n\nif len(sys.argv) < 2:\n    sys.exit(0)\n\npath = sys.argv[1]\ntarget = "ScreenshotHarness: Resolved screenshot harness package name:"\npackage = ""\n\ntry:\n    with open(path, "r", encoding="utf-8", errors="replace") as handle:\n        for line in handle:\n            if target in line:\n                candidate = line.split(target, 1)[1].strip()\n                if candidate:\n                    package = candidate.split()[0]\nexcept Exception:\n    package = ""\n\nif package:\n    sys.stdout.write(package)\n' "$HARNESS_LOG")
                 resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
                 if [ -n "$resolved" ]; then
                   if [ "$resolved" != "$HARNESS_RUN_AS_PACKAGE" ]; then
