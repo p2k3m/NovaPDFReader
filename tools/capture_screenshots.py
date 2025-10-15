@@ -241,14 +241,18 @@ PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 
 
 class HarnessContext:
-    def __init__(self, fallback_package: Optional[str] = None) -> None:
-        self.package: Optional[str] = fallback_package
+    def __init__(self, fallback_package: Optional[str] = None, *, args: Optional[argparse.Namespace] = None) -> None:
+        self._args: Optional[argparse.Namespace] = args
+        self.package: Optional[str] = None
         self.ready_flags: List[str] = []
         self.done_flags: List[str] = []
         self.capture_completed: bool = False
         self.system_crash_detected: bool = False
         self._sanitized_package_warning_emitted: bool = False
         self._system_crash_guidance_emitted: bool = False
+
+        if fallback_package:
+            self._maybe_set_package(fallback_package, suppress_warning=True)
 
     def observe_line(self, line: str) -> None:
         stripped = line.strip()
@@ -301,17 +305,80 @@ class HarnessContext:
             candidate = match.group(1).strip()
             if not candidate:
                 return
-            if not PACKAGE_NAME_PATTERN.match(candidate):
-                if not self._sanitized_package_warning_emitted:
-                    fallback = self.package or "<unknown>"
+            if self._maybe_set_package(candidate):
+                return
+            if not self._sanitized_package_warning_emitted:
+                fallback = self.package or "<unknown>"
+                print(
+                    "Unable to determine screenshot harness package from instrumentation output; "
+                    f"continuing with {fallback}",
+                    file=sys.stderr,
+                )
+                self._sanitized_package_warning_emitted = True
+
+    def _maybe_set_package(self, candidate: str, *, suppress_warning: bool = False) -> bool:
+        normalized = self._normalize_package(candidate)
+        if normalized:
+            self.package = normalized
+            return True
+        if not suppress_warning and not self._sanitized_package_warning_emitted:
+            fallback = self.package or candidate or "<unknown>"
+            print(
+                "Unable to determine screenshot harness package from instrumentation output; "
+                f"continuing with {fallback}",
+                file=sys.stderr,
+            )
+            self._sanitized_package_warning_emitted = True
+        return False
+
+    def _normalize_package(self, candidate: str) -> Optional[str]:
+        value = candidate.strip()
+        if not value:
+            return None
+        if PACKAGE_NAME_PATTERN.match(value):
+            return value
+        if "*" in value:
+            resolved = self._resolve_sanitized_package(value)
+            if resolved and PACKAGE_NAME_PATTERN.match(resolved):
+                if resolved != value:
                     print(
-                        "Unable to determine screenshot harness package from instrumentation output; "
-                        f"continuing with {fallback}",
+                        f"Resolved sanitized screenshot harness package {value} to {resolved}",
                         file=sys.stderr,
                     )
-                    self._sanitized_package_warning_emitted = True
-                return
-            self.package = candidate
+                return resolved
+        sanitized = re.sub(r"[^A-Za-z0-9._]", "", value)
+        if sanitized and PACKAGE_NAME_PATTERN.match(sanitized):
+            return sanitized
+        return None
+
+    def _resolve_sanitized_package(self, pattern: str) -> Optional[str]:
+        if self._args is None:
+            return None
+        glob = re.escape(pattern).replace(r"\*", ".*")
+        try:
+            output = adb_command_output(self._args, "shell", "pm", "list", "packages")
+        except subprocess.CalledProcessError:
+            return None
+
+        regex = re.compile(f"^{glob}$")
+        matches: List[str] = []
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("package:"):
+                continue
+            package_name = stripped[len("package:") :].strip()
+            if regex.fullmatch(package_name):
+                matches.append(package_name)
+
+        if not matches:
+            return None
+        if len(matches) > 1:
+            suffix = pattern.split("*")[-1]
+            if suffix:
+                for match in matches:
+                    if match.endswith(suffix):
+                        return match
+        return matches[0]
 
 
 def read_ready_payload(args: argparse.Namespace, ctx: HarnessContext) -> Optional[str]:
@@ -441,13 +508,19 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         parsed_extra_args = parse_extra_args(args.extra_arg)
     except ValueError as error:
         print(str(error), file=sys.stderr)
-        return 1, HarnessContext()
+        return 1, HarnessContext(args=args)
 
     component = resolve_instrumentation_component(args)
     if component is None:
-        return 1, HarnessContext(derive_fallback_package(args, parsed_extra_args))
+        return 1, HarnessContext(
+            derive_fallback_package(args, parsed_extra_args),
+            args=args,
+        )
 
-    ctx = HarnessContext(derive_fallback_package(args, parsed_extra_args, component))
+    ctx = HarnessContext(
+        derive_fallback_package(args, parsed_extra_args, component),
+        args=args,
+    )
     process: Optional[subprocess.Popen] = None
     try:
         process = launch_instrumentation(args, parsed_extra_args, component)
