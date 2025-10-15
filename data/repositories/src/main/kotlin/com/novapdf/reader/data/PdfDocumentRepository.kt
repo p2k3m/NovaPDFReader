@@ -92,6 +92,7 @@ private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
 private const val MAX_BITMAP_DIMENSION = 8_192
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
+private const val PRE_REPAIR_MIN_PAGE_COUNT = 512
 private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
@@ -1480,6 +1481,19 @@ class PdfDocumentRepository(
                 }
             }
         }
+
+        val pageTreeMatcher = PAGE_TREE_COUNT_PATTERN.matcher(contents)
+        while (pageTreeMatcher.find()) {
+            cancellationSignal.throwIfCanceled()
+            val countValue = pageTreeMatcher.group(1)?.toIntOrNull() ?: continue
+            if (countValue >= PRE_REPAIR_MIN_PAGE_COUNT) {
+                NovaLog.i(
+                    TAG,
+                    "Detected large page tree with /Count=$countValue for $uri; preparing repair"
+                )
+                return true
+            }
+        }
         return false
     }
 
@@ -2207,6 +2221,8 @@ class PdfDocumentRepository(
         private const val DEFAULT_PRINT_BUFFER_SIZE = 16 * 1024
         private val KIDS_ARRAY_PATTERN: Pattern = Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
         private val KID_REFERENCE_PATTERN: Pattern = Pattern.compile("\\d+\\s+\\d+\\s+R")
+        private val PAGE_TREE_COUNT_PATTERN: Pattern =
+            Pattern.compile("/Type\\s*/Pages\\b.*?/Count\\s+(\\d+)", Pattern.DOTALL)
     }
 
     private abstract inner class BitmapCache {
