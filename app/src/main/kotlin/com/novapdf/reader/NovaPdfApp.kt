@@ -1,5 +1,6 @@
 package com.novapdf.reader
 
+import android.app.ActivityManager
 import android.app.Application
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
@@ -98,7 +99,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.DEBUG && !ActivityManager.isRunningInTestHarness()) {
             installDebugAnrDetector()
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
@@ -113,6 +114,12 @@ open class NovaPdfApp : Application(), Configuration.Provider {
                     .detectAll()
                     .penaltyDeath()
                     .build()
+            )
+        } else if (BuildConfig.DEBUG) {
+            NovaLog.i(
+                TAG,
+                "Skipping StrictMode death penalties in test harness",
+                field("testHarness", true),
             )
         }
     }
