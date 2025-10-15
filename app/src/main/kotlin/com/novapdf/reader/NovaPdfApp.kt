@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.app.ActivityManager
 import android.app.Application
+import android.os.Build
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -99,7 +100,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
-        if (BuildConfig.DEBUG && !ActivityManager.isRunningInTestHarness()) {
+        if (BuildConfig.DEBUG && !isRunningInTestHarness()) {
             installDebugAnrDetector()
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
@@ -122,6 +123,14 @@ open class NovaPdfApp : Application(), Configuration.Provider {
                 field("testHarness", true),
             )
         }
+    }
+
+    private fun isRunningInTestHarness(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return ActivityManager.isRunningInUserTestHarness()
+        }
+        @Suppress("DEPRECATION")
+        return ActivityManager.isRunningInTestHarness()
     }
 
     override fun onTerminate() {
