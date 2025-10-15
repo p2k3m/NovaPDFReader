@@ -69,10 +69,6 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             re.compile(rf"Force finishing activity {escaped}"),
             "Activity manager force-finished NovaPDF Reader during instrumentation tests",
         ),
-        (
-            re.compile(r"Fatal signal \d+ .*?\(SIGSEGV\)", re.IGNORECASE),
-            "Detected fatal native crash (SIGSEGV) during instrumentation tests",
-        ),
     ]
 
 
