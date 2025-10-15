@@ -632,38 +632,49 @@ class ScreenshotHarnessTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val arguments = InstrumentationRegistry.getArguments()
 
-        val explicit = arguments.getString("testPackageName")?.takeIf { it.isNotBlank() }
-        if (!explicit.isNullOrEmpty()) {
-            return explicit
+        fun selectCandidate(candidate: String?, source: String): String? {
+            val value = candidate?.takeIf { it.isNotBlank() } ?: return null
+            if (PACKAGE_NAME_PATTERN.matches(value)) {
+                return value
+            }
+            logHarnessWarn("Ignoring invalid screenshot harness package name from $source: $value")
+            return null
         }
 
-        val targetInstrumentation = arguments.getString("targetInstrumentation")
-            ?.substringBefore('/')
-            ?.takeIf { it.isNotBlank() }
-        if (!targetInstrumentation.isNullOrEmpty()) {
-            return targetInstrumentation
-        }
+        selectCandidate(arguments.getString("testPackageName"), "testPackageName argument")
+            ?.let { return it }
 
-        val placeholder = arguments.getString("novapdfTestAppId")?.takeIf { it.isNotBlank() }
-        if (!placeholder.isNullOrEmpty()) {
-            return placeholder
-        }
+        selectCandidate(
+            arguments.getString("targetInstrumentation")?.substringBefore('/'),
+            "targetInstrumentation argument"
+        )?.let { return it }
+
+        selectCandidate(arguments.getString("novapdfTestAppId"), "manifest placeholder")
+            ?.let { return it }
 
         val instrumentationPackage = instrumentation.context.packageName
-        if (instrumentationPackage.endsWith(".test")) {
-            return instrumentationPackage
+        if (PACKAGE_NAME_PATTERN.matches(instrumentationPackage)) {
+            if (instrumentationPackage.endsWith(".test")) {
+                return instrumentationPackage
+            }
+        } else {
+            logHarnessWarn("Ignoring invalid instrumentation context package name: $instrumentationPackage")
         }
 
         val targetPackage = instrumentation.targetContext.packageName
-        val derived = if (instrumentationPackage.isNotBlank() &&
-            instrumentationPackage != targetPackage
+        val derived = if (
+            instrumentationPackage.isNotBlank() &&
+            instrumentationPackage != targetPackage &&
+            PACKAGE_NAME_PATTERN.matches(instrumentationPackage)
         ) {
             instrumentationPackage
         } else {
             "$targetPackage.test"
         }
 
-        return derived
+        selectCandidate(derived, "derived fallback")?.let { return it }
+
+        return targetPackage
     }
 
     private fun Context.credentialProtectedStorageContext(): Context {
@@ -1052,6 +1063,7 @@ class ScreenshotHarnessTest {
         private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
         private const val DEVICE_IDLE_TIMEOUT_MS = 10_000L
         private const val TAG = "ScreenshotHarness"
+        private val PACKAGE_NAME_PATTERN = Regex("^[A-Za-z0-9._]+$")
     }
 
     private fun logHarnessInfo(message: String) {
