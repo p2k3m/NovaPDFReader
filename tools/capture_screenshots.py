@@ -248,8 +248,10 @@ class HarnessContext:
         self.done_flags: List[str] = []
         self.capture_completed: bool = False
         self.system_crash_detected: bool = False
+        self.missing_instrumentation_detected: bool = False
         self._sanitized_package_warning_emitted: bool = False
         self._system_crash_guidance_emitted: bool = False
+        self._missing_instrumentation_guidance_emitted: bool = False
 
         if fallback_package:
             self._maybe_set_package(fallback_package, suppress_warning=True)
@@ -260,6 +262,8 @@ class HarnessContext:
             self.system_crash_detected = True
         if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
             self.system_crash_detected = True
+        if "Unable to find instrumentation info for" in stripped:
+            self.missing_instrumentation_detected = True
 
     def maybe_emit_system_crash_guidance(self) -> None:
         if not self.system_crash_detected or self._system_crash_guidance_emitted:
@@ -283,6 +287,23 @@ class HarnessContext:
             file=sys.stderr,
         )
         self._system_crash_guidance_emitted = True
+
+    def maybe_emit_missing_instrumentation_guidance(self) -> None:
+        if not self.missing_instrumentation_detected or self._missing_instrumentation_guidance_emitted:
+            return
+        print(
+            "Screenshot harness instrumentation is not installed on the target device.",
+            file=sys.stderr,
+        )
+        print(
+            "Install the debug APKs before capturing screenshots, for example:",
+            file=sys.stderr,
+        )
+        print(
+            "  ./gradlew :app:installDebug :app:installDebugAndroidTest",
+            file=sys.stderr,
+        )
+        self._missing_instrumentation_guidance_emitted = True
 
     def maybe_collect_ready_flag(self, line: str) -> None:
         match = re.search(r"Writing screenshot ready flag to (.+)", line)
@@ -565,16 +586,19 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     if return_code is None:
         print("Instrumentation terminated unexpectedly", file=sys.stderr)
+        ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
 
     if return_code != 0:
         print(f"Instrumentation exited with code {return_code}", file=sys.stderr)
+        ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         return return_code, ctx
 
     if not ctx.capture_completed:
         print("Did not capture any screenshots", file=sys.stderr)
+        ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
 
