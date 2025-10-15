@@ -248,6 +248,7 @@ class HarnessContext:
         self.capture_completed: bool = False
         self.system_crash_detected: bool = False
         self._sanitized_package_warning_emitted: bool = False
+        self._system_crash_guidance_emitted: bool = False
 
     def observe_line(self, line: str) -> None:
         stripped = line.strip()
@@ -255,6 +256,29 @@ class HarnessContext:
             self.system_crash_detected = True
         if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
             self.system_crash_detected = True
+
+    def maybe_emit_system_crash_guidance(self) -> None:
+        if not self.system_crash_detected or self._system_crash_guidance_emitted:
+            return
+        print(
+            "Android system_server crashed while running the screenshot harness; capture logcat "
+            "artifacts before retrying.",
+            file=sys.stderr,
+        )
+        print(
+            "Helpful steps:",
+            file=sys.stderr,
+        )
+        print("  adb logcat -d > logcat.txt", file=sys.stderr)
+        print(
+            "  tools/check_logcat_for_crashes.py --logcat logcat.txt",
+            file=sys.stderr,
+        )
+        print(
+            "Restart the emulator or device once diagnostics are collected, then rerun the harness.",
+            file=sys.stderr,
+        )
+        self._system_crash_guidance_emitted = True
 
     def maybe_collect_ready_flag(self, line: str) -> None:
         match = re.search(r"Writing screenshot ready flag to (.+)", line)
@@ -460,6 +484,7 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     except subprocess.TimeoutExpired:
         process.kill()
         print("Instrumentation timed out", file=sys.stderr)
+        ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
     finally:
         if process and process.stdout:
@@ -467,14 +492,17 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     if return_code is None:
         print("Instrumentation terminated unexpectedly", file=sys.stderr)
+        ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
 
     if return_code != 0:
         print(f"Instrumentation exited with code {return_code}", file=sys.stderr)
+        ctx.maybe_emit_system_crash_guidance()
         return return_code, ctx
 
     if not ctx.capture_completed:
         print("Did not capture any screenshots", file=sys.stderr)
+        ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
 
     return 0, ctx
