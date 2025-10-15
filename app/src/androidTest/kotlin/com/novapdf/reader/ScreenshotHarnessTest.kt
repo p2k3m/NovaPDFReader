@@ -224,16 +224,24 @@ class ScreenshotHarnessTest {
                 "Writing screenshot ready flag to ${flag.absolutePath} with payload $readyPayload"
             )
         }
-        withContext(Dispatchers.IO) {
-            readyFlags.forEach { flag ->
-                runCatching { writeHandshakeFlag(flag, readyPayload) }
-                    .onFailure { error ->
-                        logHarnessWarn(
-                            "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location",
-                            error
-                        )
-                    }
+        val readyFlagResults = withContext(Dispatchers.IO) {
+            readyFlags.map { flag ->
+                val success = writeHandshakeFlag(flag, readyPayload)
+                if (!success) {
+                    logHarnessWarn(
+                        "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location"
+                    )
+                }
+                success
             }
+        }
+
+        if (readyFlags.isEmpty() || (!readyFlagResults.any { it } && readyFlags.none(::flagExists))) {
+            val error = IllegalStateException(
+                "Screenshot harness failed to publish readiness flag to any cache directory"
+            )
+            logHarnessError(error.message ?: "Screenshot harness failed to publish readiness flag", error)
+            throw error
         }
         logHarnessInfo(
             "Waiting for screenshot harness completion signal at ${doneFlags.joinToString { it.absolutePath }}"
@@ -393,20 +401,17 @@ class ScreenshotHarnessTest {
         }
         directories.forEach { directory ->
             val outputFile = File(directory, CacheFileNames.PERFORMANCE_METRICS_FILE)
-            runCatching { writeHandshakeFlag(outputFile, csv) }
-                .onSuccess {
-                    logHarnessInfo(
-                        "Wrote performance metrics to ${outputFile.absolutePath} " +
-                            "(timeToFirstPage=${report.timeToFirstPageMs}ms peakPss=${report.peakTotalPssKb}KiB " +
-                            "droppedFrames=${report.droppedFrames}/${report.totalFrames})"
-                    )
-                }
-                .onFailure { error ->
-                    logHarnessWarn(
-                        "Unable to write performance metrics to ${outputFile.absolutePath}",
-                        error
-                    )
-                }
+            if (writeHandshakeFlag(outputFile, csv)) {
+                logHarnessInfo(
+                    "Wrote performance metrics to ${outputFile.absolutePath} " +
+                        "(timeToFirstPage=${report.timeToFirstPageMs}ms peakPss=${report.peakTotalPssKb}KiB " +
+                        "droppedFrames=${report.droppedFrames}/${report.totalFrames})"
+                )
+            } else {
+                logHarnessWarn(
+                    "Unable to write performance metrics to ${outputFile.absolutePath}"
+                )
+            }
         }
     }
 
@@ -427,33 +432,27 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun writeHandshakeFlag(flag: File, contents: String) {
+    private fun writeHandshakeFlag(flag: File, contents: String): Boolean {
         val parent = flag.parentFile
         if (parent != null && !ensureHandshakeDirectory(parent)) {
             val error = IOException(
                 "Unable to create directory for handshake flag at ${parent.absolutePath}"
             )
             logHarnessError(error.message ?: "Unable to create handshake directory", error)
-            throw error
+            return false
         }
 
-        try {
+        return try {
             flag.writeText(contents, Charsets.UTF_8)
-            return
+            true
         } catch (error: SecurityException) {
-            if (writeFlagWithRunAs(flag, contents)) {
-                return
-            }
             val wrapped = IOException("Failed to create handshake flag at ${flag.absolutePath}", error)
             logHarnessError(wrapped.message ?: "Failed to create handshake flag", wrapped)
-            throw wrapped
+            writeFlagWithRunAs(flag, contents)
         } catch (error: IOException) {
-            if (writeFlagWithRunAs(flag, contents)) {
-                return
-            }
             val wrapped = IOException("Failed to create handshake flag at ${flag.absolutePath}", error)
             logHarnessError(wrapped.message ?: "Failed to create handshake flag", wrapped)
-            throw wrapped
+            writeFlagWithRunAs(flag, contents)
         }
     }
 
@@ -972,16 +971,19 @@ class ScreenshotHarnessTest {
             }
             logHarnessInfo("Programmatic screenshot saved to ${screenshotFile.absolutePath}")
 
-            withContext(Dispatchers.IO) {
-                doneFlags.forEach { flag ->
-                    runCatching { writeHandshakeFlag(flag, screenshotFile.absolutePath) }
-                        .onFailure { error ->
-                            logHarnessWarn(
-                                "Unable to publish programmatic screenshot completion flag at ${flag.absolutePath}",
-                                error
-                            )
-                        }
+            val publishedFlags = withContext(Dispatchers.IO) {
+                doneFlags.map { flag ->
+                    val success = writeHandshakeFlag(flag, screenshotFile.absolutePath)
+                    if (!success) {
+                        logHarnessWarn(
+                            "Unable to publish programmatic screenshot completion flag at ${flag.absolutePath}"
+                        )
+                    }
+                    success
                 }
+            }
+            if (!publishedFlags.any { it }) {
+                logHarnessWarn("Programmatic screenshot completion flag was not published to any cache directory")
             }
         } catch (error: SecurityException) {
             logHarnessError(
