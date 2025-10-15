@@ -81,9 +81,11 @@ def adb_command_output(args: argparse.Namespace, *cmd: str) -> str:
 
 
 def launch_instrumentation(
-    args: argparse.Namespace, extra_args: Iterable[Tuple[str, str]]
+    args: argparse.Namespace,
+    extra_args: Iterable[Tuple[str, str]],
+    component: str,
 ) -> subprocess.Popen:
-    if not ensure_instrumentation_available(args):
+    if not component:
         raise RuntimeError(
             "Screenshot harness instrumentation is not installed on the target device"
         )
@@ -108,7 +110,7 @@ def launch_instrumentation(
     ]
     for key, value in extra_args:
         instrumentation_cmd.extend(["-e", key, value])
-    instrumentation_cmd.append(args.instrumentation)
+    instrumentation_cmd.append(component)
     command.extend(instrumentation_cmd)
     process = subprocess.Popen(
         command,
@@ -120,44 +122,90 @@ def launch_instrumentation(
     return process
 
 
-def ensure_instrumentation_available(args: argparse.Namespace) -> bool:
-    component = args.instrumentation.strip()
-    if not component:
-        return True
-
-    if "/" in component:
-        package, runner = component.split("/", 1)
-    else:
-        package, runner = component, ""
-    package = package.strip()
-    runner = runner.strip()
-
-    if not package:
-        return True
-
-    try:
-        output = adb_command_output(
-            args, "shell", "pm", "list", "instrumentation", package
-        )
-    except subprocess.CalledProcessError:
-        output = ""
-
-    component_signature = component if runner else f"{package}/"
+def _extract_instrumentation_components(output: str) -> List[str]:
+    components: List[str] = []
     for line in output.splitlines():
         stripped = line.strip()
         if not stripped.startswith("instrumentation:"):
             continue
-        if component_signature in stripped:
-            return True
+        candidate = stripped[len("instrumentation:") :].split(" ", 1)[0].strip()
+        if candidate:
+            components.append(candidate)
+    return components
 
-    message_lines = [
-        "Unable to locate the screenshot harness instrumentation on the device.",
-        "Install the debug APKs before capturing screenshots, for example:",
-        "  ./gradlew :app:installDebug :app:installDebugAndroidTest",
-    ]
-    for line in message_lines:
-        print(line, file=sys.stderr)
-    return False
+
+def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
+    requested = args.instrumentation.strip()
+    package = ""
+    runner = ""
+    if "/" in requested:
+        package, runner = requested.split("/", 1)
+    else:
+        package, runner = requested, ""
+    package = package.strip()
+    runner = runner.strip()
+
+    queries: List[Optional[str]] = []
+    if package:
+        queries.append(package)
+    queries.append(None)
+
+    fallback_component: Optional[str] = None
+
+    for query in queries:
+        try:
+            if query:
+                output = adb_command_output(
+                    args, "shell", "pm", "list", "instrumentation", query
+                )
+            else:
+                output = adb_command_output(args, "shell", "pm", "list", "instrumentation")
+        except subprocess.CalledProcessError:
+            continue
+
+        components = _extract_instrumentation_components(output)
+        if not components:
+            continue
+
+        if runner and package:
+            expected = f"{package}/{runner}"
+            for component in components:
+                if component == expected:
+                    return component
+
+        if package:
+            for component in components:
+                if component.startswith(f"{package}/"):
+                    if runner and component != f"{package}/{runner}":
+                        print(
+                            "Requested instrumentation",
+                            f"{requested or '<unspecified>'} not installed;",
+                            f"using {component}",
+                            file=sys.stderr,
+                        )
+                    return component
+
+        if not fallback_component:
+            fallback_component = components[0]
+
+    if fallback_component:
+        if requested and requested != fallback_component:
+            print(
+                "Requested instrumentation",
+                f"{requested} not installed; using {fallback_component}",
+                file=sys.stderr,
+            )
+        return fallback_component
+
+    if package:
+        message_lines = [
+            "Unable to locate the screenshot harness instrumentation on the device.",
+            "Install the debug APKs before capturing screenshots, for example:",
+            "  ./gradlew :app:installDebug :app:installDebugAndroidTest",
+        ]
+        for line in message_lines:
+            print(line, file=sys.stderr)
+    return None
 
 
 def sanitize_cache_name(value: str, fallback: Optional[str] = None) -> str:
@@ -332,7 +380,9 @@ def parse_extra_args(extra_args: Iterable[str]) -> List[Tuple[str, str]]:
 
 
 def derive_fallback_package(
-    args: argparse.Namespace, extra_args: Iterable[Tuple[str, str]]
+    args: argparse.Namespace,
+    extra_args: Iterable[Tuple[str, str]],
+    instrumentation_component: Optional[str] = None,
 ) -> Optional[str]:
     extras: Dict[str, str] = {key: value for key, value in extra_args}
 
@@ -354,9 +404,10 @@ def derive_fallback_package(
         if placeholder:
             return placeholder
 
-    instrumentation_component = args.instrumentation.split("/", 1)[0].strip()
-    if instrumentation_component:
-        return instrumentation_component
+    component_source = instrumentation_component or args.instrumentation
+    package_candidate = component_source.split("/", 1)[0].strip()
+    if package_candidate:
+        return package_candidate
 
     return None
 
@@ -368,10 +419,14 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         print(str(error), file=sys.stderr)
         return 1, HarnessContext()
 
-    ctx = HarnessContext(derive_fallback_package(args, parsed_extra_args))
+    component = resolve_instrumentation_component(args)
+    if component is None:
+        return 1, HarnessContext(derive_fallback_package(args, parsed_extra_args))
+
+    ctx = HarnessContext(derive_fallback_package(args, parsed_extra_args, component))
     process: Optional[subprocess.Popen] = None
     try:
-        process = launch_instrumentation(args, parsed_extra_args)
+        process = launch_instrumentation(args, parsed_extra_args, component)
     except Exception as error:  # pragma: no cover - defensive
         print(f"Failed to start instrumentation: {error}", file=sys.stderr)
         return 1, ctx
