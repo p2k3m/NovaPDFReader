@@ -19,6 +19,7 @@
 * Upgraded Pdfium to `com.github.mhiew:pdfium-android:1.9.2`, which ships the upstream crash fix for extremely large documents on Android 13+.
 * Regenerated the bundled thousand-page PDF fixture with a balanced `/Pages` tree so the harness no longer drives the legacy ReportLab asset that exposed huge `/Kids` arrays.
 * Preferred the deterministic on-device writer for the harness fixture generation so outdated bundled assets cannot reintroduce the regression.
+* Added a repository-side safeguard that detects extremely large `/Count` values in the page tree and repairs the document before Pdfium opens it, avoiding native aborts even when `/Kids` arrays look healthy.
 * Added a PdfBox-powered repair fallback in `PdfDocumentRepository` that rewrites problematic PDFs into a balanced form before handing them to Pdfium, ensuring native crashes are avoided even when large `/Pages` trees are encountered in the field.
 * Keep the screenshot harness in the connected test suite so regressions surface quickly in CI.
 * When diagnosing related issues, capture a logcat trace while running the harness to confirm whether Pdfium threw a managed exception (handled by `PdfDocumentRepository`) or a native abort.
