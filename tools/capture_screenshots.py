@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -63,6 +64,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=600,
         help="Timeout in seconds for the instrumentation run (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--skip-auto-install",
+        action="store_true",
+        help=(
+            "Skip the automatic Gradle installation of the debug and androidTest APKs "
+            "when the screenshot harness instrumentation is missing"
+        ),
     )
     return parser.parse_args()
 
@@ -181,22 +190,15 @@ def ensure_instrumentation_target_installed(
         ) from error
 
 
-def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
-    requested = args.instrumentation.strip()
-    package = ""
-    runner = ""
-    if "/" in requested:
-        package, runner = requested.split("/", 1)
-    else:
-        package, runner = requested, ""
-    package = package.strip()
-    runner = runner.strip()
-
-    queries: List[Optional[str]] = []
-    if package:
-        queries.append(package)
-    queries.append(None)
-
+def _resolve_instrumentation_component_once(
+    args: argparse.Namespace,
+    requested: str,
+    package: str,
+    runner: str,
+    queries: List[Optional[str]],
+    *,
+    suppress_guidance: bool,
+) -> Optional[str]:
     fallback_component: Optional[str] = None
 
     for query in queries:
@@ -244,7 +246,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
             )
         return fallback_component
 
-    if package:
+    if package and not suppress_guidance:
         message_lines = [
             "Unable to locate the screenshot harness instrumentation on the device.",
             "Install the debug APKs before capturing screenshots, for example:",
@@ -253,6 +255,87 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         for line in message_lines:
             print(line, file=sys.stderr)
     return None
+
+
+def _gradle_wrapper_path() -> Optional[Path]:
+    project_root = Path(__file__).resolve().parents[1]
+    if os.name == "nt":
+        candidate = project_root / "gradlew.bat"
+    else:
+        candidate = project_root / "gradlew"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def auto_install_debug_apks(args: argparse.Namespace) -> bool:
+    if getattr(args, "skip_auto_install", False):
+        return False
+
+    gradlew = _gradle_wrapper_path()
+    if not gradlew:
+        print(
+            "Unable to locate the Gradle wrapper; skipping automatic debug APK installation.",
+            file=sys.stderr,
+        )
+        return False
+
+    command = [str(gradlew), ":app:installDebug", ":app:installDebugAndroidTest"]
+    try:
+        print(
+            "Installing debug APKs via Gradle to satisfy screenshot harness dependencies...",
+            file=sys.stderr,
+        )
+        subprocess.run(command, cwd=str(gradlew.parent), check=True)
+        return True
+    except subprocess.CalledProcessError as error:
+        print(
+            "Gradle installation of debug APKs failed; instrumentation may remain unavailable.",
+            file=sys.stderr,
+        )
+        print(f"Gradle exited with code {error.returncode}", file=sys.stderr)
+        return False
+
+
+def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
+    requested = args.instrumentation.strip()
+    package = ""
+    runner = ""
+    if "/" in requested:
+        package, runner = requested.split("/", 1)
+    else:
+        package, runner = requested, ""
+    package = package.strip()
+    runner = runner.strip()
+
+    queries: List[Optional[str]] = []
+    if package:
+        queries.append(package)
+    queries.append(None)
+
+    component = _resolve_instrumentation_component_once(
+        args,
+        requested,
+        package,
+        runner,
+        queries,
+        suppress_guidance=not getattr(args, "skip_auto_install", False),
+    )
+    if component:
+        return component
+
+    if getattr(args, "skip_auto_install", False):
+        return None
+
+    auto_install_debug_apks(args)
+    return _resolve_instrumentation_component_once(
+        args,
+        requested,
+        package,
+        runner,
+        queries,
+        suppress_guidance=False,
+    )
 
 
 def sanitize_cache_name(value: str, fallback: Optional[str] = None) -> str:
