@@ -43,7 +43,10 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             f"ANR report referenced process {package_name}",
         ),
         (
-            re.compile(r"Input dispatching timed out", re.IGNORECASE),
+            re.compile(
+                rf"Input dispatching timed out(?:(?!\n\d{{2}}-\d{{2}}\s).)*{escaped}",
+                re.IGNORECASE | re.DOTALL,
+            ),
             "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
         ),
         (
@@ -58,7 +61,10 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
             "AndroidRuntime reported a fatal exception while instrumentation tests were running",
         ),
         (
-            re.compile(rf"Fatal signal \d+ .*? \(SIG[A-Z]+\).*?{escaped}"),
+            re.compile(
+                rf"Fatal signal \d+.*?\(SIG[A-Z]+\).*?{escaped}",
+                re.DOTALL,
+            ),
             f"Detected native crash (fatal signal) for {package_name} during instrumentation tests",
         ),
         (

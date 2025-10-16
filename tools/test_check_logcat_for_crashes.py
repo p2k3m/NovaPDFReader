@@ -31,13 +31,37 @@ class CrashSignatureTests(unittest.TestCase):
             issues,
         )
 
+    def test_input_dispatch_timeout_for_package_detected(self):
+        log = """
+12-10 12:34:56.789  1234  5678 E InputDispatcher: Input dispatching timed out (reason=AppWindowToken{123})
+        application is not responding: Window{u0 com.example.app/com.example.app.MainActivity}
+12-10 12:34:56.800  1234  5678 I ActivityTaskManager: Displayed com.example.app/.MainActivity
+"""
+        issues = self._find_issues(log)
+        self.assertIn(
+            "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
+            issues,
+        )
+
+    def test_input_dispatch_timeout_for_other_package_ignored(self):
+        log = """
+12-10 12:34:56.789  1234  5678 E InputDispatcher: Input dispatching timed out (reason=AppWindowToken{123})
+        application is not responding: Window{u0 com.android.systemui/com.android.systemui.SliceProvider}
+12-10 12:34:56.800  1234  5678 I ActivityTaskManager: Displayed com.example.app/.MainActivity
+"""
+        issues = self._find_issues(log)
+        self.assertNotIn(
+            "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
+            issues,
+        )
+
     def test_sigsegv_detected_in_bugreport_archive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             archive_path = pathlib.Path(tmpdir) / "bugreport.zip"
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr(
                     "FS/data/anr/traces.txt",
-                    "Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0\n",
+                    "Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0\nProcess name: com.example.app\n",
                 )
 
             issues = check_logcat_for_crashes._scan_logs_for_issues(
@@ -45,9 +69,10 @@ class CrashSignatureTests(unittest.TestCase):
                 self.signatures,
             )
 
-        self.assertTrue(
-            any("SIGSEGV" in issue for issue in issues),
-            msg=f"Expected SIGSEGV detection in {issues}",
+        self.assertIn(
+            "Detected native crash (fatal signal) for com.example.app during instrumentation tests",
+            [issue.split(" (source:")[0] for issue in issues],
+            msg=f"Expected fatal signal detection in {issues}",
         )
 
 
