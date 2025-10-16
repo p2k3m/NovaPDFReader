@@ -167,6 +167,36 @@ def _normalize_instrumentation_component(
     return component
 
 
+def _prefer_requested_instrumentation_component(
+    args: argparse.Namespace, requested: str, resolved: str
+) -> str:
+    """Prefer the caller requested component when the resolved one is sanitized."""
+
+    if not resolved:
+        return resolved
+
+    resolved_package, _, _ = resolved.partition("/")
+    if "*" not in resolved_package:
+        return resolved
+
+    requested = requested.strip()
+    if not requested:
+        return resolved
+
+    requested_normalized = _normalize_instrumentation_component(args, requested)
+    requested_package, _, _ = requested_normalized.partition("/")
+    if not requested_package or "*" in requested_package:
+        return resolved
+
+    if requested_normalized != resolved:
+        print(
+            "Resolved instrumentation component contains sanitized package name; "
+            f"using requested component {requested_normalized}",
+            file=sys.stderr,
+        )
+    return requested_normalized
+
+
 def launch_instrumentation(
     args: argparse.Namespace,
     extra_args: Iterable[Tuple[str, str]],
@@ -400,7 +430,8 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         suppress_guidance=not getattr(args, "skip_auto_install", False),
     )
     if component:
-        return _normalize_instrumentation_component(args, component)
+        normalized = _normalize_instrumentation_component(args, component)
+        return _prefer_requested_instrumentation_component(args, requested, normalized)
 
     if getattr(args, "skip_auto_install", False):
         return None
@@ -415,7 +446,8 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         suppress_guidance=False,
     )
     if component:
-        return _normalize_instrumentation_component(args, component)
+        normalized = _normalize_instrumentation_component(args, component)
+        return _prefer_requested_instrumentation_component(args, requested, normalized)
 
     return None
 
