@@ -23,6 +23,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 SAFE_PUNCTUATION = {".", "-", "_"}
 MULTIPLE_UNDERSCORES = re.compile(r"_+")
 MULTIPLE_PERIODS = re.compile(r"\.+")
+PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,6 +88,83 @@ def adb_command(args: argparse.Namespace, *cmd: str, text: bool = True, **kwargs
 def adb_command_output(args: argparse.Namespace, *cmd: str) -> str:
     result = adb_command(args, *cmd, capture_output=True)
     return result.stdout
+
+
+def _resolve_sanitized_package(
+    args: Optional[argparse.Namespace], pattern: str
+) -> Optional[str]:
+    if args is None:
+        return None
+
+    glob = re.escape(pattern).replace(r"\*", ".*")
+    try:
+        output = adb_command_output(args, "shell", "pm", "list", "packages")
+    except subprocess.CalledProcessError:
+        return None
+
+    regex = re.compile(f"^{glob}$")
+    matches: List[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("package:"):
+            continue
+        package_name = stripped[len("package:") :].strip()
+        if regex.match(package_name):
+            matches.append(package_name)
+
+    if not matches:
+        return None
+
+    if len(matches) > 1:
+        suffix = pattern.split("*")[-1]
+        if suffix:
+            for match in matches:
+                if match.endswith(suffix):
+                    return match
+
+    return matches[0]
+
+
+def normalize_package_name(
+    candidate: str, *, args: Optional[argparse.Namespace] = None
+) -> Optional[str]:
+    value = candidate.strip()
+    if not value:
+        return None
+
+    if PACKAGE_NAME_PATTERN.match(value):
+        return value
+
+    if "*" in value:
+        resolved = _resolve_sanitized_package(args, value)
+        if resolved:
+            return resolved
+
+    sanitized = re.sub(r"[^A-Za-z0-9._]", "", value)
+    if sanitized and PACKAGE_NAME_PATTERN.match(sanitized):
+        return sanitized
+
+    return None
+
+
+def _normalize_instrumentation_component(
+    args: argparse.Namespace, component: str
+) -> str:
+    package, separator, runner = component.partition("/")
+    if not package:
+        return component
+
+    normalized_package = normalize_package_name(package, args=args)
+    if normalized_package and normalized_package != package:
+        print(
+            f"Resolved sanitized instrumentation package {package} to {normalized_package}",
+            file=sys.stderr,
+        )
+        if separator:
+            return f"{normalized_package}/{runner}"
+        return normalized_package
+
+    return component
 
 
 def launch_instrumentation(
@@ -322,13 +400,13 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         suppress_guidance=not getattr(args, "skip_auto_install", False),
     )
     if component:
-        return component
+        return _normalize_instrumentation_component(args, component)
 
     if getattr(args, "skip_auto_install", False):
         return None
 
     auto_install_debug_apks(args)
-    return _resolve_instrumentation_component_once(
+    component = _resolve_instrumentation_component_once(
         args,
         requested,
         package,
@@ -336,6 +414,10 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         queries,
         suppress_guidance=False,
     )
+    if component:
+        return _normalize_instrumentation_component(args, component)
+
+    return None
 
 
 def sanitize_cache_name(value: str, fallback: Optional[str] = None) -> str:
@@ -365,9 +447,6 @@ def _sanitize(value: str) -> str:
     normalized = MULTIPLE_UNDERSCORES.sub("_", normalized)
     normalized = MULTIPLE_PERIODS.sub(".", normalized)
     return normalized.strip("_.")
-
-
-PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 
 
 class HarnessContext:
@@ -486,50 +565,15 @@ class HarnessContext:
         value = candidate.strip()
         if not value:
             return None
-        if PACKAGE_NAME_PATTERN.match(value):
-            return value
-        if "*" in value:
-            resolved = self._resolve_sanitized_package(value)
-            if resolved and PACKAGE_NAME_PATTERN.match(resolved):
-                if resolved != value:
-                    print(
-                        f"Resolved sanitized screenshot harness package {value} to {resolved}",
-                        file=sys.stderr,
-                    )
-                return resolved
-        sanitized = re.sub(r"[^A-Za-z0-9._]", "", value)
-        if sanitized and PACKAGE_NAME_PATTERN.match(sanitized):
-            return sanitized
-        return None
-
-    def _resolve_sanitized_package(self, pattern: str) -> Optional[str]:
-        if self._args is None:
+        normalized = normalize_package_name(value, args=self._args)
+        if not normalized:
             return None
-        glob = re.escape(pattern).replace(r"\*", ".*")
-        try:
-            output = adb_command_output(self._args, "shell", "pm", "list", "packages")
-        except subprocess.CalledProcessError:
-            return None
-
-        regex = re.compile(f"^{glob}$")
-        matches: List[str] = []
-        for line in output.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("package:"):
-                continue
-            package_name = stripped[len("package:") :].strip()
-            if regex.fullmatch(package_name):
-                matches.append(package_name)
-
-        if not matches:
-            return None
-        if len(matches) > 1:
-            suffix = pattern.split("*")[-1]
-            if suffix:
-                for match in matches:
-                    if match.endswith(suffix):
-                        return match
-        return matches[0]
+        if normalized != value and "*" in value:
+            print(
+                f"Resolved sanitized screenshot harness package {value} to {normalized}",
+                file=sys.stderr,
+            )
+        return normalized
 
 
 def read_ready_payload(args: argparse.Namespace, ctx: HarnessContext) -> Optional[str]:
