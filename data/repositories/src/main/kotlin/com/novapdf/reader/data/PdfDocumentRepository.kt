@@ -1706,19 +1706,36 @@ class PdfDocumentRepository(
 
         return try {
             withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
-                input.buffered().use { stream ->
-                    cancellationSignal.throwIfCanceled()
-                    PDDocument.load(stream).use { document ->
-                        document.save(repairedFile)
+                try {
+                    input.buffered().use { stream ->
+                        cancellationSignal.throwIfCanceled()
+                        PDDocument.load(stream).use { document ->
+                            document.save(repairedFile)
+                        }
+                        val result = if (persistentTarget != null) {
+                            persistRepairedFile(repairedFile, persistentTarget)
+                        } else {
+                            repairedFile
+                        }
+                        val breadcrumbTarget = cacheKeyString ?: uri.toString()
+                        crashReporter?.logBreadcrumb("pdfium repair: ${breadcrumbTarget}")
+                        result
                     }
-                    val result = if (persistentTarget != null) {
-                        persistRepairedFile(repairedFile, persistentTarget)
-                    } else {
-                        repairedFile
+                } catch (error: OutOfMemoryError) {
+                    NovaLog.e(
+                        TAG,
+                        "Unable to repair PDF via PdfBox due to out of memory",
+                        error
+                    )
+                    if (repairedFile.exists() && !repairedFile.delete()) {
+                        NovaLog.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
                     }
-                    val breadcrumbTarget = cacheKeyString ?: uri.toString()
-                    crashReporter?.logBreadcrumb("pdfium repair: ${breadcrumbTarget}")
-                    result
+                    persistentTarget?.let { target ->
+                        if (target.exists() && !target.delete()) {
+                            NovaLog.w(TAG, "Unable to delete failed cached repair at ${target.absolutePath}")
+                        }
+                    }
+                    null
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
@@ -1729,7 +1746,10 @@ class PdfDocumentRepository(
             null
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (repairError: Exception) {
+        } catch (repairError: Throwable) {
+            if (repairError is CancellationException) {
+                throw repairError
+            }
             NovaLog.w(TAG, "Unable to repair PDF via PdfBox", repairError)
             if (repairedFile.exists() && !repairedFile.delete()) {
                 NovaLog.w(TAG, "Unable to delete failed repaired PDF at ${repairedFile.absolutePath}")
