@@ -134,6 +134,53 @@ def _extract_instrumentation_components(output: str) -> List[str]:
     return components
 
 
+def _extract_instrumentation_target(
+    output: str, component: str
+) -> Optional[str]:
+    target_package: Optional[str] = None
+    current: Optional[str] = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Instrumentation "):
+            current = stripped[len("Instrumentation ") :].split(":", 1)[0]
+            continue
+        if current != component:
+            continue
+        if stripped.startswith("targetPackage="):
+            candidate = stripped[len("targetPackage=") :].strip()
+            if candidate:
+                target_package = candidate
+                break
+    return target_package
+
+
+def ensure_instrumentation_target_installed(
+    args: argparse.Namespace, component: str
+) -> None:
+    package, _slash, _runner = component.partition("/")
+    if not package:
+        return
+    try:
+        dumpsys_output = adb_command_output(
+            args, "shell", "dumpsys", "package", package
+        )
+    except subprocess.CalledProcessError:
+        return
+
+    target_package = _extract_instrumentation_target(dumpsys_output, component)
+    if not target_package:
+        return
+
+    try:
+        adb_command_output(args, "shell", "pm", "path", target_package)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            "Screenshot harness target package "
+            f"{target_package} is not installed; install the app APK "
+            "(for example with `./gradlew :app:installDebug`) before running the harness."
+        ) from error
+
+
 def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
     requested = args.instrumentation.strip()
     package = ""
@@ -535,6 +582,15 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     if component is None:
         return 1, HarnessContext(
             derive_fallback_package(args, parsed_extra_args),
+            args=args,
+        )
+
+    try:
+        ensure_instrumentation_target_installed(args, component)
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1, HarnessContext(
+            derive_fallback_package(args, parsed_extra_args, component),
             args=args,
         )
 
