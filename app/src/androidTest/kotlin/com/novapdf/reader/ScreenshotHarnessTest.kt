@@ -1048,7 +1048,7 @@ class ScreenshotHarnessTest {
                     false
                 }
                 is DocumentStatus.Loading -> false
-                DocumentStatus.Idle -> state != null && isUiInteractive(state)
+                DocumentStatus.Idle -> state?.let { isUiInteractive(it) } ?: false
                 null -> false
             }
             if (!firstPageLogged && (state?.pageCount ?: 0) > 0) {
