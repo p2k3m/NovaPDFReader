@@ -919,15 +919,31 @@ def main() -> int:
     args = parse_args()
 
     max_system_crash_retries = 1
+    system_crash_attempts = 0
+    auto_install_attempted = getattr(args, "skip_auto_install", False)
 
     last_exit_code = 1
-    for attempt in range(max_system_crash_retries + 1):
+    while True:
         exit_code, ctx = run_instrumentation_once(args)
         last_exit_code = exit_code
         if exit_code == 0:
             return 0
 
-        if ctx.system_crash_detected and attempt < max_system_crash_retries:
+        missing_instrumentation = ctx.missing_instrumentation_detected
+        if (
+            missing_instrumentation
+            and not getattr(args, "skip_auto_install", False)
+            and not auto_install_attempted
+        ):
+            auto_install_attempted = True
+            if auto_install_debug_apks(args):
+                continue
+
+        if (
+            ctx.system_crash_detected
+            and system_crash_attempts < max_system_crash_retries
+        ):
+            system_crash_attempts += 1
             print(
                 "Detected system server crash during instrumentation; waiting for recovery before retrying",
                 file=sys.stderr,
@@ -939,6 +955,11 @@ def main() -> int:
                 file=sys.stderr,
             )
             break
+
+        if missing_instrumentation:
+            auto_install_attempted = True
+
+        break
 
     return last_exit_code
 
