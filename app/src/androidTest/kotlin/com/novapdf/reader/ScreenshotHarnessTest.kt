@@ -1042,14 +1042,17 @@ class ScreenshotHarnessTest {
         while (SystemClock.elapsedRealtime() < deadline) {
             var errorMessage: String? = null
             val state = fetchViewerState()
-            val documentReady = when (val status = state?.documentStatus) {
-                is DocumentStatus.Error -> {
-                    errorMessage = status.message
-                    false
+            val documentReady = if (state != null) {
+                when (val status = state.documentStatus) {
+                    is DocumentStatus.Error -> {
+                        errorMessage = status.message
+                        false
+                    }
+                    is DocumentStatus.Loading -> false
+                    DocumentStatus.Idle -> isUiInteractive(state)
                 }
-                is DocumentStatus.Loading -> false
-                DocumentStatus.Idle -> state?.let { isUiInteractive(it) } ?: false
-                null -> false
+            } else {
+                false
             }
             if (!firstPageLogged && (state?.pageCount ?: 0) > 0) {
                 recordHarnessProgress(
