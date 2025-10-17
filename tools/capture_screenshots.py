@@ -246,7 +246,7 @@ def _prefer_requested_instrumentation_component(
         return resolved
 
     resolved_package, _, _ = resolved.partition("/")
-    if "*" not in resolved_package:
+    if PACKAGE_NAME_PATTERN.match(resolved_package) and "*" not in resolved_package:
         return resolved
 
     requested = requested.strip()
