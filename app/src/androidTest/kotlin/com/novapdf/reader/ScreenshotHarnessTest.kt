@@ -281,17 +281,51 @@ class ScreenshotHarnessTest {
 
         try {
             val interactiveState = confirmInteractiveUiState()
+            recordHarnessProgress(
+                HarnessProgressStep.UI_READY_CONFIRMED,
+                "page=${interactiveState.currentPage + 1}/${interactiveState.pageCount} " +
+                    "status=${interactiveState.documentStatus.javaClass.simpleName} " +
+                    "renderProgress=${interactiveState.renderProgress}"
+            )
             logHarnessInfo(
                 "Confirmed interactive ReaderActivity; page=${interactiveState.currentPage + 1}/${interactiveState.pageCount}. " +
                     "Waiting up to $DEVICE_IDLE_TIMEOUT_MS ms for device idle before publishing readiness flag"
             )
             device.waitForIdle(DEVICE_IDLE_TIMEOUT_MS)
-            recordHarnessProgress(
-                HarnessProgressStep.UI_READY_CONFIRMED,
-                "page=${interactiveState.currentPage + 1}/${interactiveState.pageCount} " +
-                    "deviceIdleTimeoutMs=$DEVICE_IDLE_TIMEOUT_MS"
-            )
-            publishReadyFlags(readyFlags, interactiveState)
+
+            val postIdleState = fetchViewerState()
+            val readinessState = when {
+                postIdleState != null && isUiInteractive(postIdleState) -> postIdleState
+                else -> {
+                    logHarnessWarn(
+                        "UI state changed while waiting for device idle; revalidating interactive state before publishing readiness flag"
+                    )
+                    try {
+                        confirmInteractiveUiState()
+                    } catch (error: Throwable) {
+                        if (error is AssumptionViolatedException || error is CancellationException) {
+                            throw error
+                        }
+                        logHarnessError(
+                            error.message
+                                ?: "Unable to confirm interactive UI state after device idle wait",
+                            error
+                        )
+                        publishHarnessFailureFlag("ui_ready_revalidation_failed", error)
+                        throw error
+                    }
+                }
+            }
+            if (!isUiInteractive(readinessState)) {
+                val error = IllegalStateException(
+                    "Unable to confirm interactive ReaderActivity before publishing readiness flag"
+                )
+                logHarnessError(error.message ?: "Unable to confirm interactive ReaderActivity", error)
+                publishHarnessFailureFlag("ui_ready_regressed", error)
+                throw error
+            }
+
+            publishReadyFlags(readyFlags, readinessState)
 
             if (programmaticScreenshotsEnabled) {
                 captureProgrammaticScreenshot(doneFlags)
@@ -1288,7 +1322,8 @@ class ScreenshotHarnessTest {
             }
         }
         logHarnessInfo(message)
-        if (!::handshakeCacheDirs.isInitialized || handshakeCacheDirs.isEmpty()) {
+        val directories = resolveStatusDirectories()
+        if (directories.isEmpty()) {
             return
         }
         val entry = buildString {
@@ -1300,7 +1335,7 @@ class ScreenshotHarnessTest {
                 append(sanitizedDetail)
             }
         }
-        handshakeCacheDirs.forEach { directory ->
+        directories.forEach { directory ->
             val statusFile = File(directory, CacheFileNames.SCREENSHOT_STATUS_FILE)
             runCatching {
                 if (!ensureHandshakeDirectory(directory)) {
@@ -1323,9 +1358,10 @@ class ScreenshotHarnessTest {
     ) {
         val detail = buildHarnessStatusDetail(reason, error)
         recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
-        if (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty() && !failureFlagPublished) {
+        val directories = resolveStatusDirectories()
+        if (directories.isNotEmpty()) {
             val payload = buildHarnessStatusPayload("failed", reason, error)
-            val published = handshakeCacheDirs.map { directory ->
+            val published = directories.map { directory ->
                 val flag = File(directory, CacheFileNames.SCREENSHOT_FAILED_FLAG)
                 val success = writeHandshakeFlag(flag, payload)
                 if (!success) {
@@ -1335,12 +1371,16 @@ class ScreenshotHarnessTest {
                 }
                 success
             }
-            if (published.any { it }) {
+            if (published.any { it } &&
+                ::handshakeCacheDirs.isInitialized &&
+                handshakeCacheDirs.isNotEmpty() &&
+                directories == handshakeCacheDirs
+            ) {
                 failureFlagPublished = true
             }
         }
         if (fatal) {
-            publishHarnessCrashFlag(reason, error, detail)
+            publishHarnessCrashFlag(reason, error, detail, directories)
         }
     }
 
@@ -1348,14 +1388,18 @@ class ScreenshotHarnessTest {
         reason: String,
         error: Throwable?,
         detail: String? = null,
+        directoriesOverride: List<File>? = null,
     ) {
         val crashDetail = detail ?: buildHarnessStatusDetail(reason, error)
         recordHarnessProgress(HarnessProgressStep.CRASHED, crashDetail)
-        if (!::handshakeCacheDirs.isInitialized || handshakeCacheDirs.isEmpty() || crashFlagPublished) {
+        val directories = directoriesOverride ?: resolveStatusDirectories()
+        if (directories.isEmpty() ||
+            (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty() && crashFlagPublished)
+        ) {
             return
         }
         val payload = buildHarnessStatusPayload("crashed", reason, error)
-        val published = handshakeCacheDirs.map { directory ->
+        val published = directories.map { directory ->
             val flag = File(directory, CacheFileNames.SCREENSHOT_CRASHED_FLAG)
             val success = writeHandshakeFlag(flag, payload)
             if (!success) {
@@ -1365,9 +1409,56 @@ class ScreenshotHarnessTest {
             }
             success
         }
-        if (published.any { it }) {
+        if (published.any { it } &&
+            ::handshakeCacheDirs.isInitialized &&
+            handshakeCacheDirs.isNotEmpty() &&
+            directories == handshakeCacheDirs
+        ) {
             crashFlagPublished = true
         }
+    }
+
+    private fun resolveStatusDirectories(): List<File> {
+        if (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty()) {
+            return handshakeCacheDirs
+        }
+
+        val directories = mutableListOf<File>()
+        if (::appContext.isInitialized) {
+            directories += File(appContext.cacheDir, CacheFileNames.HARNESS_CACHE_DIRECTORY)
+            appContext.filesDir?.let { directory ->
+                directories += File(directory, CacheFileNames.HARNESS_CACHE_DIRECTORY)
+            }
+            appContext.externalCacheDir?.let { directory ->
+                directories += File(directory, CacheFileNames.HARNESS_CACHE_DIRECTORY)
+            }
+        }
+
+        val instrumentation = runCatching { InstrumentationRegistry.getInstrumentation() }.getOrNull()
+        if (instrumentation != null) {
+            runCatching { instrumentation.context.cacheDir }
+                .getOrNull()
+                ?.let { directories += File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY) }
+            runCatching { instrumentation.context.applicationContext?.cacheDir }
+                .getOrNull()
+                ?.let { directories += File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY) }
+            runCatching { instrumentation.targetContext.cacheDir }
+                .getOrNull()
+                ?.let { directories += File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY) }
+            runCatching { instrumentation.targetContext.applicationContext?.cacheDir }
+                .getOrNull()
+                ?.let { directories += File(it, CacheFileNames.HARNESS_CACHE_DIRECTORY) }
+        }
+
+        return directories
+            .mapNotNull { directory ->
+                if (!prepareCacheDirectory(directory)) {
+                    null
+                } else {
+                    runCatching { directory.canonicalFile }.getOrElse { directory }
+                }
+            }
+            .distinctBy { it.absolutePath }
     }
 
     private fun buildHarnessStatusDetail(reason: String, error: Throwable?): String {
