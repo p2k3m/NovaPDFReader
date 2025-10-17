@@ -93,6 +93,7 @@ private const val MAX_BITMAP_DIMENSION = 8_192
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val PRE_REPAIR_MIN_PAGE_COUNT = 512
+private const val HARNESS_FIXTURE_MARKER = "Generated for screenshot harness"
 private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
@@ -1480,6 +1481,14 @@ class PdfDocumentRepository(
                     return true
                 }
             }
+        }
+
+        if (contents.contains(HARNESS_FIXTURE_MARKER)) {
+            NovaLog.i(
+                TAG,
+                "Skipping pre-emptive repair for known screenshot harness fixture $uri"
+            )
+            return false
         }
 
         val pageTreeMatcher = PAGE_TREE_COUNT_PATTERN.matcher(contents)
