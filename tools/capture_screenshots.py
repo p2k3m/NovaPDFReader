@@ -26,6 +26,15 @@ MULTIPLE_PERIODS = re.compile(r"\.+")
 PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 
 
+def _compile_wildcard_regex(pattern: str) -> Optional[re.Pattern[str]]:
+    if "*" not in pattern:
+        return None
+    try:
+        return re.compile(f"^{re.escape(pattern).replace(r'\\*', '.*')}$")
+    except re.error:
+        return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -357,6 +366,17 @@ def _resolve_instrumentation_component_once(
 ) -> Optional[str]:
     fallback_component: Optional[str] = None
 
+    package_regex = _compile_wildcard_regex(package) if package else None
+    runner_regex = _compile_wildcard_regex(runner) if runner else None
+
+    expected_literal: Optional[str] = None
+    expected_regex: Optional[re.Pattern[str]] = None
+    if package and runner:
+        if not package_regex and not runner_regex:
+            expected_literal = f"{package}/{runner}"
+        else:
+            expected_regex = _compile_wildcard_regex(f"{package}/{runner}")
+
     for query in queries:
         try:
             if query:
@@ -372,22 +392,28 @@ def _resolve_instrumentation_component_once(
         if not components:
             continue
 
-        if runner and package:
-            expected = f"{package}/{runner}"
-            for component in components:
-                if component == expected:
-                    return component
+        for component in components:
+            if expected_literal and component == expected_literal:
+                return component
+            if expected_regex and expected_regex.match(component):
+                return component
 
         if package:
             for component in components:
-                if component.startswith(f"{package}/"):
-                    if runner and component != f"{package}/{runner}":
-                        print(
-                            "Requested instrumentation",
-                            f"{requested or '<unspecified>'} not installed;",
-                            f"using {component}",
-                            file=sys.stderr,
-                        )
+                component_package, _sep, component_runner = component.partition("/")
+                if package_regex:
+                    if not package_regex.match(component_package):
+                        continue
+                elif component_package != package:
+                    continue
+
+                if runner:
+                    if runner_regex:
+                        if runner_regex.match(component_runner):
+                            return component
+                    elif component_runner == runner:
+                        return component
+                else:
                     return component
 
         if not fallback_component:
