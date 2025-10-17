@@ -45,6 +45,12 @@ internal object CacheFileNames {
         label = "screenshot failed flag",
     )
 
+    val SCREENSHOT_CRASHED_FLAG: String = sanitizeCacheFileName(
+        raw = "screenshot_crashed.flag",
+        fallback = "screenshot_crashed.flag",
+        label = "screenshot crashed flag",
+    )
+
     val SCREENSHOT_STATUS_FILE: String = sanitizeCacheFileName(
         raw = "screenshot_status.log",
         fallback = "screenshot_status.log",
