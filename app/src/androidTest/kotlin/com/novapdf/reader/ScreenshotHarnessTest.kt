@@ -87,6 +87,7 @@ class ScreenshotHarnessTest {
     private var programmaticScreenshotsEnabled: Boolean = false
     private var metricsRecorder: PerformanceMetricsRecorder? = null
     private var failureFlagPublished: Boolean = false
+    private var crashFlagPublished: Boolean = false
 
     @Before
     fun setUp() = runBlocking {
@@ -278,11 +279,6 @@ class ScreenshotHarnessTest {
             }
         }
 
-        if (programmaticScreenshotsEnabled) {
-            captureProgrammaticScreenshot(doneFlags)
-            return
-        }
-
         try {
             val interactiveState = confirmInteractiveUiState()
             logHarnessInfo(
@@ -295,46 +291,15 @@ class ScreenshotHarnessTest {
                 "page=${interactiveState.currentPage + 1}/${interactiveState.pageCount} " +
                     "deviceIdleTimeoutMs=$DEVICE_IDLE_TIMEOUT_MS"
             )
-            val screenshotTarget = resolveScreenshotTarget(interactiveState)
-            if (screenshotTarget != null) {
-                logHarnessInfo(
-                    "Prepared screenshot target for documentId=${screenshotTarget.documentId} " +
-                        "pageIndex=${screenshotTarget.pageIndex} pageNumber=${screenshotTarget.pageNumber}"
-                )
-            } else {
-                logHarnessWarn("Unable to resolve screenshot metadata; ready flag payload will omit document details")
-            }
-            val readyPayload = buildScreenshotReadyPayload(screenshotTarget)
-            readyFlags.forEach { flag ->
-                logHarnessInfo(
-                    "Writing screenshot ready flag to ${flag.absolutePath} with payload $readyPayload"
-                )
-            }
-            val readyFlagResults = withContext(Dispatchers.IO) {
-                readyFlags.map { flag ->
-                    val success = writeHandshakeFlag(flag, readyPayload)
-                    if (!success) {
-                        logHarnessWarn(
-                            "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location"
-                        )
-                    }
-                    success
-                }
-            }
+            publishReadyFlags(readyFlags, interactiveState)
 
-            val readySuccessCount = readyFlagResults.count { it }
-            recordHarnessProgress(
-                HarnessProgressStep.READY_PUBLISHED,
-                "payload=$readyPayload successes=$readySuccessCount/${readyFlags.size}"
-            )
-
-            if (readyFlags.isEmpty() || (readySuccessCount == 0 && readyFlags.none(::flagExists))) {
-                val error = IllegalStateException(
-                    "Screenshot harness failed to publish readiness flag to any cache directory"
+            if (programmaticScreenshotsEnabled) {
+                captureProgrammaticScreenshot(doneFlags)
+                recordHarnessProgress(
+                    HarnessProgressStep.COMPLETED,
+                    "programmaticCapture=true"
                 )
-                logHarnessError(error.message ?: "Screenshot harness failed to publish readiness flag", error)
-                publishHarnessFailureFlag("ready_flag_write_failed", error)
-                throw error
+                return
             }
             logHarnessInfo(
                 "Waiting for screenshot harness completion signal at ${doneFlags.joinToString { it.absolutePath }}"
@@ -373,6 +338,62 @@ class ScreenshotHarnessTest {
                     "handshake_error:${error.javaClass.simpleName}"
                 )
             }
+            throw error
+        }
+    }
+
+    private suspend fun publishReadyFlags(
+        readyFlags: List<File>,
+        interactiveState: PdfViewerUiState,
+    ) {
+        val screenshotTarget = resolveScreenshotTarget(interactiveState)
+        if (screenshotTarget != null) {
+            logHarnessInfo(
+                "Prepared screenshot target for documentId=${screenshotTarget.documentId} " +
+                    "pageIndex=${screenshotTarget.pageIndex} pageNumber=${screenshotTarget.pageNumber}"
+            )
+        } else {
+            logHarnessWarn("Unable to resolve screenshot metadata; ready flag payload will omit document details")
+        }
+        val readyPayload = buildScreenshotReadyPayload(screenshotTarget)
+        readyFlags.forEach { flag ->
+            logHarnessInfo(
+                "Writing screenshot ready flag to ${flag.absolutePath} with payload $readyPayload"
+            )
+        }
+        val readyFlagResults = withContext(Dispatchers.IO) {
+            readyFlags.map { flag ->
+                val success = writeHandshakeFlag(flag, readyPayload)
+                if (!success) {
+                    logHarnessWarn(
+                        "Unable to write screenshot ready flag to ${flag.absolutePath}; continuing without this location"
+                    )
+                }
+                success
+            }
+        }
+
+        val readySuccessCount = readyFlagResults.count { it }
+        val detail = buildString {
+            append("payload=$readyPayload successes=$readySuccessCount/${readyFlags.size}")
+            screenshotTarget?.let {
+                append(' ')
+                append(
+                    "page=${it.pageNumber}/${it.pageCount}"
+                )
+            }
+        }
+        recordHarnessProgress(
+            HarnessProgressStep.READY_PUBLISHED,
+            detail
+        )
+
+        if (readyFlags.isEmpty() || (readySuccessCount == 0 && readyFlags.none(::flagExists))) {
+            val error = IllegalStateException(
+                "Screenshot harness failed to publish readiness flag to any cache directory"
+            )
+            logHarnessError(error.message ?: "Screenshot harness failed to publish readiness flag", error)
+            publishHarnessFailureFlag("ready_flag_write_failed", error)
             throw error
         }
     }
@@ -553,6 +574,10 @@ class ScreenshotHarnessTest {
                     failOnError = false
                 )
                 deleteHandshakeFlag(
+                    File(directory, CacheFileNames.SCREENSHOT_CRASHED_FLAG),
+                    failOnError = false
+                )
+                deleteHandshakeFlag(
                     File(directory, CacheFileNames.SCREENSHOT_STATUS_FILE),
                     failOnError = false
                 )
@@ -560,6 +585,7 @@ class ScreenshotHarnessTest {
         }
         if (deleteStatusArtifacts) {
             failureFlagPublished = false
+            crashFlagPublished = false
         }
     }
 
@@ -1290,42 +1316,77 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun publishHarnessFailureFlag(reason: String, error: Throwable?) {
-        val detail = buildString {
-            append(reason)
-            val message = error?.message?.takeIf { it.isNotBlank() }
-            if (message != null) {
-                append(": ")
-                append(message)
+    private fun publishHarnessFailureFlag(
+        reason: String,
+        error: Throwable?,
+        fatal: Boolean = true,
+    ) {
+        val detail = buildHarnessStatusDetail(reason, error)
+        recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
+        if (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty() && !failureFlagPublished) {
+            val payload = buildHarnessStatusPayload("failed", reason, error)
+            val published = handshakeCacheDirs.map { directory ->
+                val flag = File(directory, CacheFileNames.SCREENSHOT_FAILED_FLAG)
+                val success = writeHandshakeFlag(flag, payload)
+                if (!success) {
+                    logHarnessWarn(
+                        "Unable to write screenshot failure flag to ${flag.absolutePath}"
+                    )
+                }
+                success
+            }
+            if (published.any { it }) {
+                failureFlagPublished = true
             }
         }
-        recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
-        if (!::handshakeCacheDirs.isInitialized || handshakeCacheDirs.isEmpty()) {
+        if (fatal) {
+            publishHarnessCrashFlag(reason, error, detail)
+        }
+    }
+
+    private fun publishHarnessCrashFlag(
+        reason: String,
+        error: Throwable?,
+        detail: String? = null,
+    ) {
+        val crashDetail = detail ?: buildHarnessStatusDetail(reason, error)
+        recordHarnessProgress(HarnessProgressStep.CRASHED, crashDetail)
+        if (!::handshakeCacheDirs.isInitialized || handshakeCacheDirs.isEmpty() || crashFlagPublished) {
             return
         }
-        if (failureFlagPublished) {
-            return
-        }
-        val payload = buildHarnessFailurePayload(reason, error)
+        val payload = buildHarnessStatusPayload("crashed", reason, error)
         val published = handshakeCacheDirs.map { directory ->
-            val flag = File(directory, CacheFileNames.SCREENSHOT_FAILED_FLAG)
+            val flag = File(directory, CacheFileNames.SCREENSHOT_CRASHED_FLAG)
             val success = writeHandshakeFlag(flag, payload)
             if (!success) {
                 logHarnessWarn(
-                    "Unable to write screenshot failure flag to ${flag.absolutePath}"
+                    "Unable to write screenshot crash flag to ${flag.absolutePath}"
                 )
             }
             success
         }
         if (published.any { it }) {
-            failureFlagPublished = true
+            crashFlagPublished = true
         }
     }
 
-    private fun buildHarnessFailurePayload(reason: String, error: Throwable?): String {
+    private fun buildHarnessStatusDetail(reason: String, error: Throwable?): String {
+        val message = error?.message?.takeIf { it.isNotBlank() }
+        return if (message != null) {
+            "$reason: $message"
+        } else {
+            reason
+        }
+    }
+
+    private fun buildHarnessStatusPayload(
+        status: String,
+        reason: String,
+        error: Throwable?,
+    ): String {
         return try {
             JSONObject().apply {
-                put("status", "failed")
+                put("status", status)
                 put("reason", reason)
                 put("timestamp", System.currentTimeMillis())
                 error?.let {
@@ -1335,7 +1396,7 @@ class ScreenshotHarnessTest {
             }.toString()
         } catch (encodingError: Exception) {
             val message = error?.message ?: ""
-            "status=failed;reason=$reason;message=$message;timestamp=${System.currentTimeMillis()}"
+            "status=$status;reason=$reason;message=$message;timestamp=${System.currentTimeMillis()}"
         }
     }
 
@@ -1360,6 +1421,7 @@ class ScreenshotHarnessTest {
         WAITING_FOR_COMPLETION("waiting_for_completion"),
         SCREENSHOT_CAPTURED("screenshot"),
         COMPLETED("completed"),
+        CRASHED("crashed"),
         FAILURE("failure"),
     }
 
