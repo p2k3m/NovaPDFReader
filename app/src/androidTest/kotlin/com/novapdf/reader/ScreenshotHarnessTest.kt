@@ -91,34 +91,44 @@ class ScreenshotHarnessTest {
 
     @Before
     fun setUp() = runBlocking {
-        hiltRule.inject()
-        val harnessRequested = shouldRunHarness()
-        logHarnessInfo("Screenshot harness requested=$harnessRequested")
-        assumeTrue("Screenshot harness disabled", harnessRequested)
+        try {
+            hiltRule.inject()
+            val harnessRequested = shouldRunHarness()
+            logHarnessInfo("Screenshot harness requested=$harnessRequested")
+            assumeTrue("Screenshot harness disabled", harnessRequested)
 
-        device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        appContext = ApplicationProvider.getApplicationContext()
-        handshakePackageName = resolveTestPackageName()
-        logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
-        handshakeCacheDirs = resolveHandshakeCacheDirs(handshakePackageName)
-        logHarnessInfo(
-            "Using handshake cache directories ${handshakeCacheDirs.joinToString { it.absolutePath }} " +
-                "for package $handshakePackageName"
-        )
-        withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = true) }
-        recordHarnessProgress(
-            HarnessProgressStep.TEST_INITIALISED,
-            "handshakeDirectories=${handshakeCacheDirs.size}"
-        )
-        harnessEnabled = true
-        programmaticScreenshotsEnabled = shouldCaptureProgrammaticScreenshots()
-        logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
-        metricsRecorder = PerformanceMetricsRecorder(appContext)
-        ensureWorkManagerInitialized(appContext)
-        logHarnessInfo("Installing thousand-page stress document for screenshot harness")
-        documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
-        logHarnessInfo("Thousand-page document installed at $documentUri")
-        cancelWorkManagerJobs()
+            device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            appContext = ApplicationProvider.getApplicationContext()
+            handshakePackageName = resolveTestPackageName()
+            logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
+            handshakeCacheDirs = resolveHandshakeCacheDirs(handshakePackageName)
+            logHarnessInfo(
+                "Using handshake cache directories ${handshakeCacheDirs.joinToString { it.absolutePath }} " +
+                    "for package $handshakePackageName"
+            )
+            withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = true) }
+            recordHarnessProgress(
+                HarnessProgressStep.TEST_INITIALISED,
+                "handshakeDirectories=${handshakeCacheDirs.size}"
+            )
+            harnessEnabled = true
+            programmaticScreenshotsEnabled = shouldCaptureProgrammaticScreenshots()
+            logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
+            metricsRecorder = PerformanceMetricsRecorder(appContext)
+            ensureWorkManagerInitialized(appContext)
+            logHarnessInfo("Installing thousand-page stress document for screenshot harness")
+            documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
+            logHarnessInfo("Thousand-page document installed at $documentUri")
+            cancelWorkManagerJobs()
+        } catch (error: Throwable) {
+            if (error is AssumptionViolatedException || error is CancellationException) {
+                throw error
+            }
+            val message = error.message ?: "Failed to set up screenshot harness"
+            logHarnessError(message, error)
+            publishHarnessFailureFlag("setup_failed", error)
+            throw error
+        }
     }
 
     private fun buildScreenshotReadyPayload(target: ScreenshotTarget?): String {
@@ -280,42 +290,7 @@ class ScreenshotHarnessTest {
         }
 
         try {
-            val interactiveState = confirmInteractiveUiState()
-            recordHarnessProgress(
-                HarnessProgressStep.UI_READY_CONFIRMED,
-                "page=${interactiveState.currentPage + 1}/${interactiveState.pageCount} " +
-                    "status=${interactiveState.documentStatus.javaClass.simpleName} " +
-                    "renderProgress=${interactiveState.renderProgress}"
-            )
-            logHarnessInfo(
-                "Confirmed interactive ReaderActivity; page=${interactiveState.currentPage + 1}/${interactiveState.pageCount}. " +
-                    "Waiting up to $DEVICE_IDLE_TIMEOUT_MS ms for device idle before publishing readiness flag"
-            )
-            device.waitForIdle(DEVICE_IDLE_TIMEOUT_MS)
-
-            val postIdleState = fetchViewerState()
-            val readinessState = when {
-                postIdleState != null && isUiInteractive(postIdleState) -> postIdleState
-                else -> {
-                    logHarnessWarn(
-                        "UI state changed while waiting for device idle; revalidating interactive state before publishing readiness flag"
-                    )
-                    try {
-                        confirmInteractiveUiState()
-                    } catch (error: Throwable) {
-                        if (error is AssumptionViolatedException || error is CancellationException) {
-                            throw error
-                        }
-                        logHarnessError(
-                            error.message
-                                ?: "Unable to confirm interactive UI state after device idle wait",
-                            error
-                        )
-                        publishHarnessFailureFlag("ui_ready_revalidation_failed", error)
-                        throw error
-                    }
-                }
-            }
+            val readinessState = confirmReadinessForScreenshots()
             if (!isUiInteractive(readinessState)) {
                 val error = IllegalStateException(
                     "Unable to confirm interactive ReaderActivity before publishing readiness flag"
@@ -374,6 +349,65 @@ class ScreenshotHarnessTest {
             }
             throw error
         }
+    }
+
+    private fun confirmReadinessForScreenshots(): PdfViewerUiState {
+        val initialState = confirmInteractiveUiState()
+        recordHarnessProgress(
+            HarnessProgressStep.UI_READY_OBSERVED,
+            "page=${initialState.currentPage + 1}/${initialState.pageCount} " +
+                "status=${initialState.documentStatus.javaClass.simpleName} " +
+                "renderProgress=${initialState.renderProgress}"
+        )
+        logHarnessInfo(
+            "Confirmed interactive ReaderActivity; page=${initialState.currentPage + 1}/${initialState.pageCount}. " +
+                "Waiting up to $DEVICE_IDLE_TIMEOUT_MS ms for device idle before publishing readiness flag"
+        )
+        recordHarnessProgress(
+            HarnessProgressStep.DEVICE_IDLE_WAITING,
+            "timeoutMs=$DEVICE_IDLE_TIMEOUT_MS"
+        )
+        device.waitForIdle(DEVICE_IDLE_TIMEOUT_MS)
+        recordHarnessProgress(
+            HarnessProgressStep.DEVICE_IDLE_CONFIRMED,
+            "timeoutMs=$DEVICE_IDLE_TIMEOUT_MS"
+        )
+
+        val postIdleState = fetchViewerState()
+        val readinessState = when {
+            postIdleState != null && isUiInteractive(postIdleState) -> postIdleState
+            else -> {
+                logHarnessWarn(
+                    "UI state changed while waiting for device idle; revalidating interactive state before publishing readiness flag"
+                )
+                recordHarnessProgress(
+                    HarnessProgressStep.UI_READY_REVALIDATED,
+                    "retrying_with_timeout=$UI_READY_CONFIRMATION_TIMEOUT_MS"
+                )
+                try {
+                    confirmInteractiveUiState()
+                } catch (error: Throwable) {
+                    if (error is AssumptionViolatedException || error is CancellationException) {
+                        throw error
+                    }
+                    logHarnessError(
+                        error.message
+                            ?: "Unable to confirm interactive UI state after device idle wait",
+                        error
+                    )
+                    publishHarnessFailureFlag("ui_ready_revalidation_failed", error)
+                    throw error
+                }
+            }
+        }
+
+        recordHarnessProgress(
+            HarnessProgressStep.UI_READY_CONFIRMED,
+            "page=${readinessState.currentPage + 1}/${readinessState.pageCount} " +
+                "status=${readinessState.documentStatus.javaClass.simpleName} " +
+                "renderProgress=${readinessState.renderProgress}"
+        )
+        return readinessState
     }
 
     private suspend fun publishReadyFlags(
@@ -1506,6 +1540,10 @@ class ScreenshotHarnessTest {
         PAGE_OPENED("page_open"),
         RENDER_COMPLETE("render_complete"),
         UI_INTERACTIVE("ui_interactive"),
+        UI_READY_OBSERVED("ui_ready_observed"),
+        DEVICE_IDLE_WAITING("device_idle_waiting"),
+        DEVICE_IDLE_CONFIRMED("device_idle_confirmed"),
+        UI_READY_REVALIDATED("ui_ready_revalidated"),
         HANDSHAKE_STARTED("handshake_started"),
         UI_READY_CONFIRMED("ui_ready_confirmed"),
         READY_PUBLISHED("ready_flag_published"),
