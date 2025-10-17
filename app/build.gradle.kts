@@ -1221,6 +1221,7 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.pdfbox)
+    testImplementation(kotlin("reflect"))
 
     androidTestImplementation(project(":test-harness"))
     androidTestImplementation(project(":core:cache"))

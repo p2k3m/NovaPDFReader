@@ -1483,14 +1483,6 @@ class PdfDocumentRepository(
             }
         }
 
-        if (contents.contains(HARNESS_FIXTURE_MARKER)) {
-            NovaLog.i(
-                TAG,
-                "Skipping pre-emptive repair for known screenshot harness fixture $uri"
-            )
-            return false
-        }
-
         val pageTreeMatcher = PAGE_TREE_COUNT_PATTERN.matcher(contents)
         while (pageTreeMatcher.find()) {
             cancellationSignal.throwIfCanceled()

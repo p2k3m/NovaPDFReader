@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.cache.DefaultCacheDirectories
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -22,6 +23,10 @@ import org.robolectric.annotation.Config
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.Base64
+import kotlin.text.Charsets
+import kotlin.reflect.full.callSuspend
+import kotlin.reflect.full.declaredFunctions
+import kotlin.reflect.jvm.isAccessible
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -170,6 +175,67 @@ class PdfDocumentRepositoryEdgeCaseTest {
             repository.dispose()
             monsterFile.delete()
         }
+    }
+
+    @Test
+    fun harnessFixtureTriggersPreemptiveRepair() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val constants = Class.forName("com.novapdf.reader.data.PdfDocumentRepositoryKt")
+        val markerField = constants.getDeclaredField("HARNESS_FIXTURE_MARKER").apply {
+            isAccessible = true
+        }
+        val harnessMarker = markerField.get(null) as String
+        val minCountField = constants.getDeclaredField("PRE_REPAIR_MIN_PAGE_COUNT").apply {
+            isAccessible = true
+        }
+        val minPageCount = minCountField.getInt(null)
+
+        val harnessFile = File(context.cacheDir, "harness-fixture.pdf")
+        val pdfSkeleton = """
+            %PDF-1.4
+            1 0 obj
+            << /Type /Catalog /Pages 2 0 R >>
+            endobj
+            2 0 obj
+            << /Type /Pages /Count $minPageCount /Kids [3 0 R] >>
+            endobj
+            3 0 obj
+            << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+            endobj
+            4 0 obj
+            << /Length 0 >>
+            stream
+            endstream
+            endobj
+            % $harnessMarker
+            %%EOF
+        """.trimIndent()
+        harnessFile.writeText(pdfSkeleton, Charsets.ISO_8859_1)
+
+        val detectOversized = PdfDocumentRepository::class.declaredFunctions
+            .first { it.name == "detectOversizedPageTree" }
+            .apply { isAccessible = true }
+
+        val shouldRepair = detectOversized.callSuspend(
+            repository,
+            harnessFile.toUri(),
+            harnessFile.length(),
+            null,
+        ) as Boolean
+
+        assertTrue(
+            "Harness fixture should trigger pre-emptive repair",
+            shouldRepair
+        )
+
+        repository.dispose()
+        harnessFile.delete()
     }
 
     private fun loadBase64Fixture(path: String): ByteArray {
