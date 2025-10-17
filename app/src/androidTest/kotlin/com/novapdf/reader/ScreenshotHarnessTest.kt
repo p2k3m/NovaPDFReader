@@ -857,11 +857,25 @@ class ScreenshotHarnessTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val arguments = InstrumentationRegistry.getArguments()
         val packageManager = instrumentation.context.packageManager
+        val knownPackages = buildSet {
+            fun MutableSet<String>.addIfValid(value: String?) {
+                if (!value.isNullOrBlank()) {
+                    add(value)
+                }
+            }
+
+            addIfValid(instrumentation.context.packageName)
+            addIfValid(instrumentation.context.applicationContext?.packageName)
+            val targetPackage = instrumentation.targetContext.packageName
+            addIfValid(targetPackage)
+            addIfValid(instrumentation.targetContext.applicationContext?.packageName)
+            addIfValid("$targetPackage.test")
+        }
 
         fun selectCandidate(candidate: String?, source: String): String? {
             val raw = candidate?.takeIf { it.isNotBlank() } ?: return null
             val value = raw.trim()
-            val normalized = normalizePackageName(packageManager, value)
+            val normalized = normalizePackageName(packageManager, value, knownPackages)
             if (normalized != null) {
                 if (normalized != value) {
                     logHarnessInfo(
@@ -886,7 +900,7 @@ class ScreenshotHarnessTest {
             ?.let { return it }
 
         val instrumentationPackage = instrumentation.context.packageName
-        normalizePackageName(packageManager, instrumentationPackage)?.let { packageName ->
+        normalizePackageName(packageManager, instrumentationPackage, knownPackages)?.let { packageName ->
             if (packageName.endsWith(".test")) {
                 return packageName
             }
@@ -897,26 +911,41 @@ class ScreenshotHarnessTest {
         }
 
         val targetPackage = instrumentation.targetContext.packageName
-        val derived = normalizePackageName(packageManager, instrumentationPackage)
+        val derived = normalizePackageName(packageManager, instrumentationPackage, knownPackages)
             ?.takeIf { it.isNotBlank() && it != targetPackage }
-            ?: normalizePackageName(packageManager, "$targetPackage.test")
+            ?: normalizePackageName(packageManager, "$targetPackage.test", knownPackages)
 
         selectCandidate(derived, "derived fallback")?.let { return it }
 
-        return normalizePackageName(packageManager, targetPackage) ?: targetPackage
+        return normalizePackageName(packageManager, targetPackage, knownPackages) ?: targetPackage
     }
 
     private fun normalizePackageName(
         packageManager: PackageManager,
-        raw: String?
+        raw: String?,
+        knownPackages: Collection<String>,
     ): String? {
         val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         if (PACKAGE_NAME_PATTERN.matches(value)) {
             return value
         }
+        if (value.contains('*')) {
+            knownPackages.firstOrNull { candidate -> matchesPackagePattern(value, candidate) }?.let { return it }
+        }
         resolveSanitizedPackageName(packageManager, value)?.let { return it }
+        if (value.contains('*')) {
+            return null
+        }
         val sanitized = value.replace(Regex("[^A-Za-z0-9._]"), "")
         return sanitized.takeIf { it.isNotEmpty() && PACKAGE_NAME_PATTERN.matches(it) }
+    }
+
+    private fun matchesPackagePattern(pattern: String, packageName: String): Boolean {
+        if (!pattern.contains('*')) {
+            return pattern == packageName
+        }
+        val regex = Regex("^" + Regex.escape(pattern).replace("\\*", ".*") + "$")
+        return regex.matches(packageName)
     }
 
     private fun resolveSanitizedPackageName(
