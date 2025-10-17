@@ -83,7 +83,20 @@ def parse_args() -> argparse.Namespace:
             "when the screenshot harness instrumentation is missing"
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    normalized_component = _normalize_instrumentation_component(
+        args, args.instrumentation
+    )
+    if normalized_component != args.instrumentation:
+        print(
+            "Normalizing requested instrumentation component "
+            f"{args.instrumentation} -> {normalized_component}",
+            file=sys.stderr,
+        )
+        args.instrumentation = normalized_component
+
+    return args
 
 
 def adb_command(args: argparse.Namespace, *cmd: str, text: bool = True, **kwargs):
