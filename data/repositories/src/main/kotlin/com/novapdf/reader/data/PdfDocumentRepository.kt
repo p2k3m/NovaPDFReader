@@ -93,6 +93,7 @@ private const val MAX_BITMAP_DIMENSION = 8_192
 private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val PRE_REPAIR_MIN_PAGE_COUNT = 512
+@Suppress("unused") // Accessed via reflection in tests.
 private const val HARNESS_FIXTURE_MARKER = "Generated for screenshot harness"
 private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
