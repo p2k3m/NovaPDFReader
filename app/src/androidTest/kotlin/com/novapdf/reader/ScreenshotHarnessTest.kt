@@ -630,11 +630,19 @@ class ScreenshotHarnessTest {
     private fun resolveTestPackageName(): String {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val arguments = InstrumentationRegistry.getArguments()
+        val packageManager = instrumentation.context.packageManager
 
         fun selectCandidate(candidate: String?, source: String): String? {
-            val value = candidate?.takeIf { it.isNotBlank() } ?: return null
-            if (PACKAGE_NAME_PATTERN.matches(value)) {
-                return value
+            val raw = candidate?.takeIf { it.isNotBlank() } ?: return null
+            val value = raw.trim()
+            val normalized = normalizePackageName(packageManager, value)
+            if (normalized != null) {
+                if (normalized != value) {
+                    logHarnessInfo(
+                        "Resolved sanitized screenshot harness package $value to $normalized from $source"
+                    )
+                }
+                return normalized
             }
             logHarnessWarn("Ignoring invalid screenshot harness package name from $source: $value")
             return null
@@ -652,28 +660,66 @@ class ScreenshotHarnessTest {
             ?.let { return it }
 
         val instrumentationPackage = instrumentation.context.packageName
-        if (PACKAGE_NAME_PATTERN.matches(instrumentationPackage)) {
-            if (instrumentationPackage.endsWith(".test")) {
-                return instrumentationPackage
+        normalizePackageName(packageManager, instrumentationPackage)?.let { packageName ->
+            if (packageName.endsWith(".test")) {
+                return packageName
             }
-        } else {
-            logHarnessWarn("Ignoring invalid instrumentation context package name: $instrumentationPackage")
+        } ?: run {
+            logHarnessWarn(
+                "Ignoring invalid instrumentation context package name: $instrumentationPackage"
+            )
         }
 
         val targetPackage = instrumentation.targetContext.packageName
-        val derived = if (
-            instrumentationPackage.isNotBlank() &&
-            instrumentationPackage != targetPackage &&
-            PACKAGE_NAME_PATTERN.matches(instrumentationPackage)
-        ) {
-            instrumentationPackage
-        } else {
-            "$targetPackage.test"
-        }
+        val derived = normalizePackageName(packageManager, instrumentationPackage)
+            ?.takeIf { it.isNotBlank() && it != targetPackage }
+            ?: normalizePackageName(packageManager, "$targetPackage.test")
 
         selectCandidate(derived, "derived fallback")?.let { return it }
 
-        return targetPackage
+        return normalizePackageName(packageManager, targetPackage) ?: targetPackage
+    }
+
+    private fun normalizePackageName(
+        packageManager: PackageManager,
+        raw: String?
+    ): String? {
+        val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (PACKAGE_NAME_PATTERN.matches(value)) {
+            return value
+        }
+        resolveSanitizedPackageName(packageManager, value)?.let { return it }
+        val sanitized = value.replace(Regex("[^A-Za-z0-9._]"), "")
+        return sanitized.takeIf { it.isNotEmpty() && PACKAGE_NAME_PATTERN.matches(it) }
+    }
+
+    private fun resolveSanitizedPackageName(
+        packageManager: PackageManager,
+        pattern: String
+    ): String? {
+        if (!pattern.contains('*')) {
+            return null
+        }
+        val regex = Regex("^" + Regex.escape(pattern).replace("\\*", ".*") + "$")
+        val installedPackages = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getInstalledApplications(0)
+            }
+        }.getOrElse { return null }
+        val matches = installedPackages
+            .mapNotNull { it.packageName }
+            .filter { regex.matches(it) }
+        if (matches.isEmpty()) {
+            return null
+        }
+        if (matches.size == 1) {
+            return matches.first()
+        }
+        val suffix = pattern.substringAfterLast('*', "")
+        return matches.firstOrNull { suffix.isNotEmpty() && it.endsWith(suffix) } ?: matches.first()
     }
 
     private fun Context.credentialProtectedStorageContext(): Context {
