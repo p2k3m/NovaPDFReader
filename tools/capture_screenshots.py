@@ -147,6 +147,49 @@ def normalize_package_name(
     return None
 
 
+def _resolve_sanitized_instrumentation_component(
+    args: Optional[argparse.Namespace], pattern: str
+) -> Optional[str]:
+    if args is None:
+        return None
+
+    glob = re.escape(pattern).replace(r"\*", ".*")
+    try:
+        output = adb_command_output(args, "shell", "pm", "list", "instrumentation")
+    except subprocess.CalledProcessError:
+        return None
+
+    regex = re.compile(f"^{glob}$")
+    matches: List[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("instrumentation:"):
+            continue
+        component = stripped[len("instrumentation:") :].split(" ", 1)[0].strip()
+        if component and regex.match(component):
+            matches.append(component)
+
+    if not matches:
+        return None
+
+    if len(matches) == 1:
+        return matches[0]
+
+    suffix = pattern.split("/", 1)[-1]
+    if suffix:
+        suffix_regex = re.escape(suffix).replace(r"\*", ".*")
+        try:
+            runner_regex = re.compile(f"{suffix_regex}$")
+        except re.error:
+            runner_regex = None
+        if runner_regex:
+            for match in matches:
+                if runner_regex.search(match):
+                    return match
+
+    return matches[0]
+
+
 def _normalize_instrumentation_component(
     args: argparse.Namespace, component: str
 ) -> str:
@@ -163,6 +206,11 @@ def _normalize_instrumentation_component(
         if separator:
             return f"{normalized_package}/{runner}"
         return normalized_package
+
+    if "*" in package:
+        resolved = _resolve_sanitized_instrumentation_component(args, component)
+        if resolved:
+            return resolved
 
     return component
 
