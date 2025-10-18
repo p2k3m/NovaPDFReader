@@ -3093,6 +3093,14 @@ jobs:
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
             exit 1
           fi
+      - name: Verify instrumentation log tails
+        if: env.UNIT_TESTS_PASSED == 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/scripts/verify_log_markers.py \
+            --path "device-logs/connected-android-test/logcat.txt" \
+            --path "device-logs/screenshot-harness/logcat.txt" \
+            --require-any "TestRunner: run finished||INSTRUMENTATION_RESULT: stream=||INSTRUMENTATION_STATUS_CODE: -1"
       - name: Collect emulator logs
         if: always()
         run: |
