@@ -2757,50 +2757,7 @@ jobs:
           compute_timeout_from_snapshot() {
             local snapshot_path="$1"
             local base_seconds="$2"
-            python3 - "$snapshot_path" "$base_seconds" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-base = float(sys.argv[2])
-with open(path, "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-
-total_kb = float(data.get("mem_total_kb") or 0)
-available_percent = float(data.get("mem_available_percent") or 0)
-cpu = float(data.get("cpu_usage_percent") or 0)
-cores = float(data.get("cpu_cores") or 0)
-
-scale = 1.0
-if total_kb > 0:
-    mem_gb = total_kb / (1024.0 * 1024.0)
-    if mem_gb < 2.0:
-        scale *= 2.8
-    elif mem_gb < 4.0:
-        scale *= 1.9
-    elif mem_gb < 6.0:
-        scale *= 1.4
-    elif mem_gb > 8.0:
-        scale *= 0.9
-    else:
-        scale *= 1.1
-
-if cores:
-    if cores <= 4:
-        scale *= 1.3
-    elif cores >= 8:
-        scale *= 0.9
-
-if available_percent and available_percent < 15.0:
-    scale *= 1.2
-
-if cpu and cpu > 85.0:
-    scale *= 1.15
-
-timeout = base * scale
-timeout = max(240.0, min(timeout, 1200.0))
-print(int(round(timeout)))
-PY
+            python3 -c $'import json, sys\npath = sys.argv[1]\nbase = float(sys.argv[2])\nwith open(path, "r", encoding="utf-8") as handle:\n    data = json.load(handle)\n\ntotal_kb = float(data.get("mem_total_kb") or 0)\navailable_percent = float(data.get("mem_available_percent") or 0)\ncpu = float(data.get("cpu_usage_percent") or 0)\ncores = float(data.get("cpu_cores") or 0)\n\nscale = 1.0\nif total_kb > 0:\n    mem_gb = total_kb / (1024.0 * 1024.0)\n    if mem_gb < 2.0:\n        scale *= 2.8\n    elif mem_gb < 4.0:\n        scale *= 1.9\n    elif mem_gb < 6.0:\n        scale *= 1.4\n    elif mem_gb > 8.0:\n        scale *= 0.9\n    else:\n        scale *= 1.1\n\nif cores:\n    if cores <= 4:\n        scale *= 1.3\n    elif cores >= 8:\n        scale *= 0.9\n\nif available_percent and available_percent < 15.0:\n    scale *= 1.2\n\nif cpu and cpu > 85.0:\n    scale *= 1.15\n\ntimeout = base * scale\ntimeout = max(240.0, min(timeout, 1200.0))\nprint(int(round(timeout)))\n' "$snapshot_path" "$base_seconds"
           }
 
           ACTIVITY_MANAGER_TIMEOUT=$(compute_timeout_from_snapshot "$before_snapshot_path" 300)
