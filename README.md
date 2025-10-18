@@ -162,11 +162,14 @@ virtual device with at least 6 GB of RAM (8 GB preferred) and an 8 GB writable d
 ensure hardware acceleration (KVM/HAXM/Hypervisor) is available so the
 instrumentation run has full CPU access. Prefer the software SwiftShader GPU
 (`-gpu swiftshader_indirect`) unless you have confirmed a dedicated GPU is
-stable under load. The emulator readiness checks now enforce this default and
-will refuse to proceed if the instance launches with a hardware GPU unless the
-`NOVAPDF_ALLOW_HARDWARE_GPU` environment variable is set to a truthy value.
+stable under load. The readiness checks now require a cold boot (`-no-snapshot-load -wipe-data`) on every
+launch and insist on SwiftShader unless you explicitly opt in to hardware GPU
+mode and confirm KVM safety. Set `NOVAPDF_ALLOW_HARDWARE_GPU=1` together with
+`NOVAPDF_EMULATOR_KVM_CONFIRMED_SAFE=1` (or run on a host that exposes a
+read/write `/dev/kvm`) to bypass the SwiftShader guardrail.
 Always wipe user data and cold boot the emulator before
-invocation so no residue from earlier runs remains:
+invocation so no residue from earlier runs remains (set
+`NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS=0` to disable this enforcement for local debugging):
 
 ```bash
 emulator @NovaPDFApi32 \
