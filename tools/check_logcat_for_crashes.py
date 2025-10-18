@@ -8,7 +8,15 @@ import pathlib
 import re
 import sys
 import zipfile
-from typing import Iterable, List, Pattern, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Pattern, Sequence, Tuple
+
+
+@dataclass(frozen=True)
+class IssueReport:
+    message: str
+    snippet: str
+    source: str
 
 
 def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]:
@@ -78,8 +86,117 @@ def _build_crash_signatures(package_name: str) -> List[Tuple[Pattern[str], str]]
     ]
 
 
-def _find_issues(contents: str, signatures: Iterable[Tuple[Pattern[str], str]]) -> List[str]:
-    return [message for pattern, message in signatures if pattern.search(contents)]
+LOG_PREFIX_RE = re.compile(r"\b([VDIWEF])\s+([A-Za-z0-9_.$-]+):")
+
+
+def _log_prefix(line: str) -> Optional[str]:
+    match = LOG_PREFIX_RE.search(line)
+    if match:
+        return f"{match.group(1)} {match.group(2)}:"
+    return None
+
+
+def _instrumentation_prefix(line: str) -> Optional[str]:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.upper().startswith("INSTRUMENTATION_"):
+        return "INSTRUMENTATION_"
+    if stripped.startswith("Instrumentation "):
+        return "Instrumentation "
+    return None
+
+
+def _is_related_log_line(
+    line: str,
+    prefix: Optional[str],
+    instrumentation_prefix: Optional[str],
+    base_line: str,
+) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if instrumentation_prefix:
+        return stripped.upper().startswith(instrumentation_prefix.upper())
+    if prefix:
+        if _log_prefix(line) == prefix:
+            return True
+        if stripped.startswith(
+            (
+                "at ",
+                "Caused by:",
+                "Suppressed:",
+                "Process:",
+                "Process ",
+                "pid ",
+                "java.",
+                "kotlin.",
+                "android.",
+                "com.",
+                "org.",
+            )
+        ):
+            return True
+        return False
+    if re.match(r"\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}", stripped):
+        return False
+    if re.match(r"[VDIWEF]\s+[A-Za-z0-9_.$-]+:", stripped):
+        return False
+    return True
+
+
+def _extract_log_snippet(contents: str, match: re.Match[str]) -> str:
+    lines_with_newlines = contents.splitlines(True)
+    positions: List[Tuple[int, int]] = []
+    cursor = 0
+    for segment in lines_with_newlines:
+        length = len(segment)
+        positions.append((cursor, cursor + length))
+        cursor += length
+
+    line_index = 0
+    for index, (start, end) in enumerate(positions):
+        if match.start() < end:
+            line_index = index
+            break
+
+    base_line = lines_with_newlines[line_index].rstrip("\r\n")
+    prefix = _log_prefix(base_line)
+    instrumentation_prefix = _instrumentation_prefix(base_line)
+
+    indices = [line_index]
+
+    idx = line_index - 1
+    while idx >= 0:
+        candidate = lines_with_newlines[idx].rstrip("\r\n")
+        if _is_related_log_line(candidate, prefix, instrumentation_prefix, base_line):
+            indices.insert(0, idx)
+            idx -= 1
+            continue
+        break
+
+    idx = line_index + 1
+    while idx < len(lines_with_newlines):
+        candidate = lines_with_newlines[idx].rstrip("\r\n")
+        if _is_related_log_line(candidate, prefix, instrumentation_prefix, base_line):
+            indices.append(idx)
+            idx += 1
+            continue
+        break
+
+    snippet = "".join(lines_with_newlines[i] for i in indices).rstrip("\n")
+    return snippet
+
+
+def _find_issues(
+    contents: str, signatures: Iterable[Tuple[Pattern[str], str]]
+) -> List[Tuple[str, str]]:
+    issues: List[Tuple[str, str]] = []
+    for pattern, message in signatures:
+        for match in pattern.finditer(contents):
+            snippet = _extract_log_snippet(contents, match)
+            issues.append((message, snippet))
+    return issues
 
 
 def _iter_log_sources(path: pathlib.Path) -> Iterable[Tuple[str, str]]:
@@ -106,21 +223,29 @@ def _iter_log_sources(path: pathlib.Path) -> Iterable[Tuple[str, str]]:
 
 def _scan_logs_for_issues(
     paths: Sequence[pathlib.Path], signatures: Iterable[Tuple[Pattern[str], str]]
-) -> List[str]:
-    issues: List[str] = []
+) -> List[IssueReport]:
+    issues: List[IssueReport] = []
     seen = set()
     for path in paths:
         if not path.exists():
-            issues.append(f"Unable to locate captured log at {path}")
+            issues.append(
+                IssueReport(
+                    message=f"Unable to locate captured log at {path}",
+                    snippet="",
+                    source=str(path),
+                )
+            )
             continue
 
         for source, text in _iter_log_sources(path):
-            for message in _find_issues(text, signatures):
-                formatted = f"{message} (source: {source})"
-                if formatted in seen:
+            for message, snippet in _find_issues(text, signatures):
+                fingerprint = (message, snippet)
+                if fingerprint in seen:
                     continue
-                seen.add(formatted)
-                issues.append(formatted)
+                seen.add(fingerprint)
+                issues.append(
+                    IssueReport(message=message, snippet=snippet, source=source)
+                )
 
     return issues
 
@@ -148,8 +273,12 @@ def main() -> int:
     issues = _scan_logs_for_issues(paths, _build_crash_signatures(args.package))
 
     if issues:
-        for message in issues:
-            print(f"::error::{message}")
+        for issue in issues:
+            print(f"::error::{issue.message} (source: {issue.source})")
+            if issue.snippet:
+                print("Relevant log excerpt:")
+                print(issue.snippet)
+                print("--- end excerpt ---")
         return 1
 
     inspected = ", ".join(str(path) for path in paths)

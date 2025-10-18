@@ -18,17 +18,23 @@ class CrashSignatureTests(unittest.TestCase):
     def test_androidruntime_fatal_exception_other_process_ignored(self):
         log = """E AndroidRuntime: FATAL EXCEPTION: main\nProcess: com.other.app, PID: 1234\n"""
         issues = self._find_issues(log)
+        messages = [message for message, _ in issues]
         self.assertNotIn(
             "AndroidRuntime reported a fatal exception while instrumentation tests were running",
-            issues,
+            messages,
         )
 
     def test_androidruntime_fatal_exception_for_package_detected(self):
         log = """E AndroidRuntime: FATAL EXCEPTION: main\nProcess: com.example.app, PID: 1234\n"""
         issues = self._find_issues(log)
+        messages = [message for message, _ in issues]
         self.assertIn(
             "AndroidRuntime reported a fatal exception while instrumentation tests were running",
-            issues,
+            messages,
+        )
+        self.assertTrue(
+            any("Process: com.example.app" in snippet for _, snippet in issues),
+            msg=f"Expected stack trace snippet in {issues}",
         )
 
     def test_input_dispatch_timeout_for_package_detected(self):
@@ -38,9 +44,14 @@ class CrashSignatureTests(unittest.TestCase):
 12-10 12:34:56.800  1234  5678 I ActivityTaskManager: Displayed com.example.app/.MainActivity
 """
         issues = self._find_issues(log)
+        messages = [message for message, _ in issues]
         self.assertIn(
             "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
-            issues,
+            messages,
+        )
+        self.assertTrue(
+            any("Input dispatching timed out" in snippet for _, snippet in issues),
+            msg=f"Expected ANR snippet in {issues}",
         )
 
     def test_input_dispatch_timeout_for_other_package_ignored(self):
@@ -50,9 +61,10 @@ class CrashSignatureTests(unittest.TestCase):
 12-10 12:34:56.800  1234  5678 I ActivityTaskManager: Displayed com.example.app/.MainActivity
 """
         issues = self._find_issues(log)
+        messages = [message for message, _ in issues]
         self.assertNotIn(
             "Detected input dispatch timeout indicative of an ANR during instrumentation tests",
-            issues,
+            messages,
         )
 
     def test_sigsegv_detected_in_bugreport_archive(self):
@@ -69,11 +81,15 @@ class CrashSignatureTests(unittest.TestCase):
                 self.signatures,
             )
 
-        self.assertIn(
-            "Detected native crash (fatal signal) for com.example.app during instrumentation tests",
-            [issue.split(" (source:")[0] for issue in issues],
-            msg=f"Expected fatal signal detection in {issues}",
+        messages = [issue.message for issue in issues]
+        target_message = (
+            "Detected native crash (fatal signal) for com.example.app during instrumentation tests"
         )
+        self.assertIn(target_message, messages, msg=f"Expected fatal signal detection in {issues}")
+        matching_issue = next(issue for issue in issues if issue.message == target_message)
+        self.assertIn("Fatal signal 11", matching_issue.snippet)
+        self.assertIn("Process name: com.example.app", matching_issue.snippet)
+        self.assertTrue(matching_issue.source.endswith("FS/data/anr/traces.txt"))
 
 
 if __name__ == "__main__":
