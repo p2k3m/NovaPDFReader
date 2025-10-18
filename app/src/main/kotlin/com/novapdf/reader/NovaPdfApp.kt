@@ -141,6 +141,19 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private fun isInstrumentationRuntime(): Boolean {
+        val processName = try {
+            Application.getProcessName()
+        } catch (_: Throwable) {
+            null
+        }
+        if (!processName.isNullOrEmpty()) {
+            if (processName.endsWith(".test")) {
+                return true
+            }
+            if (processName.contains(":test")) {
+                return true
+            }
+        }
         if (isActivityThreadInstrumented()) {
             return true
         }
