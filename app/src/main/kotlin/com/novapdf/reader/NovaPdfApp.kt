@@ -126,11 +126,31 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private fun isRunningInTestHarness(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return ActivityManager.isRunningInUserTestHarness()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            ActivityManager.isRunningInUserTestHarness()
+        ) {
+            return true
         }
         @Suppress("DEPRECATION")
-        return ActivityManager.isRunningInTestHarness()
+        if (ActivityManager.isRunningInTestHarness()) {
+            return true
+        }
+        return isInstrumentationRuntime()
+    }
+
+    private fun isInstrumentationRuntime(): Boolean {
+        val registryCandidates = listOf(
+            "androidx.test.platform.app.InstrumentationRegistry",
+            "androidx.test.InstrumentationRegistry",
+        )
+
+        return registryCandidates.any { className ->
+            runCatching {
+                val registryClass = Class.forName(className)
+                val method = registryClass.getMethod("getInstrumentation")
+                method.invoke(null)
+            }.getOrNull() != null
+        }
     }
 
     override fun onTerminate() {
