@@ -2205,8 +2205,22 @@ jobs:
       - name: Run instrumentation tests against stress PDFs
         if: env.UNIT_TESTS_PASSED == 'true'
         run: |
+          set -euo pipefail
+
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+
+          python3 tools/device_resource_snapshot.py \
+            --label "connected-android-test-before" \
+            --include-properties \
+            --output "${resource_dir}/connected-android-test-before.json"
+
           adb logcat -c || true
           ./gradlew connectedAndroidTest --stacktrace --rerun-tasks --no-build-cache
+
+          python3 tools/device_resource_snapshot.py \
+            --label "connected-android-test-after" \
+            --output "${resource_dir}/connected-android-test-after.json"
       - name: Verify heavy PDF instrumentation coverage
         if: env.UNIT_TESTS_PASSED == 'true'
         run: |
@@ -2331,8 +2345,21 @@ jobs:
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
           set -euo pipefail
+
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+
+          python3 tools/device_resource_snapshot.py \
+            --label "macrobenchmark-before" \
+            --include-properties \
+            --output "${resource_dir}/macrobenchmark-before.json"
+
           adb logcat -c || true
           ./gradlew :baselineprofile:connectedBenchmarkAndroidTest --stacktrace --no-build-cache
+
+          python3 tools/device_resource_snapshot.py \
+            --label "macrobenchmark-after" \
+            --output "${resource_dir}/macrobenchmark-after.json"
       - name: Verify macrobenchmark coverage
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
@@ -2366,8 +2393,21 @@ jobs:
         if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
         run: |
           set -euo pipefail
+
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+
+          python3 tools/device_resource_snapshot.py \
+            --label "baseline-profile-before" \
+            --include-properties \
+            --output "${resource_dir}/baseline-profile-before.json"
+
           adb logcat -c || true
           ./gradlew :app:generateReleaseBaselineProfile --stacktrace --no-build-cache
+
+          python3 tools/device_resource_snapshot.py \
+            --label "baseline-profile-after" \
+            --output "${resource_dir}/baseline-profile-after.json"
       - name: Collect and validate device logs after baseline profile generation
         if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && always() }}
         env:
@@ -2687,6 +2727,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+
+          resource_snapshot() {
+            local label="$1"
+            local path="$2"
+            shift 2 || true
+            python3 tools/device_resource_snapshot.py --label "$label" --output "$path" "$@"
+          }
+
           base_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$base_dir"
 
@@ -2697,6 +2747,65 @@ jobs:
           HARNESS_LOGCAT="$base_dir/screenshot-harness-logcat.log"
           PERFORMANCE_DIR="${ARTIFACTS_DIR}/performance/api${{ matrix.api }}/${{ matrix.device_label }}"
           METRICS_FILE_NAME="performance_metrics.csv"
+
+          before_snapshot_path="${resource_dir}/screenshot-harness-before.json"
+          after_snapshot_path="${resource_dir}/screenshot-harness-after.json"
+          captured_after_snapshot=0
+
+          resource_snapshot "screenshot-harness-before" "$before_snapshot_path" --include-properties
+
+          compute_timeout_from_snapshot() {
+            local snapshot_path="$1"
+            local base_seconds="$2"
+            python3 - "$snapshot_path" "$base_seconds" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+base = float(sys.argv[2])
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+total_kb = float(data.get("mem_total_kb") or 0)
+available_percent = float(data.get("mem_available_percent") or 0)
+cpu = float(data.get("cpu_usage_percent") or 0)
+cores = float(data.get("cpu_cores") or 0)
+
+scale = 1.0
+if total_kb > 0:
+    mem_gb = total_kb / (1024.0 * 1024.0)
+    if mem_gb < 2.0:
+        scale *= 2.8
+    elif mem_gb < 4.0:
+        scale *= 1.9
+    elif mem_gb < 6.0:
+        scale *= 1.4
+    elif mem_gb > 8.0:
+        scale *= 0.9
+    else:
+        scale *= 1.1
+
+if cores:
+    if cores <= 4:
+        scale *= 1.3
+    elif cores >= 8:
+        scale *= 0.9
+
+if available_percent and available_percent < 15.0:
+    scale *= 1.2
+
+if cpu and cpu > 85.0:
+    scale *= 1.15
+
+timeout = base * scale
+timeout = max(240.0, min(timeout, 1200.0))
+print(int(round(timeout)))
+PY
+          }
+
+          ACTIVITY_MANAGER_TIMEOUT=$(compute_timeout_from_snapshot "$before_snapshot_path" 300)
+          HARNESS_READY_TIMEOUT=$(compute_timeout_from_snapshot "$before_snapshot_path" 360)
+          echo "Using dynamic timeouts for screenshot harness: activity manager ${ACTIVITY_MANAGER_TIMEOUT}s, readiness ${HARNESS_READY_TIMEOUT}s" >&2
 
           HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
           APP_RUN_AS_PACKAGE="${PACKAGE_NAME}"
@@ -2842,6 +2951,10 @@ jobs:
               kill "$harness_pid" >/dev/null 2>&1 || true
               wait "$harness_pid" >/dev/null 2>&1 || true
             fi
+            if [ "${captured_after_snapshot}" -eq 0 ]; then
+              captured_after_snapshot=1
+              resource_snapshot "screenshot-harness-after" "$after_snapshot_path"
+            fi
             collect_performance_metrics "$HARNESS_RUN_AS_PACKAGE" "harness"
             collect_performance_metrics "$APP_RUN_AS_PACKAGE" "app"
             cleanup_flags
@@ -2850,7 +2963,7 @@ jobs:
 
           wait_for_activity_manager() {
             local elapsed=0
-            local timeout=$((5 * 60))
+            local timeout=${ACTIVITY_MANAGER_TIMEOUT:-300}
             while true; do
               if adb wait-for-device >/dev/null 2>&1; then
                 local status
@@ -2861,7 +2974,7 @@ jobs:
               fi
 
               if [ $elapsed -ge $timeout ]; then
-                echo "::error::Timed out waiting for Activity Manager service before launching screenshot harness" >&2
+                echo "::error::Timed out waiting for Activity Manager service before launching screenshot harness (timeout ${timeout}s)" >&2
                 collect_harness_logcat
                 collect_app_crash_logs
                 exit 1
@@ -2887,7 +3000,7 @@ jobs:
 
           wait_for_harness() {
             local elapsed=0
-            local timeout=$((5 * 60))
+            local timeout=${HARNESS_READY_TIMEOUT:-360}
             while true; do
               if ! kill -0 "$harness_pid" >/dev/null 2>&1; then
                 echo "::error::Screenshot harness instrumentation exited before reporting readiness" >&2
@@ -2903,7 +3016,7 @@ jobs:
               fi
 
               if [ $elapsed -ge $timeout ]; then
-                echo "::error::Timed out waiting for screenshot harness readiness flag" >&2
+                echo "::error::Timed out waiting for screenshot harness readiness flag (timeout ${timeout}s)" >&2
                 cat "$HARNESS_LOG" >&2 || true
                 collect_harness_logcat
                 collect_app_crash_logs
