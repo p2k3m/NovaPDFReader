@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -75,6 +76,16 @@ class ScreenshotHarnessTest {
         }
     )
 
+    @get:Rule(order = 3)
+    val resourceMonitorRule = DeviceResourceMonitorRule(
+        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        logger = { message -> logHarnessInfo(message) },
+        onResourceExhausted = { reason ->
+            logHarnessWarn("Resource exhaustion detected: $reason")
+            publishHarnessFailureFlag("resource_exhausted", IllegalStateException(reason))
+        },
+    )
+
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
 
@@ -88,6 +99,7 @@ class ScreenshotHarnessTest {
     private var metricsRecorder: PerformanceMetricsRecorder? = null
     private var failureFlagPublished: Boolean = false
     private var crashFlagPublished: Boolean = false
+    private var screenshotCompletionTimeoutMs: Long = DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS
 
     @Before
     fun setUp() = runBlocking {
@@ -101,6 +113,10 @@ class ScreenshotHarnessTest {
             appContext = ApplicationProvider.getApplicationContext()
             handshakePackageName = resolveTestPackageName()
             logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
+            screenshotCompletionTimeoutMs = resolveScreenshotCompletionTimeoutMillis(appContext)
+            logHarnessInfo(
+                "Adaptive screenshot completion timeout=${screenshotCompletionTimeoutMs / 1000} seconds",
+            )
             handshakeCacheDirs = resolveHandshakeCacheDirs(handshakePackageName)
             logHarnessInfo(
                 "Using handshake cache directories ${handshakeCacheDirs.joinToString { it.absolutePath }} " +
@@ -528,7 +544,7 @@ class ScreenshotHarnessTest {
                     finishWithError(error)
                     return
                 }
-                if (elapsed > SCREENSHOT_COMPLETION_TIMEOUT_MS) {
+                if (elapsed > screenshotCompletionTimeoutMs) {
                     val error = IllegalStateException("Timed out waiting for host screenshot completion signal")
                     logHarnessError(error.message ?: "Timed out waiting for screenshot completion", error)
                     publishHarnessFailureFlag("screenshot_wait_timeout", error)
@@ -1557,6 +1573,66 @@ class ScreenshotHarnessTest {
         }
     }
 
+    private fun resolveScreenshotCompletionTimeoutMillis(context: Context): Long {
+        val base = DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return base
+        return runCatching {
+            val memoryInfo = ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memoryInfo)
+            val totalMem = memoryInfo.totalMem
+            val totalGb = if (totalMem > 0L) {
+                totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
+            } else {
+                null
+            }
+            val availableRatio = if (totalMem > 0L) {
+                memoryInfo.availMem.toDouble() / totalMem.toDouble()
+            } else {
+                null
+            }
+            var multiplier = 1.0
+            if (memoryInfo.lowMemory || isLowRamDevice(activityManager)) {
+                multiplier = max(multiplier, 2.5)
+            }
+            if (totalGb != null) {
+                multiplier = when {
+                    totalGb < 4.0 -> max(multiplier, 2.0)
+                    totalGb < 6.0 -> max(multiplier, 1.5)
+                    totalGb > 8.0 -> min(multiplier, 0.75)
+                    else -> multiplier
+                }
+            }
+            val isEmulator = Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
+                Build.PRODUCT.contains("sdk", ignoreCase = true) ||
+                Build.MODEL.contains("Emulator", ignoreCase = true)
+            if (isEmulator) {
+                multiplier = max(multiplier, 1.75)
+            }
+            if (availableRatio != null) {
+                multiplier = when {
+                    availableRatio < 0.25 -> max(multiplier, 2.25)
+                    availableRatio > 0.6 && totalGb != null && totalGb >= 6.0 -> min(multiplier, 0.85)
+                    else -> multiplier
+                }
+            }
+            val resolved = (base * multiplier).toLong()
+            resolved.coerceIn(
+                MIN_SCREENSHOT_COMPLETION_TIMEOUT_MS,
+                MAX_SCREENSHOT_COMPLETION_TIMEOUT_MS,
+            )
+        }.getOrElse { base }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isLowRamDevice(activityManager: ActivityManager): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            activityManager.isLowRamDevice
+        } else {
+            false
+        }
+    }
+
     private data class ScreenshotTarget(
         val documentId: String,
         val sanitizedDocumentId: String,
@@ -1590,7 +1666,9 @@ class ScreenshotHarnessTest {
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
         private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
         private const val CAPTURE_VIDEO_OUTPUT_PERMISSION = "android.permission.CAPTURE_VIDEO_OUTPUT"
-        private val SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(5)
+        private val DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(5)
+        private val MIN_SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(2)
+        private val MAX_SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(12)
         private const val FLAG_OBSERVER_INITIAL_BACKOFF_MS = 250L
         private const val FLAG_OBSERVER_MAX_BACKOFF_MS = 5_000L
         // Opening a thousand-page stress document can take a while on CI devices, so give the
