@@ -146,18 +146,18 @@ data class PageTileRequest(
     val cancellationSignal: CancellationSignal? = null,
 )
 
-private data class PageBitmapKey(
+data class PageBitmapKey(
     val pageIndex: Int,
     val width: Int,
     val profile: PageRenderProfile,
 )
 
-private data class CacheSnapshot(
+data class CacheSnapshot(
     val bitmapCount: Int,
     val totalBytes: Long,
 )
 
-private data class BitmapPoolState(
+data class BitmapPoolState(
     val bitmapCount: Int,
     val totalBytes: Long,
 )
@@ -172,7 +172,7 @@ private data class CacheMaintenanceReport(
     val afterPool: BitmapPoolState,
 )
 
-private interface BitmapPoolHandle {
+interface BitmapPoolHandle {
     fun acquire(width: Int, height: Int, config: Bitmap.Config): Bitmap?
     fun release(bitmap: Bitmap): Boolean
     fun snapshotState(): BitmapPoolState
@@ -186,7 +186,17 @@ class PdfDocumentRepository(
     private val crashReporter: CrashReporter? = null,
     private val storageClient: StorageClient? = null,
     private val cacheDirectories: CacheDirectories,
+    private val bitmapCacheFactory: BitmapCacheFactory = defaultBitmapCacheFactory(),
+    private val bitmapPoolFactory: BitmapPoolFactory = defaultBitmapPoolFactory(),
 ) {
+    fun interface BitmapCacheFactory {
+        fun create(repository: PdfDocumentRepository): BitmapCache
+    }
+
+    fun interface BitmapPoolFactory {
+        fun create(repository: PdfDocumentRepository): BitmapPoolHandle
+    }
+
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -241,8 +251,12 @@ class PdfDocumentRepository(
             }.get(null)
         }.getOrNull()
     }
-    private val bitmapCache = createBitmapCache()
-    private val bitmapPool = createBitmapPool()
+    @Volatile
+    private var bitmapCacheRef: BitmapCache? = null
+    private val bitmapCacheLock = Any()
+    @Volatile
+    private var bitmapPoolRef: BitmapPoolHandle? = null
+    private val bitmapPoolLock = Any()
     private val _bitmapMemoryStats = MutableStateFlow(
         BitmapMemoryStats(
             currentBytes = 0L,
@@ -257,6 +271,47 @@ class PdfDocumentRepository(
         warnThresholdBytes = bitmapMemoryWarningThreshold,
         criticalThresholdBytes = bitmapMemoryCriticalThreshold,
     )
+    private fun bitmapCacheOrNull(): BitmapCache? = bitmapCacheRef
+    private fun requireBitmapCache(): BitmapCache {
+        val existing = bitmapCacheRef
+        if (existing != null) {
+            return existing
+        }
+        return synchronized(bitmapCacheLock) {
+            val current = bitmapCacheRef
+            if (current != null) {
+                current
+            } else {
+                val created = bitmapCacheFactory.create(this)
+                bitmapCacheRef = created
+                created
+            }
+        }
+    }
+
+    private fun bitmapPoolOrNull(): BitmapPoolHandle? = bitmapPoolRef
+    private fun requireBitmapPool(): BitmapPoolHandle {
+        val existing = bitmapPoolRef
+        if (existing != null) {
+            return existing
+        }
+        return synchronized(bitmapPoolLock) {
+            val current = bitmapPoolRef
+            if (current != null) {
+                current
+            } else {
+                val created = bitmapPoolFactory.create(this)
+                bitmapPoolRef = created
+                created
+            }
+        }
+    }
+
+    private fun bitmapCacheSnapshot(): CacheSnapshot =
+        bitmapCacheOrNull()?.snapshot() ?: CacheSnapshot(bitmapCount = 0, totalBytes = 0)
+
+    private fun bitmapPoolSnapshot(): BitmapPoolState =
+        bitmapPoolOrNull()?.snapshotState() ?: BitmapPoolState(bitmapCount = 0, totalBytes = 0L)
     private val _cacheFallbackActive = MutableStateFlow(false)
     val cacheFallbackActive: StateFlow<Boolean> = _cacheFallbackActive.asStateFlow()
 
@@ -1112,7 +1167,8 @@ class PdfDocumentRepository(
         if (targetWidth <= 0) return null
         val session = openSession.value ?: return null
         val key = PageBitmapKey(pageIndex, targetWidth, profile)
-        bitmapCache.get(key)?.let { existing ->
+        val cache = requireBitmapCache()
+        cache.get(key)?.let { existing ->
             if (!existing.isRecycled) {
                 return existing
             }
@@ -1138,7 +1194,7 @@ class PdfDocumentRepository(
                 pageIndex = pageIndex,
                 sizeBytesProvider = { estimatedBytes },
             ) {
-                bitmapCache.get(key)?.let { cached ->
+                cache.get(key)?.let { cached ->
                     if (!cached.isRecycled) {
                         return@traceOperation cached
                     }
@@ -1186,7 +1242,7 @@ class PdfDocumentRepository(
                         )
                     }
                     updateRenderProgress(PdfRenderProgress.Rendering(pageIndex, 1f))
-                    bitmapCache.put(key, bitmap)
+                    cache.put(key, bitmap)
                     pageFailureCounts.remove(pageIndex)
                     bitmap
                 } catch (throwable: Throwable) {
@@ -1777,7 +1833,7 @@ class PdfDocumentRepository(
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun reportBitmapPoolMetricsForTesting() {
-        bitmapPool.forceReport()
+        bitmapPoolOrNull()?.forceReport()
     }
 
     private fun calculateCacheBudget(): Long {
@@ -1971,7 +2027,7 @@ class PdfDocumentRepository(
     }
 
     private fun obtainBitmap(width: Int, height: Int, config: Bitmap.Config): Bitmap {
-        val pooled = bitmapPool.acquire(width, height, config)
+        val pooled = requireBitmapPool().acquire(width, height, config)
         if (pooled != null) {
             return pooled
         }
@@ -1979,7 +2035,7 @@ class PdfDocumentRepository(
     }
 
     private fun recycleBitmap(bitmap: Bitmap) {
-        if (!bitmap.isRecycled && !bitmapPool.release(bitmap)) {
+        if (!bitmap.isRecycled && !requireBitmapPool().release(bitmap)) {
             destroyBitmap(bitmap)
         }
     }
@@ -2002,7 +2058,7 @@ class PdfDocumentRepository(
         bitmapMemoryTracker.onReleased(bytes)
     }
 
-    private fun createBitmapCache(): BitmapCache {
+    private fun instantiateBitmapCache(): BitmapCache {
         return runCatching { LruBitmapCache(maxCacheBytes) }
             .getOrElse { throwable ->
                 reportCacheInitializationFailure("bitmap_cache", throwable)
@@ -2010,7 +2066,7 @@ class PdfDocumentRepository(
             }
     }
 
-    private fun createBitmapPool(): BitmapPoolHandle {
+    private fun instantiateBitmapPool(): BitmapPoolHandle {
         return runCatching {
             ActiveBitmapPool(
                 maxBytes = bitmapPoolMaxBytes,
@@ -2070,18 +2126,20 @@ class PdfDocumentRepository(
     }
 
     private fun clearBitmapCacheLocked() {
-        val bitmaps = bitmapCache.values().toList()
-        bitmapCache.clearAll()
-        bitmapCache.cleanUp()
+        val cache = bitmapCacheOrNull()
+        val pool = bitmapPoolOrNull()
+        val bitmaps = cache?.values()?.toList().orEmpty()
+        cache?.clearAll()
+        cache?.cleanUp()
         bitmaps.forEach(::recycleBitmap)
-        bitmapPool.clear()
+        pool?.clear()
     }
 
     private fun scheduleCacheClear() {
         renderScope.launch {
             val report = cacheLock.withLock {
-                val beforeCache = bitmapCache.snapshot()
-                val beforePool = bitmapPool.snapshotState()
+                val beforeCache = bitmapCacheSnapshot()
+                val beforePool = bitmapPoolSnapshot()
                 val start = SystemClock.elapsedRealtime()
                 clearBitmapCacheLocked()
                 val duration = SystemClock.elapsedRealtime() - start
@@ -2090,9 +2148,9 @@ class PdfDocumentRepository(
                     requestedFraction = null,
                     durationMs = duration,
                     beforeCache = beforeCache,
-                    afterCache = bitmapCache.snapshot(),
+                    afterCache = bitmapCacheSnapshot(),
                     beforePool = beforePool,
-                    afterPool = bitmapPool.snapshotState(),
+                    afterPool = bitmapPoolSnapshot(),
                 )
             }
             logCacheMaintenance(report)
@@ -2106,15 +2164,15 @@ class PdfDocumentRepository(
         }
         renderScope.launch {
             val report = cacheLock.withLock {
-                val beforeCache = bitmapCache.snapshot()
-                val beforePool = bitmapPool.snapshotState()
+                val beforeCache = bitmapCacheSnapshot()
+                val beforePool = bitmapPoolSnapshot()
                 val start = SystemClock.elapsedRealtime()
                 val action = if (clamped <= 0f) {
                     clearBitmapCacheLocked()
                     "trim_clear"
                 } else {
-                    bitmapCache.trimToFraction(clamped)
-                    bitmapPool.clear()
+                    bitmapCacheOrNull()?.trimToFraction(clamped)
+                    bitmapPoolOrNull()?.clear()
                     "trim"
                 }
                 val duration = SystemClock.elapsedRealtime() - start
@@ -2123,9 +2181,9 @@ class PdfDocumentRepository(
                     requestedFraction = clamped,
                     durationMs = duration,
                     beforeCache = beforeCache,
-                    afterCache = bitmapCache.snapshot(),
+                    afterCache = bitmapCacheSnapshot(),
                     beforePool = beforePool,
-                    afterPool = bitmapPool.snapshotState(),
+                    afterPool = bitmapPoolSnapshot(),
                 )
             }
             logCacheMaintenance(report)
@@ -2245,9 +2303,17 @@ class PdfDocumentRepository(
         private val KID_REFERENCE_PATTERN: Pattern = Pattern.compile("\\d+\\s+\\d+\\s+R")
         private val PAGE_TREE_COUNT_PATTERN: Pattern =
             Pattern.compile("/Type\\s*/Pages\\b.*?/Count\\s+(\\d+)", Pattern.DOTALL)
+
+        internal fun defaultBitmapCacheFactory(): BitmapCacheFactory = BitmapCacheFactory { repository ->
+            repository.instantiateBitmapCache()
+        }
+
+        internal fun defaultBitmapPoolFactory(): BitmapPoolFactory = BitmapPoolFactory { repository ->
+            repository.instantiateBitmapPool()
+        }
     }
 
-    private abstract inner class BitmapCache {
+    abstract inner class BitmapCache {
         private val aliasMutex = Mutex()
         private val aliasKeys = mutableMapOf<String, PageBitmapKey>()
         private var nextAliasId = 0

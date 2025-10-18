@@ -33,12 +33,14 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun providePdfDocumentRepository(
+    internal fun providePdfDocumentRepository(
         @ApplicationContext context: Context,
         crashReporter: CrashReporter,
         dispatchers: CoroutineDispatchers,
         storageClient: StorageClient,
         cacheDirectories: CacheDirectories,
+        bitmapCacheFactory: PdfDocumentRepository.BitmapCacheFactory,
+        bitmapPoolFactory: PdfDocumentRepository.BitmapPoolFactory,
     ): PdfDocumentRepository {
         val repository = PdfDocumentRepository(
             context,
@@ -46,12 +48,22 @@ object RepositoryModule {
             crashReporter = crashReporter,
             storageClient = storageClient,
             cacheDirectories = cacheDirectories,
+            bitmapCacheFactory = bitmapCacheFactory,
+            bitmapPoolFactory = bitmapPoolFactory,
         )
 
         enforceNoCaffeineCaches(repository)
 
         return repository
     }
+
+    @Provides
+    internal fun provideBitmapCacheFactory(): PdfDocumentRepository.BitmapCacheFactory =
+        PdfDocumentRepository.defaultBitmapCacheFactory()
+
+    @Provides
+    internal fun provideBitmapPoolFactory(): PdfDocumentRepository.BitmapPoolFactory =
+        PdfDocumentRepository.defaultBitmapPoolFactory()
 
     @Provides
     @Singleton

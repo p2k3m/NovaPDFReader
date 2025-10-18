@@ -84,16 +84,16 @@ class PdfViewerViewModelCacheAndErrorTest {
         val viewModel = createViewModel()
         advanceUntilIdle()
 
-        val pageCacheField = PdfViewerViewModel::class.java.getDeclaredField("pageBitmapCache").apply {
+        val requirePageCache = PdfViewerViewModel::class.java.getDeclaredMethod("requirePageBitmapCache").apply {
             isAccessible = true
         }
-        val tileCacheField = PdfViewerViewModel::class.java.getDeclaredField("tileBitmapCache").apply {
+        val requireTileCache = PdfViewerViewModel::class.java.getDeclaredMethod("requireTileBitmapCache").apply {
             isAccessible = true
         }
         @Suppress("UNCHECKED_CAST")
-        val pageCache = pageCacheField.get(viewModel) as android.util.LruCache<Any, Bitmap>
+        val pageCache = requirePageCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
         @Suppress("UNCHECKED_CAST")
-        val tileCache = tileCacheField.get(viewModel) as android.util.LruCache<Any, Bitmap>
+        val tileCache = requireTileCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
 
         val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
         val pageKey = pageKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
@@ -261,6 +261,12 @@ class PdfViewerViewModelCacheAndErrorTest {
         )
 
         val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
-        return PdfViewerViewModel(context, useCases, dispatchers)
+        return PdfViewerViewModel(
+            context,
+            useCases,
+            dispatchers,
+            PdfViewerViewModel.defaultPageBitmapCacheFactory(),
+            PdfViewerViewModel.defaultTileBitmapCacheFactory(),
+        )
     }
 }
