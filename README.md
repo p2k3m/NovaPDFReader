@@ -158,7 +158,7 @@ the `platform-tools`, `build-tools`, and emulator components for API level 32.
 
 For reliable UI tests, start the Android emulator with snapshots disabled and
 ample memory/storage to reduce hangs during heavy PDF rendering. Provision the
-virtual device with at least 4 GB of RAM and a 4 GB writable data partition, and
+virtual device with at least 6 GB of RAM (8 GB preferred) and an 8 GB writable data partition, and
 ensure hardware acceleration (KVM/HAXM/Hypervisor) is available so the
 instrumentation run has full CPU access. Prefer the software SwiftShader GPU
 (`-gpu swiftshader_indirect`) unless you have confirmed a dedicated GPU is
@@ -175,8 +175,8 @@ emulator @NovaPDFApi32 \
     -wipe-data \
     -no-boot-anim \
     -accel on \
-    -memory 4096 \
-    -partition-size 4096 \
+    -memory 8192 \
+    -partition-size 8192 \
     -gpu swiftshader_indirect
 ```
 

@@ -73,6 +73,20 @@ declare -r timeout_seconds
 
 declare -r poll_interval
 
+print_host_memory_stats() {
+  echo "Host memory snapshot ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+  if command -v free >/dev/null 2>&1; then
+    free -h || true
+  elif command -v vm_stat >/dev/null 2>&1; then
+    vm_stat || true
+  else
+    echo "free/vm_stat utilities unavailable on host" >&2
+  fi
+}
+
+echo "Capturing host memory snapshot before readiness checks"
+print_host_memory_stats
+
 normalize_bool() {
   local value="${1:-}"
   value=${value,,}
@@ -144,14 +158,14 @@ validate_emulator_configuration() {
     case "${args[$i]}" in
       -memory)
         if (( i + 1 >= ${#args[@]} )); then
-          echo "Emulator launched without a value for -memory; expected at least 4096" >&2
+          echo "Emulator launched without a value for -memory; expected at least 6144" >&2
           exit 1
         fi
         memory_value="${args[$((i + 1))]}"
         ;;
       -partition-size)
         if (( i + 1 >= ${#args[@]} )); then
-          echo "Emulator launched without a value for -partition-size; expected at least 4096" >&2
+          echo "Emulator launched without a value for -partition-size; expected at least 8192" >&2
           exit 1
         fi
         partition_value="${args[$((i + 1))]}"
@@ -184,28 +198,28 @@ validate_emulator_configuration() {
   done
 
   if [[ -z "$memory_value" ]]; then
-    echo "Emulator PID ${pid} missing -memory flag; launch with at least -memory 4096" >&2
+    echo "Emulator PID ${pid} missing -memory flag; launch with at least -memory 6144" >&2
     exit 1
   fi
   if ! [[ "$memory_value" =~ ^[0-9]+$ ]]; then
     echo "Emulator PID ${pid} has non-numeric -memory value '${memory_value}'" >&2
     exit 1
   fi
-  if (( memory_value < 4096 )); then
-    echo "Emulator PID ${pid} configured with ${memory_value} MiB RAM; expected at least 4096" >&2
+  if (( memory_value < 6144 )); then
+    echo "Emulator PID ${pid} configured with ${memory_value} MiB RAM; expected at least 6144" >&2
     exit 1
   fi
 
   if [[ -z "$partition_value" ]]; then
-    echo "Emulator PID ${pid} missing -partition-size flag; launch with at least -partition-size 4096" >&2
+    echo "Emulator PID ${pid} missing -partition-size flag; launch with at least -partition-size 8192" >&2
     exit 1
   fi
   if ! [[ "$partition_value" =~ ^[0-9]+$ ]]; then
     echo "Emulator PID ${pid} has non-numeric -partition-size value '${partition_value}'" >&2
     exit 1
   fi
-  if (( partition_value < 4096 )); then
-    echo "Emulator PID ${pid} configured with ${partition_value} MiB data partition; expected at least 4096" >&2
+  if (( partition_value < 8192 )); then
+    echo "Emulator PID ${pid} configured with ${partition_value} MiB data partition; expected at least 8192" >&2
     exit 1
   fi
 
@@ -336,6 +350,14 @@ adb_shell() {
   adb -s "$serial" shell "$@"
 }
 
+print_emulator_meminfo() {
+  echo "Emulator memory snapshot for ${serial} ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+  adb_shell cat /proc/meminfo 2>/dev/null | sed 's/^/[meminfo] /' || {
+    echo "Unable to read /proc/meminfo from ${serial}" >&2
+  }
+  adb_shell dumpsys meminfo 2>/dev/null | head -n 40 | sed 's/^/[dumpsys] /' || true
+}
+
 check_property_equals() {
   local property="$1"
   local expected_csv="$2"
@@ -442,5 +464,9 @@ if ! adb_shell uptime >/dev/null 2>&1; then
   echo "adb shell responsiveness check failed" >&2
   exit 1
 fi
+
+echo "Capturing host memory snapshot after readiness checks"
+print_host_memory_stats
+print_emulator_meminfo
 
 exit 0
