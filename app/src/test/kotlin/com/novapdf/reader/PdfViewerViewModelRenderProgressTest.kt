@@ -128,7 +128,9 @@ class PdfViewerViewModelRenderProgressTest {
         val viewModel = PdfViewerViewModel(
             app,
             useCases,
-            TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
+            TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher),
+            PdfViewerViewModel.defaultPageBitmapCacheFactory(),
+            PdfViewerViewModel.defaultTileBitmapCacheFactory(),
         )
 
         renderProgress.value = PdfRenderProgress.Rendering(pageIndex = 2, progress = 0.4f)

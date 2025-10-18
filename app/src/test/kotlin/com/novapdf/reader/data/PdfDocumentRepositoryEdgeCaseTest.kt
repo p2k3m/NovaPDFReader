@@ -66,10 +66,10 @@ class PdfDocumentRepositoryEdgeCaseTest {
             cacheDirectories = DefaultCacheDirectories(context),
         )
 
-        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+        val requireCache = PdfDocumentRepository::class.java.getDeclaredMethod("requireBitmapCache").apply {
             isAccessible = true
         }
-        val bitmapCache = bitmapCacheField.get(repository)
+        val bitmapCache = requireCache.invoke(repository)
         val putMethod = bitmapCache.javaClass.getDeclaredMethod("putBitmap", String::class.java, Bitmap::class.java).apply {
             isAccessible = true
         }
@@ -106,10 +106,10 @@ class PdfDocumentRepositoryEdgeCaseTest {
             cacheDirectories = DefaultCacheDirectories(context),
         )
 
-        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+        val requireCache = PdfDocumentRepository::class.java.getDeclaredMethod("requireBitmapCache").apply {
             isAccessible = true
         }
-        val bitmapCache = bitmapCacheField.get(repository)
+        val bitmapCache = requireCache.invoke(repository)
         val putMethod = bitmapCache.javaClass.getDeclaredMethod("putBitmap", String::class.java, Bitmap::class.java).apply {
             isAccessible = true
         }
@@ -258,10 +258,10 @@ class PdfDocumentRepositoryEdgeCaseTest {
             cacheDirectories = DefaultCacheDirectories(context),
         )
 
-        val bitmapCacheField = PdfDocumentRepository::class.java.getDeclaredField("bitmapCache").apply {
+        val requireCache = PdfDocumentRepository::class.java.getDeclaredMethod("requireBitmapCache").apply {
             isAccessible = true
         }
-        val bitmapCache = bitmapCacheField.get(repository)
+        val bitmapCache = requireCache.invoke(repository)
 
         assertEquals("LruBitmapCache", bitmapCache.javaClass.simpleName)
 

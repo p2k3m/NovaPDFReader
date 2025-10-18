@@ -128,7 +128,9 @@ class PdfViewerViewModelSearchTest {
         return PdfViewerViewModel(
             app,
             useCases,
-            TestCoroutineDispatchers(testDispatcher, testDispatcher, mainDispatcher)
+            TestCoroutineDispatchers(testDispatcher, testDispatcher, mainDispatcher),
+            PdfViewerViewModel.defaultPageBitmapCacheFactory(),
+            PdfViewerViewModel.defaultTileBitmapCacheFactory(),
         )
     }
 

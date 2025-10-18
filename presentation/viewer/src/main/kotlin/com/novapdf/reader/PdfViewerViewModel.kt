@@ -84,6 +84,32 @@ private const val VIEWPORT_PERSIST_THROTTLE_MS = 750L
 private const val DEV_ANR_STALL_DURATION_MS = 6_000L
 private const val DEV_ANR_REPEAT_DELAY_MS = 20_000L
 private const val DEV_ANR_SLEEP_CHUNK_MS = 50L
+
+fun interface ViewerBitmapCacheFactory<K> {
+    fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): FractionalBitmapLruCache<K>
+}
+
+class FractionalBitmapLruCache<K>(
+    maxSizeBytes: Int,
+    private val sizeCalculator: (Bitmap) -> Int,
+) : LruCache<K, Bitmap>(maxSizeBytes) {
+    override fun sizeOf(key: K, value: Bitmap): Int = sizeCalculator(value)
+
+    fun trimToFraction(fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        when {
+            clamped <= 0f -> evictAll()
+            clamped >= 1f -> Unit
+            else -> {
+                val currentSize = size()
+                if (currentSize > 0) {
+                    val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
+                    trimToSize(target)
+                }
+            }
+        }
+    }
+}
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
     data class Loading(
@@ -161,14 +187,14 @@ private data class ViewportCommit(
     val zoom: Float,
 )
 
-private data class PageCacheKey(
+data class PageCacheKey(
     val documentId: String,
     val pageIndex: Int,
     val widthPx: Int,
     val profile: PageRenderProfile,
 )
 
-private data class TileCacheKey(
+data class TileCacheKey(
     val documentId: String,
     val pageIndex: Int,
     val left: Int,
@@ -192,6 +218,8 @@ open class PdfViewerViewModel @Inject constructor(
     application: Application,
     private val useCases: PdfViewerUseCases,
     private val dispatchers: CoroutineDispatchers,
+    private val pageBitmapCacheFactory: ViewerBitmapCacheFactory<PageCacheKey>,
+    private val tileBitmapCacheFactory: ViewerBitmapCacheFactory<TileCacheKey>,
 ) : AndroidViewModel(application) {
     private val app: Application = application
     private val documentUseCase = useCases.document
@@ -259,39 +287,48 @@ open class PdfViewerViewModel @Inject constructor(
     private val cacheFallbackNotified = AtomicBoolean(false)
     private val pageCacheMaxBytes = computeCacheBudget(MAX_PAGE_CACHE_BYTES)
     private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
-    private val pageBitmapCache = object : LruCache<PageCacheKey, Bitmap>(pageCacheMaxBytes) {
-        override fun sizeOf(key: PageCacheKey, value: Bitmap): Int = bitmapSize(value)
-
-        fun trimToFraction(fraction: Float) {
-            val clamped = fraction.coerceIn(0f, 1f)
-            when {
-                clamped <= 0f -> evictAll()
-                clamped >= 1f -> Unit
-                else -> {
-                    val currentSize = size()
-                    if (currentSize > 0) {
-                        val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
-                        trimToSize(target)
-                    }
+    @Volatile
+    private var pageBitmapCacheRef: FractionalBitmapLruCache<PageCacheKey>? = null
+    private val pageBitmapCacheLock = Any()
+    @Volatile
+    private var tileBitmapCacheRef: FractionalBitmapLruCache<TileCacheKey>? = null
+    private val tileBitmapCacheLock = Any()
+    private fun pageBitmapCacheOrNull(): FractionalBitmapLruCache<PageCacheKey>? = pageBitmapCacheRef
+    private fun requirePageBitmapCache(): FractionalBitmapLruCache<PageCacheKey> {
+        val existing = pageBitmapCacheRef
+        if (existing != null) {
+            return existing
+        }
+        return synchronized(pageBitmapCacheLock) {
+            val current = pageBitmapCacheRef
+            if (current != null) {
+                current
+            } else {
+                val created = pageBitmapCacheFactory.create(pageCacheMaxBytes) { bitmap ->
+                    bitmapSize(bitmap)
                 }
+                pageBitmapCacheRef = created
+                created
             }
         }
     }
-    private val tileBitmapCache = object : LruCache<TileCacheKey, Bitmap>(tileCacheMaxBytes) {
-        override fun sizeOf(key: TileCacheKey, value: Bitmap): Int = bitmapSize(value)
 
-        fun trimToFraction(fraction: Float) {
-            val clamped = fraction.coerceIn(0f, 1f)
-            when {
-                clamped <= 0f -> evictAll()
-                clamped >= 1f -> Unit
-                else -> {
-                    val currentSize = size()
-                    if (currentSize > 0) {
-                        val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
-                        trimToSize(target)
-                    }
+    private fun tileBitmapCacheOrNull(): FractionalBitmapLruCache<TileCacheKey>? = tileBitmapCacheRef
+    private fun requireTileBitmapCache(): FractionalBitmapLruCache<TileCacheKey> {
+        val existing = tileBitmapCacheRef
+        if (existing != null) {
+            return existing
+        }
+        return synchronized(tileBitmapCacheLock) {
+            val current = tileBitmapCacheRef
+            if (current != null) {
+                current
+            } else {
+                val created = tileBitmapCacheFactory.create(tileCacheMaxBytes) { bitmap ->
+                    bitmapSize(bitmap)
                 }
+                tileBitmapCacheRef = created
+                created
             }
         }
     }
@@ -1389,11 +1426,12 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun getCachedPage(key: PageCacheKey): Bitmap? {
         if (!renderCachesEnabled.get()) return null
+        val cache = pageBitmapCacheOrNull() ?: return null
         return synchronized(pageCacheLock) {
-            val bitmap = pageBitmapCache.get(key)
+            val bitmap = cache.get(key)
             if (bitmap == null || bitmap.isRecycled) {
                 if (bitmap != null && bitmap.isRecycled) {
-                    pageBitmapCache.remove(key)
+                    cache.remove(key)
                 }
                 null
             } else {
@@ -1405,19 +1443,21 @@ open class PdfViewerViewModel @Inject constructor(
     private fun cachePageBitmap(documentId: String, key: PageCacheKey, bitmap: Bitmap) {
         if (!renderCachesEnabled.get()) return
         if (!bitmap.isRecycled && documentId == activeDocumentId) {
+            val cache = requirePageBitmapCache()
             synchronized(pageCacheLock) {
-                pageBitmapCache.put(key, bitmap)
+                cache.put(key, bitmap)
             }
         }
     }
 
     private fun getCachedTile(key: TileCacheKey): Bitmap? {
         if (!renderCachesEnabled.get()) return null
+        val cache = tileBitmapCacheOrNull() ?: return null
         return synchronized(tileCacheLock) {
-            val bitmap = tileBitmapCache.get(key)
+            val bitmap = cache.get(key)
             if (bitmap == null || bitmap.isRecycled) {
                 if (bitmap != null && bitmap.isRecycled) {
-                    tileBitmapCache.remove(key)
+                    cache.remove(key)
                 }
                 null
             } else {
@@ -1429,8 +1469,9 @@ open class PdfViewerViewModel @Inject constructor(
     private fun cacheTileBitmap(documentId: String, key: TileCacheKey, bitmap: Bitmap) {
         if (!renderCachesEnabled.get()) return
         if (!bitmap.isRecycled && documentId == activeDocumentId) {
+            val cache = requireTileBitmapCache()
             synchronized(tileCacheLock) {
-                tileBitmapCache.put(key, bitmap)
+                cache.put(key, bitmap)
             }
         }
     }
@@ -1440,8 +1481,8 @@ open class PdfViewerViewModel @Inject constructor(
         viewModelScope.launch(dispatchers.io) {
             val state = uiState.value
             val renderStats = renderQueue.stats.value
-            val pageCacheStats = captureCacheStats(pageCacheLock, pageBitmapCache)
-            val tileCacheStats = captureCacheStats(tileCacheLock, tileBitmapCache)
+            val pageCacheStats = captureCacheStats(pageCacheLock, pageBitmapCacheOrNull())
+            val tileCacheStats = captureCacheStats(tileCacheLock, tileBitmapCacheOrNull())
             val viewportCommit = pendingViewportCommit
             val viewportJobActive = viewportCommitJob?.isActive == true
 
@@ -1553,10 +1594,10 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun clearRenderCaches() {
         synchronized(pageCacheLock) {
-            pageBitmapCache.evictAll()
+            pageBitmapCacheOrNull()?.evictAll()
         }
         synchronized(tileCacheLock) {
-            tileBitmapCache.evictAll()
+            tileBitmapCacheOrNull()?.evictAll()
         }
     }
 
@@ -1581,22 +1622,27 @@ open class PdfViewerViewModel @Inject constructor(
     private fun trimRenderCaches(fraction: Float) {
         val clamped = fraction.coerceIn(0f, 1f)
         synchronized(pageCacheLock) {
-            pageBitmapCache.trimToFraction(clamped)
+            pageBitmapCacheOrNull()?.trimToFraction(clamped)
         }
         synchronized(tileCacheLock) {
-            tileBitmapCache.trimToFraction(clamped)
+            tileBitmapCacheOrNull()?.trimToFraction(clamped)
         }
     }
 
-    private fun <K, V> captureCacheStats(lock: Any, cache: LruCache<K, V>): CacheStats = synchronized(lock) {
-        CacheStats(
-            sizeBytes = cache.size(),
-            maxSizeBytes = cache.maxSize(),
-            hitCount = cache.hitCount(),
-            missCount = cache.missCount(),
-            putCount = cache.putCount(),
-            evictionCount = cache.evictionCount(),
-        )
+    private fun <K, V> captureCacheStats(lock: Any, cache: LruCache<K, V>?): CacheStats {
+        if (cache == null) {
+            return CacheStats(0, 0, 0, 0, 0, 0)
+        }
+        return synchronized(lock) {
+            CacheStats(
+                sizeBytes = cache.size(),
+                maxSizeBytes = cache.maxSize(),
+                hitCount = cache.hitCount(),
+                missCount = cache.missCount(),
+                putCount = cache.putCount(),
+                evictionCount = cache.evictionCount(),
+            )
+        }
     }
 
     private fun logCacheStats(label: String, stats: CacheStats) {
@@ -1616,6 +1662,18 @@ open class PdfViewerViewModel @Inject constructor(
         val runtimeBudget = Runtime.getRuntime().maxMemory() / 8L
         val capped = minOf(limitBytes.toLong(), runtimeBudget)
         return capped.coerceAtLeast(MIN_CACHE_BYTES.toLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    companion object {
+        fun defaultPageBitmapCacheFactory(): ViewerBitmapCacheFactory<PageCacheKey> =
+            ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
+                FractionalBitmapLruCache(maxBytes, sizeCalculator)
+            }
+
+        fun defaultTileBitmapCacheFactory(): ViewerBitmapCacheFactory<TileCacheKey> =
+            ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
+                FractionalBitmapLruCache(maxBytes, sizeCalculator)
+            }
     }
 
 }

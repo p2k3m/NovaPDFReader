@@ -163,7 +163,13 @@ class PdfViewerViewModelPersistenceTest {
         )
 
         val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
-        val viewModel = PdfViewerViewModel(context, useCases, dispatchers)
+        val viewModel = PdfViewerViewModel(
+            context,
+            useCases,
+            dispatchers,
+            PdfViewerViewModel.defaultPageBitmapCacheFactory(),
+            PdfViewerViewModel.defaultTileBitmapCacheFactory(),
+        )
         return Triple(viewModel, preferencesUseCase, sessionFlow)
     }
 }
