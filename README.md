@@ -162,7 +162,10 @@ virtual device with at least 4 GB of RAM and a 4 GB writable data partition, and
 ensure hardware acceleration (KVM/HAXM/Hypervisor) is available so the
 instrumentation run has full CPU access. Prefer the software SwiftShader GPU
 (`-gpu swiftshader_indirect`) unless you have confirmed a dedicated GPU is
-stable under load. Always wipe user data and cold boot the emulator before
+stable under load. The emulator readiness checks now enforce this default and
+will refuse to proceed if the instance launches with a hardware GPU unless the
+`NOVAPDF_ALLOW_HARDWARE_GPU` environment variable is set to a truthy value.
+Always wipe user data and cold boot the emulator before
 invocation so no residue from earlier runs remains:
 
 ```bash
