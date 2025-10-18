@@ -157,11 +157,19 @@ the `platform-tools`, `build-tools`, and emulator components for API level 32.
 ### Emulator launch arguments
 
 For reliable UI tests, start the Android emulator with snapshots disabled and
-ample memory/storage to reduce hangs during heavy PDF rendering:
+ample memory/storage to reduce hangs during heavy PDF rendering. Provision the
+virtual device with at least 4 GB of RAM and a 4 GB writable data partition, and
+ensure hardware acceleration (KVM/HAXM/Hypervisor) is available so the
+instrumentation run has full CPU access. Prefer the software SwiftShader GPU
+(`-gpu swiftshader_indirect`) unless you have confirmed a dedicated GPU is
+stable under load. Always wipe user data and cold boot the emulator before
+invocation so no residue from earlier runs remains:
 
 ```bash
 emulator @NovaPDFApi32 \
     -no-snapshot-save \
+    -no-snapshot-load \
+    -wipe-data \
     -no-boot-anim \
     -accel on \
     -memory 4096 \
