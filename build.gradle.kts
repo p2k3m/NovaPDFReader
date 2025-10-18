@@ -308,6 +308,60 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
     }
 }
 
+fun runDeviceHealthChecksBeforeTests(serial: String, logger: Logger) {
+    clearDeviceLogcat(serial, logger)
+    stabilizeSystemUiIfRequested(serial, logger)
+}
+
+private fun clearDeviceLogcat(serial: String, logger: Logger) {
+    val output = runAdbCommand(serial, logger, timeoutSeconds = 15, "shell", "logcat", "-c")
+    if (output == null) {
+        logger.warn("Failed to clear logcat on Android device $serial prior to connected tests.")
+    }
+}
+
+private fun stabilizeSystemUiIfRequested(serial: String, logger: Logger) {
+    if (!isEnvFlagEnabled("NOVAPDF_STABILIZE_SYSTEM_UI")) {
+        return
+    }
+
+    val component = System.getenv("NOVAPDF_STABILIZE_SYSTEM_UI_COMPONENT")?.takeIf { it.isNotBlank() }
+    val command = if (component != null) {
+        listOf("shell", "am", "start", "-W", "-n", component)
+    } else {
+        listOf(
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.HOME"
+        )
+    }
+
+    val output = runAdbCommand(serial, logger, timeoutSeconds = 30, *command.toTypedArray())
+    if (output == null) {
+        logger.warn(
+            "Failed to launch a stabilizing activity on Android device $serial before connected tests."
+        )
+    } else {
+        val trimmed = output.trim()
+        if (trimmed.isNotEmpty()) {
+            logger.info("Stabilized system UI on Android device $serial: $trimmed")
+        }
+    }
+}
+
+private fun isEnvFlagEnabled(name: String): Boolean {
+    val value = System.getenv(name) ?: return false
+    return value.equals("1", ignoreCase = true) ||
+        value.equals("true", ignoreCase = true) ||
+        value.equals("yes", ignoreCase = true) ||
+        value.equals("on", ignoreCase = true)
+}
+
 fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
     val waitResult = runAdbCommand(serial, logger, timeoutSeconds = 180, "wait-for-device")
     if (waitResult == null) {
@@ -776,6 +830,8 @@ subprojects {
                 logSkip(message)
                 throw StopExecutionException("Android device $responsiveSerial is not ready for APK installation.")
             }
+
+            runDeviceHealthChecksBeforeTests(responsiveSerial, logger)
         }
     }
 }
