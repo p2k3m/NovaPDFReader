@@ -73,6 +73,22 @@ declare -r timeout_seconds
 
 declare -r poll_interval
 
+normalize_bool() {
+  local value="${1:-}"
+  value=${value,,}
+  case "$value" in
+    1|true|yes|on|allowed)
+      echo 1
+      ;;
+    0|false|no|off|forbidden|disallowed)
+      echo 0
+      ;;
+    *)
+      echo 0
+      ;;
+  esac
+}
+
 start_time=$(date +%s)
 end_time=$((start_time + timeout_seconds))
 
@@ -200,15 +216,7 @@ validate_emulator_configuration() {
   local accel_normalized=${accel_value,,}
 
   local allow_software_accel=${NOVAPDF_ALLOW_SOFTWARE_ACCELERATION:-${NOVAPDF_EMULATOR_ALLOW_SOFTWARE_ACCELERATION:-${ALLOW_SOFTWARE_ACCELERATION:-0}}}
-  allow_software_accel=${allow_software_accel,,}
-  case "$allow_software_accel" in
-    1|true|yes|on|allowed)
-      allow_software_accel=1
-      ;;
-    *)
-      allow_software_accel=0
-      ;;
-  esac
+  allow_software_accel=$(normalize_bool "$allow_software_accel")
 
   if (( allow_software_accel == 0 )); then
     case "${ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION:-}" in
@@ -263,19 +271,34 @@ validate_emulator_configuration() {
     esac
   fi
 
+  local enforce_snapshot_flags
+  enforce_snapshot_flags=$(normalize_bool "${NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-${EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-0}}")
+
   if (( has_no_snapshot_save == 0 )); then
-    echo "Emulator PID ${pid} missing -no-snapshot-save; launch with snapshots disabled" >&2
-    exit 1
+    if (( enforce_snapshot_flags == 0 )); then
+      echo "Emulator PID ${pid} missing -no-snapshot-save; continuing because NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS is disabled" >&2
+    else
+      echo "Emulator PID ${pid} missing -no-snapshot-save; launch with snapshots disabled" >&2
+      exit 1
+    fi
   fi
 
   if (( has_no_snapshot_load == 0 )); then
-    echo "Emulator PID ${pid} missing -no-snapshot-load; launch with a cold boot" >&2
-    exit 1
+    if (( enforce_snapshot_flags == 0 )); then
+      echo "Emulator PID ${pid} missing -no-snapshot-load; continuing because NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS is disabled" >&2
+    else
+      echo "Emulator PID ${pid} missing -no-snapshot-load; launch with a cold boot" >&2
+      exit 1
+    fi
   fi
 
   if (( has_wipe_data == 0 )); then
-    echo "Emulator PID ${pid} missing -wipe-data; launch with a fresh data partition" >&2
-    exit 1
+    if (( enforce_snapshot_flags == 0 )); then
+      echo "Emulator PID ${pid} missing -wipe-data; continuing because NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS is disabled" >&2
+    else
+      echo "Emulator PID ${pid} missing -wipe-data; launch with a fresh data partition" >&2
+      exit 1
+    fi
   fi
 
   echo "Verified emulator PID ${pid} meets memory, storage, and acceleration requirements." >&2
