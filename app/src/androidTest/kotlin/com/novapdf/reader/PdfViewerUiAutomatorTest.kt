@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,11 +43,20 @@ class PdfViewerUiAutomatorTest {
     @get:Rule(order = 1)
     val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
+    @get:Rule(order = 2)
+    val resourceMonitorRule = DeviceResourceMonitorRule(
+        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        logger = { message -> Log.i(TAG, message) },
+        onResourceExhausted = { reason -> Log.w(TAG, "Resource exhaustion detected: $reason") },
+    )
+
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
     private val targetPackage: String
         get() = appContext.packageName
+    private lateinit var deviceTimeouts: DeviceAdaptiveTimeouts
+    private var uiWaitTimeoutMs: Long = DEFAULT_UI_WAIT_TIMEOUT_MS
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -56,6 +66,14 @@ class PdfViewerUiAutomatorTest {
         hiltRule.inject()
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
+        deviceTimeouts = DeviceAdaptiveTimeouts.forContext(appContext)
+        uiWaitTimeoutMs = deviceTimeouts.scaleTimeout(
+            base = DEFAULT_UI_WAIT_TIMEOUT_MS,
+            min = DEFAULT_UI_WAIT_TIMEOUT_MS,
+            max = MAX_UI_WAIT_TIMEOUT_MS,
+            allowTightening = false,
+        )
+        logTestInfo("Using UI wait timeout ${uiWaitTimeoutMs}ms")
         ensureWorkManagerInitialized(appContext)
         documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
         withContext(Dispatchers.IO) {
@@ -81,19 +99,19 @@ class PdfViewerUiAutomatorTest {
         val endX = device.displayWidth / 4
         val centerY = device.displayHeight / 2
         device.swipe(startX, centerY, endX, centerY, 40)
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
 
         adaptiveFlowManager(appContext).overrideSensitivityForTesting(1.6f)
 
         val statusSelector = adaptiveFlowStatusSelector()
-        val chipVisible = device.wait(Until.hasObject(statusSelector), UI_WAIT_TIMEOUT)
+        val chipVisible = device.wait(Until.hasObject(statusSelector), uiWaitTimeoutMs)
         assertTrue(
             "Adaptive Flow status chip should be visible",
             chipVisible
         )
 
         val activeDescription = appContext.getString(R.string.adaptive_flow_on)
-        val adaptiveFlowActive = waitUntil(UI_WAIT_TIMEOUT) {
+        val adaptiveFlowActive = waitUntil(uiWaitTimeoutMs) {
             device.findObject(statusSelector)?.contentDescription == activeDescription
         }
         assertTrue(
@@ -113,11 +131,11 @@ class PdfViewerUiAutomatorTest {
 
         val saveButton = device.wait(
             Until.findObject(By.res(targetPackage, UiAutomatorTags.SAVE_ANNOTATIONS_ACTION)),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         )
         assertNotNull("Save annotations action should be visible", saveButton)
         saveButton.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
 
         val workInfos = withContext(Dispatchers.IO) {
             WorkManager.getInstance(appContext)
@@ -141,13 +159,13 @@ class PdfViewerUiAutomatorTest {
         }
         val statusVisible = device.wait(
             Until.hasObject(adaptiveFlowStatusSelector()),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         )
         assertTrue(
             "Adaptive Flow status chip should appear after opening a document",
             statusVisible
         )
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun adaptiveFlowStatusSelector() =
@@ -164,7 +182,7 @@ class PdfViewerUiAutomatorTest {
     }
 
     private fun waitUntil(
-        timeoutMs: Long,
+        timeoutMs: Long = uiWaitTimeoutMs,
         checkIntervalMs: Long = POLL_INTERVAL_MS,
         condition: () -> Boolean
     ): Boolean {
@@ -179,7 +197,13 @@ class PdfViewerUiAutomatorTest {
     }
 
     private companion object {
-        private const val UI_WAIT_TIMEOUT = 5_000L
+        private const val TAG = "PdfViewerUiAutoTest"
+        private const val DEFAULT_UI_WAIT_TIMEOUT_MS = 5_000L
+        private const val MAX_UI_WAIT_TIMEOUT_MS = 20_000L
         private const val POLL_INTERVAL_MS = 200L
+    }
+
+    private fun logTestInfo(message: String) {
+        Log.i(TAG, message)
     }
 }

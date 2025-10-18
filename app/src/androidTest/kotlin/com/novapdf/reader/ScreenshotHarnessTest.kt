@@ -1,7 +1,6 @@
 package com.novapdf.reader
 
 import android.Manifest
-import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -13,6 +12,8 @@ import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import com.novapdf.reader.logging.NovaLog
+import kotlin.math.max
+import kotlin.math.min
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
@@ -48,8 +49,6 @@ import org.junit.Test
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.text.Charsets
@@ -94,6 +93,7 @@ class ScreenshotHarnessTest {
     private lateinit var documentUri: Uri
     private lateinit var handshakeCacheDirs: List<File>
     private lateinit var handshakePackageName: String
+    private lateinit var deviceTimeouts: DeviceAdaptiveTimeouts
     private var harnessEnabled: Boolean = false
     private var programmaticScreenshotsEnabled: Boolean = false
     private var metricsRecorder: PerformanceMetricsRecorder? = null
@@ -1574,63 +1574,14 @@ class ScreenshotHarnessTest {
     }
 
     private fun resolveScreenshotCompletionTimeoutMillis(context: Context): Long {
-        val base = DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            ?: return base
-        return runCatching {
-            val memoryInfo = ActivityManager.MemoryInfo()
-            activityManager.getMemoryInfo(memoryInfo)
-            val totalMem = memoryInfo.totalMem
-            val totalGb = if (totalMem > 0L) {
-                totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
-            } else {
-                null
-            }
-            val availableRatio = if (totalMem > 0L) {
-                memoryInfo.availMem.toDouble() / totalMem.toDouble()
-            } else {
-                null
-            }
-            var multiplier = 1.0
-            if (memoryInfo.lowMemory || isLowRamDevice(activityManager)) {
-                multiplier = max(multiplier, 2.5)
-            }
-            if (totalGb != null) {
-                multiplier = when {
-                    totalGb < 4.0 -> max(multiplier, 2.0)
-                    totalGb < 6.0 -> max(multiplier, 1.5)
-                    totalGb > 8.0 -> min(multiplier, 0.75)
-                    else -> multiplier
-                }
-            }
-            val isEmulator = Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
-                Build.PRODUCT.contains("sdk", ignoreCase = true) ||
-                Build.MODEL.contains("Emulator", ignoreCase = true)
-            if (isEmulator) {
-                multiplier = max(multiplier, 1.75)
-            }
-            if (availableRatio != null) {
-                multiplier = when {
-                    availableRatio < 0.25 -> max(multiplier, 2.25)
-                    availableRatio > 0.6 && totalGb != null && totalGb >= 6.0 -> min(multiplier, 0.85)
-                    else -> multiplier
-                }
-            }
-            val resolved = (base * multiplier).toLong()
-            resolved.coerceIn(
-                MIN_SCREENSHOT_COMPLETION_TIMEOUT_MS,
-                MAX_SCREENSHOT_COMPLETION_TIMEOUT_MS,
-            )
-        }.getOrElse { base }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun isLowRamDevice(activityManager: ActivityManager): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            activityManager.isLowRamDevice
-        } else {
-            false
-        }
+        deviceTimeouts = DeviceAdaptiveTimeouts.forContext(context)
+        return deviceTimeouts.scaleTimeout(
+            base = DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS,
+            min = MIN_SCREENSHOT_COMPLETION_TIMEOUT_MS,
+            max = MAX_SCREENSHOT_COMPLETION_TIMEOUT_MS,
+            extraMultiplier = 1.1,
+            allowTightening = false,
+        )
     }
 
     private data class ScreenshotTarget(
