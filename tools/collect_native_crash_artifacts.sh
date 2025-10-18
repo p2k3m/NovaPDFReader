@@ -36,6 +36,7 @@ package_name="${PACKAGE_NAME:-com.novapdf.reader}"
 test_package_name="${TEST_PACKAGE_NAME:-${package_name}.test}"
 collect_native_libs="${COLLECT_NATIVE_LIBS:-true}"
 native_lib_root="${output_dir}/native-libs"
+anr_dir="${output_dir}/anr"
 
 log() {
   local message="$1"
@@ -169,6 +170,7 @@ backtrace_path="${output_dir}/pdfium-native-backtraces.txt"
 
 tombstone_dir="${output_dir}/tombstones"
 mkdir -p "$tombstone_dir"
+mkdir -p "$anr_dir"
 
 adb_root_enabled=false
 if timeout 30s "${adb_cmd[@]}" root >/dev/null 2>&1; then
@@ -184,6 +186,43 @@ cleanup_root() {
   fi
 }
 trap cleanup_root EXIT
+
+collect_anr_artifacts() {
+  local status_path="$anr_dir/status.txt"
+  rm -f "$status_path"
+
+  if ! timeout 15s "${adb_cmd[@]}" shell ls /data/anr >/dev/null 2>&1; then
+    log "Unable to access /data/anr on device"
+    printf 'Unable to access /data/anr on device (requires root privileges).\n' > "$status_path"
+    return
+  fi
+
+  mapfile -t anr_entries < <(timeout 15s "${adb_cmd[@]}" shell ls -1 /data/anr 2>/dev/null | tr -d '\r' | awk 'NF')
+
+  if [ "${#anr_entries[@]}" -eq 0 ]; then
+    log "No artifacts present under /data/anr"
+    printf 'No ANR traces were present under /data/anr.\n' > "$status_path"
+    return
+  fi
+
+  local saved_any=false
+  local entry
+  for entry in "${anr_entries[@]}"; do
+    local remote="/data/anr/${entry}"
+    if timeout 120s "${adb_cmd[@]}" pull "$remote" "$anr_dir/" >/dev/null 2>&1; then
+      log "Saved ANR artifact $remote"
+      saved_any=true
+    else
+      log "Failed to export ANR artifact $remote"
+    fi
+  done
+
+  if [ "$saved_any" = false ]; then
+    printf 'Failed to export ANR traces from /data/anr.\n' > "$status_path"
+  fi
+}
+
+collect_anr_artifacts
 
 if ! timeout 15s "${adb_cmd[@]}" shell ls /data/tombstones >/dev/null 2>&1; then
   log "Unable to access /data/tombstones on device"

@@ -2334,11 +2334,14 @@ jobs:
           else
             echo "::warning::Failed to capture bugreport after connectedAndroidTest; continuing with logcat only" >&2
           fi
+          native_dir="${logs_dir}/native-crash"
+          if ! tools/collect_native_crash_artifacts.sh "$native_dir"; then
+            echo "::warning::Failed to collect native crash artifacts snapshot" >&2
+          fi
           if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
-            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
             exit 1
           fi
       - name: Run macrobenchmark regression suite
@@ -2382,11 +2385,14 @@ jobs:
           else
             echo "::warning::Failed to capture bugreport after macrobenchmark run; continuing with logcat only" >&2
           fi
+          native_dir="${logs_dir}/native-crash"
+          if ! tools/collect_native_crash_artifacts.sh "$native_dir"; then
+            echo "::warning::Failed to collect native crash artifacts snapshot" >&2
+          fi
           if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
-            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
             exit 1
           fi
       - name: Generate release baseline profile
@@ -2425,11 +2431,14 @@ jobs:
           else
             echo "::warning::Failed to capture bugreport after baseline profile generation; continuing with logcat only" >&2
           fi
+          native_dir="${logs_dir}/native-crash"
+          if ! tools/collect_native_crash_artifacts.sh "$native_dir"; then
+            echo "::warning::Failed to collect native crash artifacts snapshot" >&2
+          fi
           if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
-            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
             exit 1
           fi
       - name: Verify committed baseline profile is current
@@ -3074,11 +3083,14 @@ jobs:
           else
             echo "::warning::Failed to capture bugreport after screenshot harness; continuing with logcat only" >&2
           fi
+          native_dir="${logs_dir}/native-crash"
+          if ! tools/collect_native_crash_artifacts.sh "$native_dir"; then
+            echo "::warning::Failed to collect native crash artifacts snapshot" >&2
+          fi
           if python3 tools/check_logcat_for_crashes.py "$logcat_path" "${bugreport_args[@]}" --package "$PACKAGE_NAME"; then
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
-            tools/collect_native_crash_artifacts.sh "${logs_dir}/native-crash" || true
             exit 1
           fi
       - name: Collect emulator logs
