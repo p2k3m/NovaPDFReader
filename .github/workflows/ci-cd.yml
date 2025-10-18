@@ -25,9 +25,9 @@ jobs:
             avd: pixel7pro_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7_pro
             device_label: pixel-7-pro
             skin: 1440x3120
@@ -45,9 +45,9 @@ jobs:
             avd: galaxys24ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 12288
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
             skin: 1440x3120
@@ -65,9 +65,9 @@ jobs:
             avd: galaxys23ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 10240
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7
             device_label: galaxy-s23-ultra
             skin: 1440x3088
@@ -85,9 +85,9 @@ jobs:
             avd: pixelfold_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_fold
             device_label: pixel-fold
             skin: 2208x1840
@@ -105,9 +105,9 @@ jobs:
             avd: pixeltablet_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 12288
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_tablet
             device_label: pixel-tablet
             skin: 2560x1600
@@ -760,9 +760,9 @@ jobs:
             avd: pixel7pro_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7_pro
             device_label: pixel-7-pro
             skin: 1440x3120
@@ -780,9 +780,9 @@ jobs:
             avd: galaxys24ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 12288
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7_pro
             device_label: galaxy-s24-ultra
             skin: 1440x3120
@@ -800,9 +800,9 @@ jobs:
             avd: galaxys23ultra_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 10240
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_7
             device_label: galaxy-s23-ultra
             skin: 1440x3088
@@ -820,9 +820,9 @@ jobs:
             avd: pixelfold_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 8192
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_fold
             device_label: pixel-fold
             skin: 2208x1840
@@ -840,9 +840,9 @@ jobs:
             avd: pixeltablet_api32
             tag: google_apis
             abi: x86_64
-            ram_mb: 12288
+            ram_mb: 14336
             gpu_mode: swiftshader_indirect
-            disk_mb: 12288
+            disk_mb: 16384
             device_id: pixel_tablet
             device_label: pixel-tablet
             skin: 2560x1600
@@ -1158,6 +1158,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          print_host_memory_stats() {
+            echo "Host memory snapshot ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            if command -v free >/dev/null 2>&1; then
+              free -h || true
+            elif command -v vm_stat >/dev/null 2>&1; then
+              vm_stat || true
+            else
+              echo "free/vm_stat utilities unavailable on host" >&2
+            fi
+          }
+
+          echo "Capturing host memory snapshot before emulator provisioning"
+          print_host_memory_stats
+
           if [ -n "${ANDROID_AVD_HOME:-}" ]; then
             avd_root="${ANDROID_AVD_HOME%/}"
           elif [ -n "${ANDROID_SDK_HOME:-}" ]; then
@@ -1224,6 +1238,7 @@ jobs:
           fi
 
           disk_partition_args=()
+          min_partition_mb=8192
           if [ -n "${{ matrix.disk_mb }}" ]; then
             requested_disk_mb=${{ matrix.disk_mb }}
             final_disk_mb=$requested_disk_mb
@@ -1251,6 +1266,11 @@ jobs:
 
             if [ "$final_disk_mb" -le 0 ]; then
               echo "Unable to determine a valid userdata partition size (computed ${final_disk_mb} MB)." >&2
+              exit 1
+            fi
+
+            if [ "$final_disk_mb" -lt "$min_partition_mb" ]; then
+              echo "::error::Computed userdata partition size ${final_disk_mb} MB below minimum ${min_partition_mb} MB." >&2
               exit 1
             fi
 
@@ -1316,6 +1336,45 @@ jobs:
             emulator_memory="${{ matrix.ram_mb }}"
           fi
 
+          requested_emulator_memory="$emulator_memory"
+          min_emulator_memory_mb=6144
+          memory_reserve_mb=2048
+          host_total_mb=0
+          host_available_mb=0
+          if [ -r /proc/meminfo ]; then
+            host_total_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo | tail -n 1)
+            host_available_mb=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo | tail -n 1)
+          fi
+
+          safe_max_memory_mb=""
+          if [[ "$host_available_mb" =~ ^[0-9]+$ ]] && [ "$host_available_mb" -gt 0 ]; then
+            safe_max_memory_mb=$((host_available_mb - memory_reserve_mb))
+          elif [[ "$host_total_mb" =~ ^[0-9]+$ ]] && [ "$host_total_mb" -gt 0 ]; then
+            safe_max_memory_mb=$((host_total_mb - memory_reserve_mb))
+          fi
+
+          if [[ -n "$safe_max_memory_mb" ]]; then
+            if [ "$safe_max_memory_mb" -le 0 ]; then
+              echo "::error::Host reported insufficient free memory (${safe_max_memory_mb} MB) after reserving ${memory_reserve_mb} MB for system processes." >&2
+              exit 1
+            fi
+            if [ "$safe_max_memory_mb" -lt "$min_emulator_memory_mb" ]; then
+              echo "::error::Host free memory ${safe_max_memory_mb} MB below minimum emulator requirement ${min_emulator_memory_mb} MB." >&2
+              exit 1
+            fi
+            if [ "$emulator_memory" -gt "$safe_max_memory_mb" ]; then
+              echo "Requested emulator RAM ${emulator_memory} MB exceeds safe host capacity ${safe_max_memory_mb} MB; using ${safe_max_memory_mb} MB." >&2
+              emulator_memory=$safe_max_memory_mb
+            fi
+          fi
+
+          if [ "$emulator_memory" -lt "$min_emulator_memory_mb" ]; then
+            echo "::error::Emulator RAM ${emulator_memory} MB below enforced minimum ${min_emulator_memory_mb} MB." >&2
+            exit 1
+          fi
+
+          echo "Final emulator RAM configuration: ${emulator_memory} MB (requested ${requested_emulator_memory} MB)"
+
           ensure_config_value "hw.gpu.mode" "$emulator_gpu"
           if [ "$emulator_gpu" = "off" ]; then
             ensure_config_value "hw.gpu.enabled" "no"
@@ -1326,10 +1385,16 @@ jobs:
             ensure_config_value "hw.ramSize" "$emulator_memory"
           fi
 
+          echo "Host memory snapshot immediately before emulator launch command"
+          print_host_memory_stats
+
           echo "Launching emulator with GPU mode '$emulator_gpu' and ${emulator_memory} MB of RAM"
 
           $ANDROID_HOME/emulator/emulator -avd ${{ matrix.avd }} -no-snapshot -wipe-data -no-window -gpu "$emulator_gpu" -memory "$emulator_memory" -skin ${{ matrix.skin }} -camera-back none -camera-front none -no-boot-anim "${accel_args[@]}" "${disk_partition_args[@]}" &
           emulator_pid=$!
+
+          echo "Host memory snapshot after scheduling emulator process"
+          print_host_memory_stats
 
           watchdog_log="$RUNNER_TEMP/emulator-watchdog.log"
           echo "EMULATOR_WATCHDOG_LOG=$watchdog_log" >> "$GITHUB_ENV"
@@ -1362,6 +1427,17 @@ jobs:
             echo "::error::Emulator ${serial} did not reach readiness within ${timeout} seconds" >&2
             exit 1
           fi
+      - name: Capture emulator memory after boot
+        run: |
+          set -euo pipefail
+          serial="${EMULATOR_SERIAL:-emulator-5554}"
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+          python3 tools/device_resource_snapshot.py \
+            --label "boot-complete" \
+            --include-properties \
+            --serial "$serial" \
+            --output "${resource_dir}/boot-complete.json"
       - name: Configure emulator system settings
         run: |
           set -euo pipefail
@@ -3155,6 +3231,29 @@ jobs:
             fi
           else
             echo "::warning::Emulator not reachable for failure screenshot" >&2
+          fi
+      - name: Capture emulator memory before teardown
+        if: always()
+        run: |
+          set -euo pipefail
+          serial="${EMULATOR_SERIAL:-emulator-5554}"
+          resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
+          mkdir -p "$resource_dir"
+          if adb -s "$serial" get-state >/dev/null 2>&1; then
+            python3 tools/device_resource_snapshot.py \
+              --label "pre-teardown" \
+              --serial "$serial" \
+              --allow-exhausted \
+              --output "${resource_dir}/pre-teardown.json"
+          else
+            echo "::warning::Emulator ${serial} unreachable; skipping pre-teardown memory snapshot" >&2
+          fi
+          if command -v free >/dev/null 2>&1; then
+            echo "Host memory snapshot before teardown ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            free -h || true
+          elif command -v vm_stat >/dev/null 2>&1; then
+            echo "Host memory snapshot before teardown ($(date -u '+%Y-%m-%dT%H:%M:%SZ'))"
+            vm_stat || true
           fi
       - name: Stop emulator
         if: always()
