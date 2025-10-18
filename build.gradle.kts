@@ -309,8 +309,50 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
 }
 
 fun runDeviceHealthChecksBeforeTests(serial: String, logger: Logger) {
+    if (!waitForDeviceBootCompletion(serial, logger)) {
+        logger.warn(
+            "Android device $serial did not report sys.boot_completed=1 before running device health checks."
+        )
+    }
+
+    disablePlayServicesAutoUpdates(serial, logger)
     clearDeviceLogcat(serial, logger)
     stabilizeSystemUiIfRequested(serial, logger)
+}
+
+private fun waitForDeviceBootCompletion(serial: String, logger: Logger): Boolean {
+    val attempts = 10
+    repeat(attempts) { attempt ->
+        val bootCompleted = runAdbCommand(
+            serial,
+            logger,
+            timeoutSeconds = 15,
+            "shell",
+            "getprop",
+            "sys.boot_completed"
+        )?.trim()
+        val devBootCompleted = runAdbCommand(
+            serial,
+            logger,
+            timeoutSeconds = 15,
+            "shell",
+            "getprop",
+            "dev.bootcomplete"
+        )?.trim()
+
+        if (bootCompleted == "1" || devBootCompleted == "1") {
+            return true
+        }
+
+        if (attempt < attempts - 1) {
+            logger.info(
+                "Android device $serial has not completed boot (attempt ${attempt + 1} of $attempts). Retrying before device health checks."
+            )
+            Thread.sleep(5_000)
+        }
+    }
+
+    return false
 }
 
 private fun clearDeviceLogcat(serial: String, logger: Logger) {
