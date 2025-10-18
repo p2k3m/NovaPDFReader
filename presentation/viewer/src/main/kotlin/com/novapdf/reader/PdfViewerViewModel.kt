@@ -57,6 +57,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -74,6 +76,7 @@ import kotlin.math.min
 private const val TAG = "PdfViewerViewModel"
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
+private const val DOCUMENT_LOAD_PARALLELISM = 1
 private const val RENDER_POOL_PARALLELISM = 2
 private const val INDEX_POOL_PARALLELISM = 1
 private const val MAX_PAGE_CACHE_BYTES = 32 * 1024 * 1024
@@ -238,6 +241,9 @@ open class PdfViewerViewModel @Inject constructor(
     private val initialNightMode: Boolean = isNightModeEnabled()
 
     @OptIn(ExperimentalCoroutinesApi::class)
+    private val documentDispatcher = dispatchers.io.limitedParallelism(DOCUMENT_LOAD_PARALLELISM)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
 
     private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, RENDER_POOL_PARALLELISM)
@@ -380,6 +386,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     private var searchJob: Job? = null
+    private var documentJob: Job? = null
     private var indexingJob: Job? = null
     private var remoteDownloadJob: Job? = null
     private var viewportWidthPx: Int = 1080
@@ -590,10 +597,27 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    fun openDocument(uri: Uri) {
-        viewModelScope.launch(dispatchers.io) {
-            loadDocument(uri, resetError = true)
+    private fun launchDocumentLoad(
+        scope: CoroutineScope,
+        uri: Uri,
+        resetError: Boolean,
+    ): Job {
+        documentJob?.cancel()
+        val job = scope.launch(documentDispatcher) {
+            try {
+                loadDocument(uri, resetError)
+            } finally {
+                if (documentJob === coroutineContext.job) {
+                    documentJob = null
+                }
+            }
         }
+        documentJob = job
+        return job
+    }
+
+    fun openDocument(uri: Uri) {
+        launchDocumentLoad(viewModelScope, uri, resetError = true)
     }
 
     fun openLastDocument() {
@@ -629,18 +653,30 @@ open class PdfViewerViewModel @Inject constructor(
                 reportRemoteOpenFailure(throwable, source)
                 return@launch
             }
-            result.onSuccess { uri ->
-                loadDocument(uri, resetError = false)
-            }.onFailure { throwable ->
-                if (throwable is CancellationException) {
-                    setLoadingState(
-                        isLoading = false,
-                        progress = null,
-                        messageRes = null,
-                        resetError = false
-                    )
-                    throw throwable
+            val uri = result.getOrNull()
+            if (uri != null) {
+                val loadJob = launchDocumentLoad(this, uri, resetError = false)
+                try {
+                    loadJob.join()
+                } catch (cancellation: CancellationException) {
+                    loadJob.cancel()
+                    throw cancellation
                 }
+                return@launch
+            }
+
+            val throwable = result.exceptionOrNull()
+            if (throwable is CancellationException) {
+                setLoadingState(
+                    isLoading = false,
+                    progress = null,
+                    messageRes = null,
+                    resetError = false
+                )
+                throw throwable
+            }
+
+            if (throwable != null) {
                 val remoteFailure = throwable.findCause<RemotePdfException>()
                 if (remoteFailure?.reason == RemotePdfException.Reason.FILE_TOO_LARGE) {
                     val sizeInfo = throwable.findCause<RemotePdfTooLargeException>()
@@ -655,7 +691,7 @@ open class PdfViewerViewModel @Inject constructor(
                         sizeBytes = sizeInfo?.sizeBytes ?: 0L,
                         maxBytes = sizeInfo?.maxBytes ?: REMOTE_PDF_SAFE_SIZE_BYTES,
                     )
-                    return@onFailure
+                    return@launch
                 }
                 reportRemoteOpenFailure(throwable, source)
             }
@@ -711,7 +747,7 @@ open class PdfViewerViewModel @Inject constructor(
             messageRes = R.string.loading_stage_resolving,
             resetError = resetError
         )
-        val openResult = withContext(dispatchers.io) {
+        val openResult = withContext(documentDispatcher) {
             val signal = CancellationSignal()
             openDocumentUseCase(OpenDocumentRequest(uri), signal)
         }
@@ -1123,7 +1159,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     suspend fun pageSize(index: Int): Size? {
-        return withContext(dispatchers.io) {
+        return withContext(documentDispatcher) {
             documentUseCase.getPageSize(index)
         }
     }
