@@ -113,6 +113,11 @@ class ScreenshotHarnessTest {
     fun setUp() = runBlocking {
         try {
             hiltRule.inject()
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            HarnessReadiness.emit { readinessMarker ->
+                println(readinessMarker)
+                logHarnessInfo("Harness readiness marker emitted: $readinessMarker")
+            }
             val harnessRequested = shouldRunHarness()
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
