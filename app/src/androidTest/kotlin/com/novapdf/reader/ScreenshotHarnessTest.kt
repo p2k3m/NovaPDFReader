@@ -915,6 +915,15 @@ class ScreenshotHarnessTest {
         selectCandidate(arguments.getString("novapdfTestAppId"), "manifest placeholder")
             ?.let { return it }
 
+        val manifestPlaceholder = runCatching {
+            @Suppress("DEPRECATION")
+            packageManager.getInstrumentationInfo(
+                instrumentation.componentName,
+                PackageManager.GET_META_DATA
+            ).metaData?.getString("novapdfTestAppId")
+        }.getOrNull()
+        selectCandidate(manifestPlaceholder, "instrumentation meta-data")?.let { return it }
+
         val instrumentationPackage = instrumentation.context.packageName
         normalizePackageName(packageManager, instrumentationPackage, knownPackages)?.let { packageName ->
             if (packageName.endsWith(".test")) {

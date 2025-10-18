@@ -12,5 +12,10 @@
         android:targetProcesses="${novapdfAppId}"
         android:functionalTest="false"
         android:handleProfiling="false"
-        android:label="Tests for ${novapdfAppId}" />
+        android:label="Tests for ${novapdfAppId}">
+
+        <meta-data
+            android:name="novapdfTestAppId"
+            android:value="${novapdfTestAppId}" />
+    </instrumentation>
 </manifest>
