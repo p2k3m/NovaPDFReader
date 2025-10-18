@@ -118,6 +118,8 @@ validate_emulator_configuration() {
   local memory_value=""
   local partition_value=""
   local accel_value=""
+  local gpu_value=""
+  local gpu_flag_present=0
   local has_no_snapshot_save=0
 
   for ((i = 0; i < ${#args[@]}; i++)); do
@@ -142,6 +144,14 @@ validate_emulator_configuration() {
           exit 1
         fi
         accel_value="${args[$((i + 1))]}"
+        ;;
+      -gpu)
+        if (( i + 1 >= ${#args[@]} )); then
+          echo "Emulator launched without a value for -gpu; expected 'swiftshader_indirect'" >&2
+          exit 1
+        fi
+        gpu_value="${args[$((i + 1))]}"
+        gpu_flag_present=1
         ;;
       -no-snapshot-save)
         has_no_snapshot_save=1
@@ -183,6 +193,34 @@ validate_emulator_configuration() {
   if [[ "$accel_normalized" != "on" && "$accel_normalized" != "auto" ]]; then
     echo "Emulator PID ${pid} launched with -accel ${accel_value}; expected hardware acceleration (on/auto)" >&2
     exit 1
+  fi
+
+  if (( gpu_flag_present == 0 )); then
+    echo "Emulator PID ${pid} missing -gpu flag; launch with -gpu swiftshader_indirect" >&2
+    exit 1
+  fi
+  if [[ -z "$gpu_value" ]]; then
+    echo "Emulator PID ${pid} provided an empty -gpu value; expected 'swiftshader_indirect'" >&2
+    exit 1
+  fi
+  local gpu_normalized=${gpu_value,,}
+  local allow_hardware_gpu="${NOVAPDF_ALLOW_HARDWARE_GPU:-${ALLOW_HARDWARE_GPU:-${NOVAPDF_EMULATOR_ALLOW_HARDWARE_GPU:-}}}"
+  local allow_hardware_gpu_normalized=${allow_hardware_gpu,,}
+  local hardware_gpu_authorized=0
+  case "$allow_hardware_gpu_normalized" in
+    1|true|yes|on|allowed)
+      hardware_gpu_authorized=1
+      ;;
+  esac
+  if (( hardware_gpu_authorized == 0 )); then
+    case "$gpu_normalized" in
+      swiftshader_indirect|swiftshader)
+        ;;
+      *)
+        echo "Emulator PID ${pid} launched with GPU mode '${gpu_value}'; expected -gpu swiftshader_indirect unless NOVAPDF_ALLOW_HARDWARE_GPU is set" >&2
+        exit 1
+        ;;
+    esac
   fi
 
   if (( has_no_snapshot_save == 0 )); then
