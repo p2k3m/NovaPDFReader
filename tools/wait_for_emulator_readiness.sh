@@ -121,6 +121,8 @@ validate_emulator_configuration() {
   local gpu_value=""
   local gpu_flag_present=0
   local has_no_snapshot_save=0
+  local has_no_snapshot_load=0
+  local has_wipe_data=0
 
   for ((i = 0; i < ${#args[@]}; i++)); do
     case "${args[$i]}" in
@@ -155,6 +157,12 @@ validate_emulator_configuration() {
         ;;
       -no-snapshot-save)
         has_no_snapshot_save=1
+        ;;
+      -no-snapshot-load)
+        has_no_snapshot_load=1
+        ;;
+      -wipe-data)
+        has_wipe_data=1
         ;;
     esac
   done
@@ -225,6 +233,16 @@ validate_emulator_configuration() {
 
   if (( has_no_snapshot_save == 0 )); then
     echo "Emulator PID ${pid} missing -no-snapshot-save; launch with snapshots disabled" >&2
+    exit 1
+  fi
+
+  if (( has_no_snapshot_load == 0 )); then
+    echo "Emulator PID ${pid} missing -no-snapshot-load; launch with a cold boot" >&2
+    exit 1
+  fi
+
+  if (( has_wipe_data == 0 )); then
+    echo "Emulator PID ${pid} missing -wipe-data; launch with a fresh data partition" >&2
     exit 1
   fi
 
