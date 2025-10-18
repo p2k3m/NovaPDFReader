@@ -39,6 +39,7 @@ import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.DomainErrorCode
 import com.novapdf.reader.model.DomainException
 import com.novapdf.reader.model.PageRenderProfile
+import com.novapdf.reader.model.FallbackMode
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.DocumentSource
@@ -69,6 +70,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.math.min
@@ -87,6 +89,10 @@ private const val VIEWPORT_PERSIST_THROTTLE_MS = 750L
 private const val DEV_ANR_STALL_DURATION_MS = 6_000L
 private const val DEV_ANR_REPEAT_DELAY_MS = 20_000L
 private const val DEV_ANR_SLEEP_CHUNK_MS = 50L
+private const val RENDER_FAULT_THRESHOLD = 3
+private const val RENDER_CIRCUIT_PERSIST_THRESHOLD = 2
+private const val SIMPLE_RENDERER_MAX_WIDTH = 1280
+private const val SIMPLE_RENDERER_MAX_SCALE = 2.0f
 
 fun interface ViewerBitmapCacheFactory<K> {
     fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): FractionalBitmapLruCache<K>
@@ -139,6 +145,7 @@ data class PdfViewerUiState(
     val lastOpenedDocumentUri: String? = null,
     val lastOpenedDocumentPageIndex: Int? = null,
     val lastOpenedDocumentZoom: Float? = null,
+    val fallbackMode: FallbackMode = FallbackMode.NONE,
     val pageCount: Int = 0,
     val currentPage: Int = 0,
     val documentStatus: DocumentStatus = DocumentStatus.Idle,
@@ -167,6 +174,7 @@ data class PdfViewerUiState(
     val devCachesEnabled: Boolean = true,
     val devArtificialDelayEnabled: Boolean = false,
     val renderCacheFallbackActive: Boolean = false,
+    val renderCircuitBreakerActive: Boolean = false,
 )
 
 private data class DocumentContext(
@@ -392,6 +400,13 @@ open class PdfViewerViewModel @Inject constructor(
     private var viewportWidthPx: Int = 1080
     private var prefetchEnabled: Boolean = true
     private val pageTooLargeNotified = AtomicBoolean(false)
+    private var renderFaultStreak: Int = 0
+    private var renderCircuitTrips: Int = 0
+    private var renderCircuitSoftActive: Boolean = false
+    private var activeFallbackMode: FallbackMode = FallbackMode.NONE
+
+    private val isRenderCircuitActive: Boolean
+        get() = renderCircuitSoftActive || activeFallbackMode == FallbackMode.LEGACY_SIMPLE_RENDERER
 
     private suspend fun setLoadingState(
         isLoading: Boolean,
@@ -438,12 +453,14 @@ open class PdfViewerViewModel @Inject constructor(
                     preferencesUseCase.setNightModeEnabled(resolvedNightMode)
                 }
                 withContext(dispatchers.main) {
+                    applyFallbackMode(prefs.fallbackMode, persist = false)
                     updateUiState { current ->
                         current.copy(
                             isNightMode = resolvedNightMode,
                             lastOpenedDocumentUri = prefs.lastDocumentUri,
                             lastOpenedDocumentPageIndex = prefs.lastDocumentPageIndex,
                             lastOpenedDocumentZoom = prefs.lastDocumentZoom,
+                            fallbackMode = prefs.fallbackMode,
                             preferencesReady = true
                         )
                     }
@@ -501,10 +518,17 @@ open class PdfViewerViewModel @Inject constructor(
                 } else if (!cacheFallback && cacheFallbackNotified.get()) {
                     cacheFallbackNotified.set(false)
                 }
+                if (cacheFallback) {
+                    activateCacheCircuitBreaker()
+                }
                 val documentId = session?.documentId
                 if (activeDocumentId != documentId) {
                     clearRenderCaches()
                     activeDocumentId = documentId
+                    renderFaultStreak = 0
+                    renderCircuitSoftActive = false
+                    renderCircuitTrips = 0
+                    updateRenderCircuitState()
                 }
                 val shouldResetMalformed = previous.documentId != documentId
                 _uiState.value = previous.copy(
@@ -550,7 +574,8 @@ open class PdfViewerViewModel @Inject constructor(
                     if (width > 0) {
                         val sanitized = targets.filterNot(::isPageMalformed)
                         if (sanitized.isNotEmpty()) {
-                            prefetchRequests.trySend(PrefetchRequest(sanitized, width)).isSuccess
+                            val effectiveWidth = adjustTargetWidth(width)
+                            prefetchRequests.trySend(PrefetchRequest(sanitized, effectiveWidth)).isSuccess
                         }
                     }
                 }
@@ -572,6 +597,7 @@ open class PdfViewerViewModel @Inject constructor(
     private fun shouldThrottlePrefetch(): Boolean {
         if (!prefetchEnabled) return true
         if (!appInForeground) return true
+        if (isRenderCircuitActive) return true
         return uiUnderLoad
     }
 
@@ -590,7 +616,7 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     private fun updateBackgroundWorkState() {
-        val shouldEnable = appInForeground && prefetchEnabled && !uiUnderLoad
+        val shouldEnable = appInForeground && prefetchEnabled && !uiUnderLoad && !isRenderCircuitActive
         if (backgroundWorkEnabled != shouldEnable) {
             backgroundWorkEnabled = shouldEnable
             renderQueue.setBackgroundWorkEnabled(shouldEnable)
@@ -834,8 +860,12 @@ open class PdfViewerViewModel @Inject constructor(
                 RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
                 signal,
             )
+            result.getOrNull()?.bitmap?.let { recordRenderSuccess() }
             val throwable = result.exceptionOrNull()
             if (throwable is CancellationException) throw throwable
+            if (throwable != null) {
+                recordRenderFault(throwable, stage = "initialRender", pageIndex = 0)
+            }
             if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
                 notifyOperationTimeout()
             }
@@ -848,8 +878,10 @@ open class PdfViewerViewModel @Inject constructor(
                         RenderPageRequest(pageIndex = 0, targetWidth = fallbackWidth),
                         fallbackSignal,
                     )
+                    fallbackResult.getOrNull()?.bitmap?.let { recordRenderSuccess() }
                     fallbackResult.exceptionOrNull()?.let { error ->
                         if (error is CancellationException) throw error
+                        recordRenderFault(error, stage = "initialRenderFallback", pageIndex = 0)
                         if (error is DomainException && error.code == DomainErrorCode.IO_TIMEOUT) {
                             notifyOperationTimeout()
                         }
@@ -878,6 +910,11 @@ open class PdfViewerViewModel @Inject constructor(
             _uiState.value.documentId?.let { put("documentId", it) }
         }
         crashReportingUseCase.recordNonFatal(throwable, metadata)
+        val domain = throwable.findCause<DomainException>()
+        val oom = throwable.findCause<OutOfMemoryError>()
+        if (domain?.code == DomainErrorCode.RENDER_OOM || oom != null) {
+            recordRenderFault(throwable, stage = "documentOpen")
+        }
         val messageRes = resolveErrorMessageRes(
             throwable = throwable,
             pdfFallback = R.string.error_document_open_generic,
@@ -996,7 +1033,8 @@ open class PdfViewerViewModel @Inject constructor(
             if (width > 0) {
                 val targets = preloadTargets.filterNot(::isPageMalformed)
                 if (targets.isNotEmpty()) {
-                    prefetchRequests.trySend(PrefetchRequest(targets, width)).isSuccess
+                    val effectiveWidth = adjustTargetWidth(width)
+                    prefetchRequests.trySend(PrefetchRequest(targets, effectiveWidth)).isSuccess
                 }
             }
         }
@@ -1028,7 +1066,8 @@ open class PdfViewerViewModel @Inject constructor(
         }
         val documentId = activeDocumentId ?: _uiState.value.documentId ?: return null
         val profile = renderProfileFor(priority)
-        val cacheKey = PageCacheKey(documentId, index, targetWidth, profile)
+        val effectiveWidth = adjustTargetWidth(targetWidth)
+        val cacheKey = PageCacheKey(documentId, index, effectiveWidth, profile)
         getCachedPage(cacheKey)?.let { return it }
         return renderQueue.submit(priority) {
             getCachedPage(cacheKey)?.let { return@submit it }
@@ -1036,19 +1075,21 @@ open class PdfViewerViewModel @Inject constructor(
                 return@submit null
             }
             val signal = CancellationSignal()
-            val result = renderPageUseCase(RenderPageRequest(index, targetWidth, profile), signal)
+            val result = renderPageUseCase(RenderPageRequest(index, effectiveWidth, profile), signal)
             result.getOrNull()?.bitmap?.let { bitmap ->
                 cachePageBitmap(documentId, cacheKey, bitmap)
+                recordRenderSuccess()
                 return@submit bitmap
             }
             val throwable = result.exceptionOrNull()
             if (throwable is CancellationException) throw throwable
+            recordRenderFault(throwable, stage = "renderPage", pageIndex = index)
             if (throwable is PdfRenderException) {
                 when (throwable.reason) {
                     PdfRenderException.Reason.PAGE_TOO_LARGE -> {
                         notifyPageTooLarge()
                         val fallbackWidth = throwable.suggestedWidth?.takeIf { suggestion ->
-                            suggestion in 1 until targetWidth
+                            suggestion in 1 until effectiveWidth
                         }
                         if (fallbackWidth != null) {
                             val fallbackKey = cacheKey.copy(widthPx = fallbackWidth)
@@ -1064,6 +1105,7 @@ open class PdfViewerViewModel @Inject constructor(
                             val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
                             if (fallbackBitmap != null) {
                                 cachePageBitmap(documentId, fallbackKey, fallbackBitmap)
+                                recordRenderSuccess()
                             }
                             return@submit fallbackBitmap
                         }
@@ -1087,6 +1129,17 @@ open class PdfViewerViewModel @Inject constructor(
         RenderWorkQueue.Priority.VISIBLE_PAGE -> PageRenderProfile.HIGH_DETAIL
     }
 
+    private fun adjustTargetWidth(width: Int): Int {
+        if (width <= 0) return width
+        if (!isRenderCircuitActive) return width
+        return min(width, SIMPLE_RENDERER_MAX_WIDTH)
+    }
+
+    private fun adjustTileScale(scale: Float): Float {
+        if (!isRenderCircuitActive) return scale
+        return scale.coerceAtMost(SIMPLE_RENDERER_MAX_SCALE)
+    }
+
     private fun resolveThumbnailRenderProfile(): PageRenderProfile {
         // Hook for device-specific overrides. Defaults to memory-saving RGB_565 rendering.
         return PageRenderProfile.LOW_DETAIL
@@ -1097,6 +1150,7 @@ open class PdfViewerViewModel @Inject constructor(
             return null
         }
         val documentId = activeDocumentId ?: _uiState.value.documentId ?: return null
+        val effectiveScale = adjustTileScale(scale)
         val cacheKey = TileCacheKey(
             documentId = documentId,
             pageIndex = index,
@@ -1104,7 +1158,7 @@ open class PdfViewerViewModel @Inject constructor(
             top = rect.top,
             right = rect.right,
             bottom = rect.bottom,
-            scaleBits = scale.toBits(),
+            scaleBits = effectiveScale.toBits(),
         )
         getCachedTile(cacheKey)?.let { return it }
         return withContext(renderDispatcher) {
@@ -1113,19 +1167,21 @@ open class PdfViewerViewModel @Inject constructor(
                 return@withContext null
             }
             val signal = CancellationSignal()
-            val result = renderTileUseCase(RenderTileRequest(index, rect, scale), signal)
+            val result = renderTileUseCase(RenderTileRequest(index, rect, effectiveScale), signal)
             result.getOrNull()?.bitmap?.let { bitmap ->
                 cacheTileBitmap(documentId, cacheKey, bitmap)
+                recordRenderSuccess()
                 return@withContext bitmap
             }
             val throwable = result.exceptionOrNull()
             if (throwable is CancellationException) throw throwable
+            recordRenderFault(throwable, stage = "renderTile", pageIndex = index)
             if (throwable is PdfRenderException) {
                 when (throwable.reason) {
                     PdfRenderException.Reason.PAGE_TOO_LARGE -> {
                         notifyPageTooLarge()
                         val fallbackScale = throwable.suggestedScale?.takeIf { suggestion ->
-                            suggestion in 0f..scale && suggestion < scale
+                            suggestion in 0f..effectiveScale && suggestion < effectiveScale
                         }
                         if (fallbackScale != null) {
                             val fallbackKey = cacheKey.copy(scaleBits = fallbackScale.toBits())
@@ -1141,6 +1197,7 @@ open class PdfViewerViewModel @Inject constructor(
                             val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
                             if (fallbackBitmap != null) {
                                 cacheTileBitmap(documentId, fallbackKey, fallbackBitmap)
+                                recordRenderSuccess()
                             }
                             return@withContext fallbackBitmap
                         }
@@ -1178,7 +1235,8 @@ open class PdfViewerViewModel @Inject constructor(
         if (preloadTargets.isNotEmpty() && !shouldThrottlePrefetch()) {
             val targets = preloadTargets.filterNot(::isPageMalformed)
             if (targets.isNotEmpty()) {
-                prefetchRequests.trySend(PrefetchRequest(targets, viewportWidthPx)).isSuccess
+                val effectiveWidth = adjustTargetWidth(viewportWidthPx)
+                prefetchRequests.trySend(PrefetchRequest(targets, effectiveWidth)).isSuccess
             }
         }
     }
@@ -1187,7 +1245,8 @@ open class PdfViewerViewModel @Inject constructor(
         if (indices.isEmpty() || widthPx <= 0 || shouldThrottlePrefetch()) return
         val targets = indices.filterNot(::isPageMalformed)
         if (targets.isEmpty()) return
-        prefetchRequests.trySend(PrefetchRequest(targets, widthPx)).isSuccess
+        val effectiveWidth = adjustTargetWidth(widthPx)
+        prefetchRequests.trySend(PrefetchRequest(targets, effectiveWidth)).isSuccess
     }
 
     fun exportDocument(context: android.content.Context): Boolean {
@@ -1357,6 +1416,129 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun notifyOperationTimeout() {
         enqueueMessage(R.string.error_document_io_issue)
+    }
+
+    private fun recordRenderSuccess() {
+        if (renderFaultStreak != 0) {
+            renderFaultStreak = 0
+        }
+    }
+
+    private fun recordRenderFault(
+        throwable: Throwable?,
+        stage: String,
+        pageIndex: Int? = null,
+    ) {
+        if (throwable is CancellationException) return
+        if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.MALFORMED_PAGE) {
+            return
+        }
+        if (throwable == null) return
+        renderFaultStreak += 1
+        val renderOom = when {
+            throwable is OutOfMemoryError -> true
+            throwable.findCause<OutOfMemoryError>() != null -> true
+            throwable.findCause<DomainException>()?.code == DomainErrorCode.RENDER_OOM -> true
+            else -> false
+        }
+        if (renderOom) {
+            clearRenderCaches()
+            openRenderCircuit("$stage:oom", throwable, pageIndex, persist = true)
+            return
+        }
+        if (!renderCircuitSoftActive && renderFaultStreak >= RENDER_FAULT_THRESHOLD) {
+            openRenderCircuit("$stage:streak", throwable, pageIndex)
+        } else if (renderCircuitSoftActive) {
+            openRenderCircuit("$stage:repeat", throwable, pageIndex)
+        }
+    }
+
+    private fun activateCacheCircuitBreaker() {
+        openRenderCircuit("cacheFallback", throwable = null, pageIndex = null)
+    }
+
+    private fun openRenderCircuit(
+        reason: String,
+        throwable: Throwable?,
+        pageIndex: Int?,
+        persist: Boolean = false,
+    ) {
+        val newlyActivated = !renderCircuitSoftActive
+        renderCircuitSoftActive = true
+        if (newlyActivated) {
+            renderCircuitTrips += 1
+            crashReportingUseCase.logBreadcrumb("render_circuit_open:$reason")
+            enqueueMessage(R.string.error_render_circuit_disabled)
+        }
+        updateRenderCircuitState()
+        if (throwable != null) {
+            val metadata = buildMap {
+                put("stage", reason)
+                put("circuitActive", isRenderCircuitActive.toString())
+                pageIndex?.let { put("pageIndex", it.toString()) }
+            }
+            crashReportingUseCase.recordNonFatal(throwable, metadata)
+        }
+        val shouldPersist = persist ||
+            (renderCircuitTrips >= RENDER_CIRCUIT_PERSIST_THRESHOLD && activeFallbackMode == FallbackMode.NONE)
+        if (shouldPersist) {
+            applyFallbackMode(FallbackMode.LEGACY_SIMPLE_RENDERER, persist = true, reason = reason)
+        }
+    }
+
+    private fun updateRenderCircuitState() {
+        val active = isRenderCircuitActive
+        if (_uiState.value.renderCircuitBreakerActive != active) {
+            updateUiState { current -> current.copy(renderCircuitBreakerActive = active) }
+        }
+        updateBackgroundWorkState()
+    }
+
+    private fun applyFallbackMode(
+        mode: FallbackMode,
+        persist: Boolean,
+        reason: String? = null,
+    ) {
+        if (activeFallbackMode == mode) {
+            if (persist && mode != FallbackMode.NONE) {
+                viewModelScope.launch(dispatchers.io) { preferencesUseCase.setFallbackMode(mode) }
+            }
+            if (_uiState.value.fallbackMode != mode) {
+                updateUiState { current -> current.copy(fallbackMode = mode) }
+            }
+            updateRenderCircuitState()
+            return
+        }
+        activeFallbackMode = mode
+        if (_uiState.value.fallbackMode != mode) {
+            updateUiState { current -> current.copy(fallbackMode = mode) }
+        }
+        when (mode) {
+            FallbackMode.NONE -> {
+                // Allow future renders to re-enable prefetch once stability is confirmed.
+                renderCircuitSoftActive = false
+                renderCircuitTrips = 0
+            }
+            FallbackMode.LEGACY_SIMPLE_RENDERER -> {
+                val label = mode.name.lowercase(Locale.US)
+                crashReportingUseCase.logBreadcrumb(
+                    buildString {
+                        append("fallback_mode:")
+                        append(label)
+                        if (!reason.isNullOrBlank()) {
+                            append(':')
+                            append(reason)
+                        }
+                    }
+                )
+                enqueueMessage(R.string.error_simple_renderer_mode_enabled)
+                renderFaultStreak = 0
+            }
+        }
+        if (persist) {
+            viewModelScope.launch(dispatchers.io) { preferencesUseCase.setFallbackMode(mode) }
+        }
+        updateRenderCircuitState()
     }
 
     @StringRes

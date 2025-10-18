@@ -13,6 +13,7 @@ data class UserPreferences(
     val lastDocumentUri: String?,
     val lastDocumentPageIndex: Int?,
     val lastDocumentZoom: Float?,
+    val fallbackMode: FallbackMode,
 ) {
     companion object {
         val EMPTY = UserPreferences(
@@ -20,6 +21,7 @@ data class UserPreferences(
             lastDocumentUri = null,
             lastDocumentPageIndex = null,
             lastDocumentZoom = null,
+            fallbackMode = FallbackMode.NONE,
         )
     }
 }
