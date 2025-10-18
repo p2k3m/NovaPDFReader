@@ -207,9 +207,9 @@ instrumentation cache directory and temporarily adopts the
 
 For host-side captures, run `tools/capture_screenshots.py`. Install the debug and androidTest APKs
 on the target device once before invoking the script. Provide the harness test package explicitly
-either via `--test-package com.novapdf.reader.test` or by exporting the
-`NOVAPDF_SCREENSHOT_TEST_PACKAGE` environment variable so the script can resolve the instrumentation
-application reliably:
+either via `--test-package com.novapdf.reader.test`, by exporting the
+`NOVAPDF_SCREENSHOT_TEST_PACKAGE` environment variable, or by editing
+`config/screenshot-harness.env` so the script can resolve the instrumentation application reliably:
 
 ```
 ./gradlew :app:installDebug :app:installDebugAndroidTest

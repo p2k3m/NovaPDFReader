@@ -24,6 +24,36 @@ SAFE_PUNCTUATION = {".", "-", "_"}
 MULTIPLE_UNDERSCORES = re.compile(r"_+")
 MULTIPLE_PERIODS = re.compile(r"\.+")
 PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
+HARNESS_ENV_PATH = Path(__file__).resolve().parents[1] / "config" / "screenshot-harness.env"
+
+
+def load_harness_environment(path: Path = HARNESS_ENV_PATH) -> None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    except OSError as error:  # pragma: no cover - defensive
+        print(
+            f"Failed to read screenshot harness environment from {path}: {error}",
+            file=sys.stderr,
+        )
+        return
+
+    for index, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            print(
+                f"Ignoring invalid screenshot harness environment entry on line {index}: {stripped}",
+                file=sys.stderr,
+            )
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        os.environ.setdefault(key, value.strip())
 
 
 def _compile_wildcard_regex(pattern: str) -> Optional[re.Pattern[str]]:
@@ -986,6 +1016,7 @@ def wait_for_activity_manager(args: argparse.Namespace, timeout: int = 300) -> b
 
 
 def main() -> int:
+    load_harness_environment()
     args = parse_args()
 
     max_system_crash_retries = 1
