@@ -33,6 +33,7 @@ HARNESS_HEALTHCHECK_TEST = (
 )
 HARNESS_HEALTHCHECK_TIMEOUT_SECONDS = 30
 LOGCAT_TAIL_LINES = 200
+NATIVE_CRASH_ARTIFACT_ROOT = Path("native-crash-artifacts")
 
 
 def load_harness_environment(path: Path = HARNESS_ENV_PATH) -> None:
@@ -628,6 +629,7 @@ class HarnessContext:
         self.done_flags: List[str] = []
         self.capture_completed: bool = False
         self.system_crash_detected: bool = False
+        self.process_crash_detected: bool = False
         self.missing_instrumentation_detected: bool = False
         self._sanitized_package_warning_emitted: bool = False
         self._system_crash_guidance_emitted: bool = False
@@ -642,6 +644,8 @@ class HarnessContext:
             self.system_crash_detected = True
         if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
             self.system_crash_detected = True
+        if "Process crashed" in stripped:
+            self.process_crash_detected = True
         if "Unable to find instrumentation info for" in stripped:
             self.missing_instrumentation_detected = True
 
@@ -949,6 +953,95 @@ def emit_startup_diagnostics(
         )
 
 
+def collect_native_crash_artifacts(
+    args: argparse.Namespace,
+    ctx: HarnessContext,
+    component: Optional[str],
+    reason: str,
+) -> None:
+    script_path = Path(__file__).resolve().with_name("collect_native_crash_artifacts.sh")
+    if not script_path.exists():
+        print(
+            "Native crash artifact collector missing; skipping tombstone export",
+            file=sys.stderr,
+        )
+        return
+
+    sanitized_reason = _sanitize(reason) or "diagnostics"
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+
+    try:
+        NATIVE_CRASH_ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        print(
+            f"Unable to prepare native crash artifact directory {NATIVE_CRASH_ARTIFACT_ROOT}: {error}",
+            file=sys.stderr,
+        )
+        return
+
+    output_dir: Optional[Path] = None
+    for attempt in range(64):
+        suffix = f"-{attempt}" if attempt else ""
+        candidate = NATIVE_CRASH_ARTIFACT_ROOT / f"{timestamp}-{sanitized_reason}{suffix}"
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        except OSError as error:
+            print(
+                f"Unable to create native crash artifact directory {candidate}: {error}",
+                file=sys.stderr,
+            )
+            return
+        output_dir = candidate
+        break
+
+    if output_dir is None:
+        fallback = f"{timestamp}-{sanitized_reason}-{int(time.time() * 1000)}"
+        output_dir = NATIVE_CRASH_ARTIFACT_ROOT / fallback
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            print(
+                f"Unable to create native crash artifact directory {output_dir}: {error}",
+                file=sys.stderr,
+            )
+            return
+
+    env = os.environ.copy()
+    if getattr(args, "serial", None):
+        env["ANDROID_SERIAL"] = args.serial
+    if ctx.package:
+        env.setdefault("PACKAGE_NAME", ctx.package)
+    if component:
+        test_package = component.split("/", 1)[0].strip()
+        if test_package:
+            env.setdefault("TEST_PACKAGE_NAME", test_package)
+    env.setdefault("COLLECT_NATIVE_LIBS", "false")
+    env.setdefault("PDFIUM_ONLY", "false")
+
+    print(
+        f"Collecting native crash artifacts after {reason}; saving to {output_dir}",
+        file=sys.stderr,
+    )
+
+    try:
+        result = subprocess.run(
+            [str(script_path), str(output_dir)],
+            check=False,
+            env=env,
+        )
+    except FileNotFoundError as error:
+        print(f"Unable to execute {script_path}: {error}", file=sys.stderr)
+        return
+
+    if result.returncode != 0:
+        print(
+            f"Native crash artifact collection exited with code {result.returncode}",
+            file=sys.stderr,
+        )
+
+
 def run_harness_healthcheck(
     args: argparse.Namespace,
     extra_args: Iterable[Tuple[str, str]],
@@ -1154,6 +1247,10 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
                 pass
             print(str(error), file=sys.stderr)
             emit_startup_diagnostics(args, component, ctx)
+            reason = (
+                "system-server-crash" if ctx.system_crash_detected else "startup-timeout"
+            )
+            collect_native_crash_artifacts(args, ctx, component, reason)
             run_harness_healthcheck(args, augmented_extra_args, component)
             ctx.maybe_emit_missing_instrumentation_guidance()
             ctx.maybe_emit_system_crash_guidance()
@@ -1163,6 +1260,12 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     except subprocess.TimeoutExpired:
         process.kill()
         print("Instrumentation timed out", file=sys.stderr)
+        reason = (
+            "system-server-crash"
+            if ctx.system_crash_detected
+            else "instrumentation-timeout"
+        )
+        collect_native_crash_artifacts(args, ctx, component, reason)
         ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
     finally:
@@ -1171,12 +1274,22 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     if return_code is None:
         print("Instrumentation terminated unexpectedly", file=sys.stderr)
+        collect_native_crash_artifacts(
+            args, ctx, component, "unexpected-termination"
+        )
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         return 1, ctx
 
     if return_code != 0:
         print(f"Instrumentation exited with code {return_code}", file=sys.stderr)
+        reason: Optional[str] = None
+        if ctx.system_crash_detected:
+            reason = "system-server-crash"
+        elif ctx.process_crash_detected:
+            reason = "process-crash"
+        if reason:
+            collect_native_crash_artifacts(args, ctx, component, reason)
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         return return_code, ctx
