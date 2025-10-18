@@ -78,30 +78,32 @@ class DeviceAdaptiveTimeouts private constructor(
 
     companion object {
         fun forContext(context: Context): DeviceAdaptiveTimeouts {
-            val appContext = context.applicationContext
-            val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            var totalMem: Long? = null
-            var availMem: Long? = null
-            var lowMemory = false
-            var lowRam = false
-            if (activityManager != null) {
-                runCatching {
-                    val memoryInfo = ActivityManager.MemoryInfo()
-                    activityManager.getMemoryInfo(memoryInfo)
-                    totalMem = memoryInfo.totalMem.takeIf { it > 0L }
-                    availMem = memoryInfo.availMem.takeIf { it > 0L }
-                    lowMemory = memoryInfo.lowMemory
-                    lowRam = isLowRamDevice(activityManager)
+            return runHarnessEntry("DeviceAdaptiveTimeouts", "forContext") {
+                val appContext = context.applicationContext
+                val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                var totalMem: Long? = null
+                var availMem: Long? = null
+                var lowMemory = false
+                var lowRam = false
+                if (activityManager != null) {
+                    runCatching {
+                        val memoryInfo = ActivityManager.MemoryInfo()
+                        activityManager.getMemoryInfo(memoryInfo)
+                        totalMem = memoryInfo.totalMem.takeIf { it > 0L }
+                        availMem = memoryInfo.availMem.takeIf { it > 0L }
+                        lowMemory = memoryInfo.lowMemory
+                        lowRam = isLowRamDevice(activityManager)
+                    }
                 }
+                val isEmulator = isEmulatorBuild()
+                DeviceAdaptiveTimeouts(
+                    totalMemBytes = totalMem,
+                    availMemBytes = availMem,
+                    lowMemory = lowMemory,
+                    lowRamDevice = lowRam,
+                    emulator = isEmulator,
+                )
             }
-            val isEmulator = isEmulatorBuild()
-            return DeviceAdaptiveTimeouts(
-                totalMemBytes = totalMem,
-                availMemBytes = availMem,
-                lowMemory = lowMemory,
-                lowRamDevice = lowRam,
-                emulator = isEmulator,
-            )
         }
 
         @Suppress("DEPRECATION")

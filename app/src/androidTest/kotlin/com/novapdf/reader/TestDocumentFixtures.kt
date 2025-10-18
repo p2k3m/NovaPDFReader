@@ -28,54 +28,56 @@ class TestDocumentFixtures @Inject constructor() {
         .takeIf { it.isNotBlank() }
 
     suspend fun installThousandPageDocument(context: Context): android.net.Uri =
-        withContext(Dispatchers.IO) {
-            val storageCandidates = resolveStorageCandidates(context)
-            NovaLog.i(
-                TAG,
-                "Resolved ${storageCandidates.size} candidate directories for thousand-page PDF: " +
-                    storageCandidates.joinToString { candidate ->
-                        val marker = if (candidate.preferred) "*" else ""
-                        "${candidate.directory.absolutePath}$marker"
-                    }
-            )
-
-            val orderedCandidates = storageCandidates.sortedByDescending { it.preferred }
-            locateReusableFixture(orderedCandidates)?.let { reusable ->
-                val accessible = ensureAccessibleForApp(context, reusable)
-                return@withContext accessible.toUri()
-            }
-
-            val destinationDirectory = orderedCandidates
-                .firstOrNull { it.preferred }
-                ?.directory
-                ?: orderedCandidates.firstOrNull()?.directory
-                ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
-
-            val destination = File(destinationDirectory, CacheFileNames.THOUSAND_PAGE_CACHE)
-            destination.parentFile?.mkdirs()
-            NovaLog.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
-            createThousandPagePdf(destination)
-
-            if (!validateThousandPagePdf(destination)) {
-                NovaLog.w(
+        runHarnessEntrySuspending("TestDocumentFixtures", "installThousandPageDocument") {
+            withContext(Dispatchers.IO) {
+                val storageCandidates = resolveStorageCandidates(context)
+                NovaLog.i(
                     TAG,
-                    "Validation failed after generating thousand-page PDF at ${destination.absolutePath}; removing artifact"
+                    "Resolved ${storageCandidates.size} candidate directories for thousand-page PDF: " +
+                        storageCandidates.joinToString { candidate ->
+                            val marker = if (candidate.preferred) "*" else ""
+                            "${candidate.directory.absolutePath}$marker"
+                        }
                 )
-                if (!destination.delete()) {
+
+                val orderedCandidates = storageCandidates.sortedByDescending { it.preferred }
+                locateReusableFixture(orderedCandidates)?.let { reusable ->
+                    val accessible = ensureAccessibleForApp(context, reusable)
+                    return@withContext accessible.toUri()
+                }
+
+                val destinationDirectory = orderedCandidates
+                    .firstOrNull { it.preferred }
+                    ?.directory
+                    ?: orderedCandidates.firstOrNull()?.directory
+                    ?: throw IOException("No writable internal storage directories available for thousand-page PDF")
+
+                val destination = File(destinationDirectory, CacheFileNames.THOUSAND_PAGE_CACHE)
+                destination.parentFile?.mkdirs()
+                NovaLog.i(TAG, "Creating thousand-page PDF at ${destination.absolutePath}")
+                createThousandPagePdf(destination)
+
+                if (!validateThousandPagePdf(destination)) {
                     NovaLog.w(
                         TAG,
-                        "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after failed validation"
+                        "Validation failed after generating thousand-page PDF at ${destination.absolutePath}; removing artifact"
                     )
+                    if (!destination.delete()) {
+                        NovaLog.w(
+                            TAG,
+                            "Unable to delete invalid thousand-page PDF at ${destination.absolutePath} after failed validation"
+                        )
+                    }
+                    throw IOException("Generated thousand-page PDF failed validation")
                 }
-                throw IOException("Generated thousand-page PDF failed validation")
-            }
 
-            NovaLog.i(
-                TAG,
-                "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)"
-            )
-            val accessible = ensureAccessibleForApp(context, destination)
-            accessible.toUri()
+                NovaLog.i(
+                    TAG,
+                    "Prepared thousand-page PDF at ${destination.absolutePath} (size=${destination.length()} bytes)"
+                )
+                val accessible = ensureAccessibleForApp(context, destination)
+                accessible.toUri()
+            }
         }
 
     private fun resolveStorageCandidates(context: Context): List<StorageCandidate> {

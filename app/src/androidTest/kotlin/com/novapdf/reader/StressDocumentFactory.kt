@@ -21,35 +21,38 @@ import javax.inject.Singleton
 @Singleton
 class StressDocumentFactory @Inject constructor() {
 
-    suspend fun installStressDocument(context: Context) = withContext(Dispatchers.IO) {
-        val candidateDirectories = writableStorageCandidates(context)
+    suspend fun installStressDocument(context: Context) =
+        runHarnessEntrySuspending("StressDocumentFactory", "installStressDocument") {
+            withContext(Dispatchers.IO) {
+                val candidateDirectories = writableStorageCandidates(context)
 
-        val existing = candidateDirectories
-            .map { File(it, CacheFileNames.STRESS_PDF_CACHE) }
-            .firstOrNull { it.exists() && it.length() > 0L }
+                val existing = candidateDirectories
+                    .map { File(it, CacheFileNames.STRESS_PDF_CACHE) }
+                    .firstOrNull { it.exists() && it.length() > 0L }
 
-        if (existing != null) {
-            return@withContext existing.toUri()
-        }
+                if (existing != null) {
+                    return@withContext existing.toUri()
+                }
 
-        val failures = mutableListOf<IOException>()
+                val failures = mutableListOf<IOException>()
 
-        for (directory in candidateDirectories) {
-            val destination = File(directory, CacheFileNames.STRESS_PDF_CACHE)
+                for (directory in candidateDirectories) {
+                    val destination = File(directory, CacheFileNames.STRESS_PDF_CACHE)
 
-            try {
-                destination.parentFile?.mkdirs()
-                generateStressDocument(destination)
-                return@withContext destination.toUri()
-            } catch (exception: IOException) {
-                failures += exception
+                    try {
+                        destination.parentFile?.mkdirs()
+                        generateStressDocument(destination)
+                        return@withContext destination.toUri()
+                    } catch (exception: IOException) {
+                        failures += exception
+                    }
+                }
+
+                val failure = IOException("No writable internal storage directories available for stress PDF")
+                failures.forEach(failure::addSuppressed)
+                throw failure
             }
         }
-
-        val failure = IOException("No writable internal storage directories available for stress PDF")
-        failures.forEach(failure::addSuppressed)
-        throw failure
-    }
 
     private fun generateStressDocument(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for stress PDF")
