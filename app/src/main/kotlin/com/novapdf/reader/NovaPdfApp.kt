@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.app.Instrumentation
 import android.os.Build
+import android.os.Process
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import java.util.HashMap
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
 @HiltAndroidApp
@@ -102,29 +104,70 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
-        if (BuildConfig.DEBUG && !isRunningInTestHarness()) {
-            installDebugAnrDetector()
-            StrictMode.setThreadPolicy(
-                StrictMode.ThreadPolicy.Builder()
-                    .detectDiskReads()
-                    .detectDiskWrites()
-                    .detectNetwork()
-                    .penaltyDeath()
-                    .build()
-            )
-            StrictMode.setVmPolicy(
-                StrictMode.VmPolicy.Builder()
-                    .detectAll()
-                    .penaltyDeath()
-                    .build()
-            )
-        } else if (BuildConfig.DEBUG) {
+        if (BuildConfig.DEBUG) {
+            val runningInHarness = isRunningInTestHarness()
+            if (!runningInHarness) {
+                installDebugAnrDetector()
+            }
+            configureStrictMode(runningInHarness)
+        }
+    }
+
+    private fun configureStrictMode(runningInTestHarness: Boolean) {
+        val threadPolicyBuilder = StrictMode.ThreadPolicy.Builder()
+            .detectDiskReads()
+            .detectDiskWrites()
+            .detectNetwork()
+            .penaltyLog()
+            .applyAnrDeathPenalty()
+        val vmPolicyBuilder = StrictMode.VmPolicy.Builder()
+            .detectAll()
+            .penaltyLog()
+
+        if (runningInTestHarness) {
             NovaLog.i(
                 TAG,
-                "Skipping StrictMode death penalties in test harness",
+                "Skipping StrictMode death penalties in test harness except for ANR",
                 field("testHarness", true),
             )
+        } else {
+            threadPolicyBuilder.penaltyDeath()
+            vmPolicyBuilder.penaltyDeath()
         }
+
+        StrictMode.setThreadPolicy(threadPolicyBuilder.build())
+        StrictMode.setVmPolicy(vmPolicyBuilder.build())
+    }
+
+    private fun StrictMode.ThreadPolicy.Builder.applyAnrDeathPenalty(): StrictMode.ThreadPolicy.Builder {
+        return apply {
+            penaltyListener(strictModePenaltyExecutor, StrictMode.OnThreadViolationListener { violation ->
+                if (violation.javaClass.name == STRICT_MODE_UNRESPONSIVE_VIOLATION &&
+                    strictModeAnrDeathTriggered.compareAndSet(false, true)
+                ) {
+                    handleStrictModeAnr()
+                }
+            })
+        }
+    }
+
+    private fun handleStrictModeAnr() {
+        val pid = Process.myPid()
+        NovaLog.e(
+            tag = TAG,
+            message = "StrictMode detected an unresponsive UI; forcing JVM dump via SIGQUIT.",
+            fields = arrayOf(field("pid", pid)),
+        )
+        runCatching { Process.sendSignal(pid, Process.SIGNAL_QUIT) }
+            .onFailure { error ->
+                NovaLog.w(
+                    TAG,
+                    "Failed to signal StrictMode ANR via SIGQUIT",
+                    error,
+                    field("pid", pid),
+                )
+            }
+        Process.killProcess(pid)
     }
 
     private fun isRunningInTestHarness(): Boolean {
@@ -286,5 +329,9 @@ open class NovaPdfApp : Application(), Configuration.Provider {
 
     companion object {
         private const val TAG = "NovaPdfApp"
+        private const val STRICT_MODE_UNRESPONSIVE_VIOLATION =
+            "android.os.strictmode.UnresponsiveUiViolation"
+        private val strictModeAnrDeathTriggered = AtomicBoolean(false)
+        private val strictModePenaltyExecutor = Executor { command -> command.run() }
     }
 }
