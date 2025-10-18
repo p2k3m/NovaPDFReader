@@ -51,10 +51,20 @@ class SafDocumentPickerUiAutomatorTest {
     @get:Rule(order = 1)
     val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
+    @get:Rule(order = 2)
+    val resourceMonitorRule = DeviceResourceMonitorRule(
+        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        logger = { message -> Log.i(TAG, message) },
+        onResourceExhausted = { reason -> Log.w(TAG, "Resource exhaustion detected: $reason") },
+    )
+
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private val targetPackage: String
         get() = appContext.packageName
+    private lateinit var deviceTimeouts: DeviceAdaptiveTimeouts
+    private var uiWaitTimeoutMs: Long = DEFAULT_UI_WAIT_TIMEOUT_MS
+    private var shortWaitTimeoutMs: Long = DEFAULT_SHORT_WAIT_TIMEOUT_MS
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -66,6 +76,22 @@ class SafDocumentPickerUiAutomatorTest {
         hiltRule.inject()
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
+        deviceTimeouts = DeviceAdaptiveTimeouts.forContext(appContext)
+        uiWaitTimeoutMs = deviceTimeouts.scaleTimeout(
+            base = DEFAULT_UI_WAIT_TIMEOUT_MS,
+            min = DEFAULT_UI_WAIT_TIMEOUT_MS,
+            max = MAX_UI_WAIT_TIMEOUT_MS,
+            allowTightening = false,
+        )
+        shortWaitTimeoutMs = deviceTimeouts.scaleTimeout(
+            base = DEFAULT_SHORT_WAIT_TIMEOUT_MS,
+            min = DEFAULT_SHORT_WAIT_TIMEOUT_MS,
+            max = MAX_SHORT_WAIT_TIMEOUT_MS,
+            allowTightening = false,
+        )
+        logTestInfo(
+            "Using timeouts uiWait=${uiWaitTimeoutMs}ms shortWait=${shortWaitTimeoutMs}ms",
+        )
         ensureWorkManagerInitialized(appContext)
         grantStoragePermissions()
         clearPersistedPermissions()
@@ -110,77 +136,77 @@ class SafDocumentPickerUiAutomatorTest {
     private fun dismissOnboardingIfPresent() {
         val skipButton = device.wait(
             Until.findObject(By.res(targetPackage, UiAutomatorTags.ONBOARDING_SKIP_BUTTON)),
-            SHORT_WAIT_TIMEOUT
+            shortWaitTimeoutMs
         )
         skipButton?.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun openSourceDialog() {
         val openButton = device.wait(
             Until.findObject(By.res(targetPackage, UiAutomatorTags.HOME_OPEN_DOCUMENT_BUTTON)),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         )
         openButton?.click() ?: throw AssertionError("Unable to locate Open document button")
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun launchCloudPicker() {
         val cloudOption = device.wait(
             Until.findObject(By.res(targetPackage, UiAutomatorTags.SOURCE_CLOUD_BUTTON)),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         ) ?: throw AssertionError("Cloud document option not visible")
         cloudOption.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun selectDocumentFromDownloads(displayName: String) {
         val documentsUiPackage = DOCUMENTS_UI_PACKAGE
-        device.wait(Until.hasObject(By.pkg(documentsUiPackage)), UI_WAIT_TIMEOUT)
+        device.wait(Until.hasObject(By.pkg(documentsUiPackage)), uiWaitTimeoutMs)
 
         maybeAcceptDocumentsUiPermission()
         openDownloadsRoot()
 
-        val documentItem = device.wait(Until.findObject(By.text(displayName)), UI_WAIT_TIMEOUT)
+        val documentItem = device.wait(Until.findObject(By.text(displayName)), uiWaitTimeoutMs)
             ?: throw AssertionError("Document $displayName not listed in Downloads")
         documentItem.click()
 
         val openAction = listOf("Open", "Select", "Allow")
             .firstNotNullOfOrNull { label ->
-                device.wait(Until.findObject(By.textContains(label)), SHORT_WAIT_TIMEOUT)
+                device.wait(Until.findObject(By.textContains(label)), shortWaitTimeoutMs)
             }
         openAction?.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun maybeAcceptDocumentsUiPermission() {
         val allowButton = listOf("Allow", "While using the app")
             .firstNotNullOfOrNull { label ->
-                device.wait(Until.findObject(By.textContains(label)), SHORT_WAIT_TIMEOUT)
+                device.wait(Until.findObject(By.textContains(label)), shortWaitTimeoutMs)
             }
         allowButton?.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun openDownloadsRoot() {
         val showRoots = device.wait(
             Until.findObject(By.descContains("Show roots")),
-            SHORT_WAIT_TIMEOUT
+            shortWaitTimeoutMs
         )
         showRoots?.click()
 
         val downloads = device.wait(
             Until.findObject(By.textContains("Downloads")),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         ) ?: throw AssertionError("Downloads entry not visible in document picker")
         downloads.click()
-        device.waitForIdle()
+        device.waitForIdle(uiWaitTimeoutMs)
     }
 
     private fun waitForDocumentToLoad() {
         val adaptiveFlowVisible = device.wait(
             Until.hasObject(adaptiveFlowStatusSelector()),
-            UI_WAIT_TIMEOUT
+            uiWaitTimeoutMs
         )
         assertTrue("Adaptive Flow indicator should appear after loading document", adaptiveFlowVisible)
     }
@@ -189,7 +215,7 @@ class SafDocumentPickerUiAutomatorTest {
         By.res(targetPackage, UiAutomatorTags.ADAPTIVE_FLOW_STATUS_CHIP)
 
     private fun waitUntil(
-        timeoutMs: Long,
+        timeoutMs: Long = uiWaitTimeoutMs,
         checkIntervalMs: Long = POLL_INTERVAL_MS,
         condition: () -> Boolean
     ): Boolean {
@@ -213,7 +239,7 @@ class SafDocumentPickerUiAutomatorTest {
 
     private fun awaitPersistedPermission(documentId: String): Boolean {
         val resolver = appContext.contentResolver
-        return waitUntil(UI_WAIT_TIMEOUT) {
+        return waitUntil(uiWaitTimeoutMs) {
             resolver.persistedUriPermissions.any { permission ->
                 permission.uri.toString() == documentId &&
                     permission.isReadPermission
@@ -331,10 +357,17 @@ class SafDocumentPickerUiAutomatorTest {
     )
 
     private companion object {
+        private const val TAG = "SafPickerUiTest"
         private const val DOCUMENTS_UI_PACKAGE = "com.android.documentsui"
-        private const val UI_WAIT_TIMEOUT = 10_000L
-        private const val SHORT_WAIT_TIMEOUT = 3_000L
+        private const val DEFAULT_UI_WAIT_TIMEOUT_MS = 10_000L
+        private const val MAX_UI_WAIT_TIMEOUT_MS = 30_000L
+        private const val DEFAULT_SHORT_WAIT_TIMEOUT_MS = 3_000L
+        private const val MAX_SHORT_WAIT_TIMEOUT_MS = 12_000L
         private const val POLL_INTERVAL_MS = 200L
+    }
+
+    private fun logTestInfo(message: String) {
+        Log.i(TAG, message)
     }
 }
 

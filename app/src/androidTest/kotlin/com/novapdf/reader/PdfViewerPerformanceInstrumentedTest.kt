@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -40,11 +41,21 @@ class PdfViewerPerformanceInstrumentedTest {
     @get:Rule(order = 1)
     val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
 
+    @get:Rule(order = 2)
+    val resourceMonitorRule = DeviceResourceMonitorRule(
+        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        logger = { message -> Log.i(TAG, message) },
+        onResourceExhausted = { reason -> Log.w(TAG, "Resource exhaustion detected: $reason") },
+    )
+
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
     private val targetPackage: String
         get() = appContext.packageName
+    private lateinit var deviceTimeouts: DeviceAdaptiveTimeouts
+    private var firstFrameTimeoutMs: Long = DEFAULT_FIRST_FRAME_TIMEOUT_MS
+    private var scrollIdleTimeoutMs: Long = DEFAULT_SCROLL_IDLE_TIMEOUT_MS
 
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
@@ -54,6 +65,23 @@ class PdfViewerPerformanceInstrumentedTest {
         hiltRule.inject()
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         appContext = ApplicationProvider.getApplicationContext()
+        deviceTimeouts = DeviceAdaptiveTimeouts.forContext(appContext)
+        firstFrameTimeoutMs = deviceTimeouts.scaleTimeout(
+            base = DEFAULT_FIRST_FRAME_TIMEOUT_MS,
+            min = DEFAULT_FIRST_FRAME_TIMEOUT_MS,
+            max = MAX_FIRST_FRAME_TIMEOUT_MS,
+            extraMultiplier = 1.1,
+            allowTightening = false,
+        )
+        scrollIdleTimeoutMs = deviceTimeouts.scaleTimeout(
+            base = DEFAULT_SCROLL_IDLE_TIMEOUT_MS,
+            min = DEFAULT_SCROLL_IDLE_TIMEOUT_MS,
+            max = MAX_SCROLL_IDLE_TIMEOUT_MS,
+            allowTightening = false,
+        )
+        logTestInfo(
+            "Using timeouts firstFrame=${firstFrameTimeoutMs}ms idle=${scrollIdleTimeoutMs}ms",
+        )
         ensureWorkManagerInitialized(appContext)
         documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
         cancelOutstandingWork()
@@ -86,7 +114,7 @@ class PdfViewerPerformanceInstrumentedTest {
         repeat(PAGE_SCROLL_TARGET) {
             val swipeRegistered = device.swipe(startX, centerY, endX, centerY, SWIPE_STEPS)
             assertTrue("Swipe ${it + 1} should succeed", swipeRegistered)
-            device.waitForIdle(SCROLL_IDLE_TIMEOUT_MS)
+            device.waitForIdle(scrollIdleTimeoutMs)
             activityRule.scenario.onActivity { activity ->
                 maxObservedPage = max(
                     maxObservedPage,
@@ -122,7 +150,7 @@ class PdfViewerPerformanceInstrumentedTest {
         }
 
         rotateTo(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
-        device.waitForIdle(SCROLL_IDLE_TIMEOUT_MS)
+        device.waitForIdle(scrollIdleTimeoutMs)
 
         repeat(ORIENTATION_SCROLL_DURING_ROTATION) {
             assertTrue(
@@ -132,7 +160,7 @@ class PdfViewerPerformanceInstrumentedTest {
         }
 
         rotateTo(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
-        device.waitForIdle(SCROLL_IDLE_TIMEOUT_MS)
+        device.waitForIdle(scrollIdleTimeoutMs)
 
         repeat(ORIENTATION_SCROLL_AFTER_ROTATE) {
             assertTrue(
@@ -159,11 +187,11 @@ class PdfViewerPerformanceInstrumentedTest {
 
         val frameVisible = device.wait(
             Until.hasObject(adaptiveFlowStatusSelector()),
-            FIRST_FRAME_TIMEOUT_MS
+            firstFrameTimeoutMs
         )
         val elapsed = SystemClock.elapsedRealtime() - start
         assertTrue("Failed to observe first frame within timeout", frameVisible)
-        device.waitForIdle(SCROLL_IDLE_TIMEOUT_MS)
+        device.waitForIdle(scrollIdleTimeoutMs)
         return elapsed
     }
 
@@ -199,13 +227,20 @@ class PdfViewerPerformanceInstrumentedTest {
     }
 
     companion object {
+        private const val TAG = "PdfViewerPerfTest"
         private const val FIRST_FRAME_TARGET_MS = 1_500L
-        private const val FIRST_FRAME_TIMEOUT_MS = 5_000L
-        private const val SCROLL_IDLE_TIMEOUT_MS = 2_000L
+        private const val DEFAULT_FIRST_FRAME_TIMEOUT_MS = 5_000L
+        private const val MAX_FIRST_FRAME_TIMEOUT_MS = 20_000L
+        private const val DEFAULT_SCROLL_IDLE_TIMEOUT_MS = 2_000L
+        private const val MAX_SCROLL_IDLE_TIMEOUT_MS = 8_000L
         private const val PAGE_SCROLL_TARGET = 100
         private const val SWIPE_STEPS = 20
         private const val ORIENTATION_SCROLL_BEFORE_ROTATE = 20
         private const val ORIENTATION_SCROLL_DURING_ROTATION = 20
         private const val ORIENTATION_SCROLL_AFTER_ROTATE = 20
+    }
+
+    private fun logTestInfo(message: String) {
+        Log.i(TAG, message)
     }
 }

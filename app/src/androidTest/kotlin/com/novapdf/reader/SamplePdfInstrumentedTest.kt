@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.novapdf.reader.logging.NovaLog
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -25,8 +26,15 @@ import org.junit.Rule
 @HiltAndroidTest
 class SamplePdfInstrumentedTest {
 
-    @get:Rule
+    @get:Rule(order = 0)
     val hiltRule = HiltAndroidRule(this)
+
+    @get:Rule(order = 1)
+    val resourceMonitorRule = DeviceResourceMonitorRule(
+        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        logger = { message -> Log.i(TAG, message) },
+        onResourceExhausted = { reason -> Log.w(TAG, "Resource exhaustion detected: $reason") },
+    )
 
     @Inject
     lateinit var sampleDocument: SampleDocument
@@ -70,5 +78,9 @@ class SamplePdfInstrumentedTest {
         } finally {
             repository.dispose()
         }
+    }
+
+    private companion object {
+        private const val TAG = "SamplePdfTest"
     }
 }
