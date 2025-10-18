@@ -47,8 +47,16 @@ class FileCrashReporter(
             return
         }
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            persist("fatal", throwable.stackTraceToString(), mapOf("thread" to thread.name))
-            defaultHandler?.uncaughtException(thread, throwable)
+            try {
+                handleFatalException(thread, throwable)
+            } catch (reportError: Throwable) {
+                Log.e(TAG, "Unable to record fatal exception", reportError)
+            } finally {
+                runCatching { defaultHandler?.uncaughtException(thread, throwable) }
+                    .onFailure { delegateError ->
+                        Log.e(TAG, "Delegating fatal exception failed", delegateError)
+                    }
+            }
         }
     }
 
@@ -63,7 +71,36 @@ class FileCrashReporter(
         persist("breadcrumb", message)
     }
 
-    private fun persist(kind: String, body: String, metadata: Map<String, String> = emptyMap()) {
+    private fun handleFatalException(thread: Thread, throwable: Throwable) {
+        val message = "Uncaught exception on thread ${thread.name}"
+        val logFields = buildList {
+            add(field("thread", thread.name))
+            add(field("id", thread.id))
+            add(field("daemon", thread.isDaemon))
+            add(field("priority", thread.priority))
+            thread.threadGroup?.name?.let { add(field("threadGroup", it)) }
+        }.toTypedArray()
+
+        Log.e(TAG, message, throwable)
+        NovaLog.e(TAG, message, throwable, logFields)
+
+        val metadata = buildMap {
+            put("thread", thread.name)
+            put("id", thread.id.toString())
+            put("daemon", thread.isDaemon.toString())
+            put("priority", thread.priority.toString())
+            thread.threadGroup?.name?.let { put("threadGroup", it) }
+        }
+
+        persist("fatal", throwable.stackTraceToString(), metadata, immediate = true)
+    }
+
+    private fun persist(
+        kind: String,
+        body: String,
+        metadata: Map<String, String> = emptyMap(),
+        immediate: Boolean = false,
+    ) {
         val directory = logDirectory
         if (directory == null) {
             if (directoryWarningLogged.compareAndSet(false, true)) {
@@ -86,13 +123,19 @@ class FileCrashReporter(
                 append('\n')
             }
         }
-        applicationScope.launch {
+        val persistAction = {
             runCatching {
                 writeLog(File(directory, fileName), entry)
                 trimLogs()
             }.onFailure { error ->
                 Log.w(TAG, "Unable to persist crash log", error)
             }
+        }
+
+        if (immediate) {
+            persistAction()
+        } else {
+            applicationScope.launch { persistAction() }
         }
     }
 
