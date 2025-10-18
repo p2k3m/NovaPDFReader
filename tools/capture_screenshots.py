@@ -83,6 +83,14 @@ def parse_args() -> argparse.Namespace:
             "when the screenshot harness instrumentation is missing"
         ),
     )
+    parser.add_argument(
+        "--test-package",
+        help=(
+            "Explicit test application package name to pass to the screenshot harness. "
+            "Falls back to the NOVAPDF_SCREENSHOT_TEST_PACKAGE environment variable or "
+            "the resolved instrumentation component when omitted."
+        ),
+    )
     args = parser.parse_args()
 
     normalized_component = _normalize_instrumentation_component(
@@ -784,6 +792,47 @@ def parse_extra_args(extra_args: Iterable[str]) -> List[Tuple[str, str]]:
     return parsed
 
 
+def ensure_test_package_argument(
+    args: argparse.Namespace,
+    extra_args: Iterable[Tuple[str, str]],
+    instrumentation_component: Optional[str],
+) -> List[Tuple[str, str]]:
+    augmented: List[Tuple[str, str]] = list(extra_args)
+
+    for key, value in augmented:
+        if key == "testPackageName" and value.strip():
+            return augmented
+
+    explicit = getattr(args, "test_package", None)
+    if not explicit:
+        explicit = os.environ.get("NOVAPDF_SCREENSHOT_TEST_PACKAGE")
+
+    candidate: Optional[str] = explicit.strip() if explicit else None
+    if not candidate:
+        candidate = derive_fallback_package(args, augmented, instrumentation_component)
+
+    if not candidate:
+        return augmented
+
+    normalized = normalize_package_name(candidate, args=args)
+    if normalized and normalized != candidate:
+        print(
+            f"Resolved screenshot harness test package {candidate} to {normalized}",
+            file=sys.stderr,
+        )
+        candidate = normalized
+
+    if candidate:
+        augmented.append(("testPackageName", candidate))
+        print(
+            "Supplying screenshot harness test package via instrumentation extras: "
+            f"{candidate}",
+            file=sys.stderr,
+        )
+
+    return augmented
+
+
 def derive_fallback_package(
     args: argparse.Namespace,
     extra_args: Iterable[Tuple[str, str]],
@@ -824,29 +873,37 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         print(str(error), file=sys.stderr)
         return 1, HarnessContext(args=args)
 
+    augmented_extra_args = ensure_test_package_argument(
+        args, parsed_extra_args, None
+    )
+
     component = resolve_instrumentation_component(args)
     if component is None:
         return 1, HarnessContext(
-            derive_fallback_package(args, parsed_extra_args),
+            derive_fallback_package(args, augmented_extra_args),
             args=args,
         )
+
+    augmented_extra_args = ensure_test_package_argument(
+        args, augmented_extra_args, component
+    )
 
     try:
         ensure_instrumentation_target_installed(args, component)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
         return 1, HarnessContext(
-            derive_fallback_package(args, parsed_extra_args, component),
+            derive_fallback_package(args, augmented_extra_args, component),
             args=args,
         )
 
     ctx = HarnessContext(
-        derive_fallback_package(args, parsed_extra_args, component),
+        derive_fallback_package(args, augmented_extra_args, component),
         args=args,
     )
     process: Optional[subprocess.Popen] = None
     try:
-        process = launch_instrumentation(args, parsed_extra_args, component)
+        process = launch_instrumentation(args, augmented_extra_args, component)
     except Exception as error:  # pragma: no cover - defensive
         print(f"Failed to start instrumentation: {error}", file=sys.stderr)
         return 1, ctx

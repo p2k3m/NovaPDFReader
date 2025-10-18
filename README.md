@@ -195,6 +195,7 @@ The screenshot harness can capture UI frames directly on the device when invoked
 adb shell am instrument -w -r \
     -e runScreenshotHarness true \
     -e captureProgrammaticScreenshots true \
+    -e testPackageName com.novapdf.reader.test \
     -e class com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots \
     com.novapdf.reader.test/dagger.hilt.android.testing.HiltTestRunner
 ```
@@ -205,7 +206,10 @@ instrumentation cache directory and temporarily adopts the
 `mediaProjection` foreground service type while the screenshot is recorded.
 
 For host-side captures, run `tools/capture_screenshots.py`. Install the debug and androidTest APKs
-on the target device once before invoking the script:
+on the target device once before invoking the script. Provide the harness test package explicitly
+either via `--test-package com.novapdf.reader.test` or by exporting the
+`NOVAPDF_SCREENSHOT_TEST_PACKAGE` environment variable so the script can resolve the instrumentation
+application reliably:
 
 ```
 ./gradlew :app:installDebug :app:installDebugAndroidTest
