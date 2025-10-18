@@ -22,9 +22,11 @@ class ThousandPagePdfWriter(
 
     @Throws(IOException::class)
     fun writeTo(stream: OutputStream) {
-        CountingOutputStream(BufferedOutputStream(stream)).use { output ->
-            PdfStreamEncoder(output, pageCount, pageWidth, pageHeight).write()
-            output.flush()
+        runHarnessOperation("ThousandPagePdfWriter", "writeTo") {
+            CountingOutputStream(BufferedOutputStream(stream)).use { output ->
+                PdfStreamEncoder(output, pageCount, pageWidth, pageHeight).write()
+                output.flush()
+            }
         }
     }
 

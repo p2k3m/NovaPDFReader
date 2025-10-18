@@ -14,6 +14,8 @@ interface TestApplicationEntryPoints {
 }
 
 fun adaptiveFlowManager(context: Context): AdaptiveFlowManager {
-    return EntryPointAccessors.fromApplication(context, TestApplicationEntryPoints::class.java)
-        .adaptiveFlowManager()
+    return runHarnessEntry("TestApplicationEntryPoints", "adaptiveFlowManager") {
+        EntryPointAccessors.fromApplication(context, TestApplicationEntryPoints::class.java)
+            .adaptiveFlowManager()
+    }
 }

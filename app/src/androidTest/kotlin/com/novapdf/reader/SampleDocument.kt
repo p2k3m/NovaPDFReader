@@ -14,17 +14,20 @@ import javax.inject.Singleton
 @Singleton
 class SampleDocument @Inject constructor() {
 
-    suspend fun installIntoCache(context: Context): android.net.Uri = withContext(Dispatchers.IO) {
-        val appContext = context.applicationContext
-        val cacheFile = File(appContext.cacheDir, CacheFileNames.SAMPLE_PDF_CACHE)
-        cacheFile.parentFile?.mkdirs()
+    suspend fun installIntoCache(context: Context): android.net.Uri =
+        runHarnessEntrySuspending("SampleDocument", "installIntoCache") {
+            withContext(Dispatchers.IO) {
+                val appContext = context.applicationContext
+                val cacheFile = File(appContext.cacheDir, CacheFileNames.SAMPLE_PDF_CACHE)
+                cacheFile.parentFile?.mkdirs()
 
-        if (!cacheFile.exists() || cacheFile.length() != SAMPLE_PDF_BYTES.size.toLong()) {
-            writeFixtureTo(cacheFile)
+                if (!cacheFile.exists() || cacheFile.length() != SAMPLE_PDF_BYTES.size.toLong()) {
+                    writeFixtureTo(cacheFile)
+                }
+
+                cacheFile.toUri()
+            }
         }
-
-        cacheFile.toUri()
-    }
 
     private fun writeFixtureTo(destination: File) {
         val parentDir = destination.parentFile ?: throw IOException("Missing cache directory for sample PDF")
