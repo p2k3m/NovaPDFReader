@@ -264,6 +264,15 @@ def parse_args() -> argparse.Namespace:
         help="Fail when computed CPU utilisation exceeds this percentage (default: %(default)s)",
     )
     parser.add_argument(
+        "--cpu-threshold-margin",
+        type=float,
+        default=3.0,
+        help=(
+            "Additional headroom applied to the CPU threshold to account for sampling jitter "
+            "(default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
         "--include-properties",
         action="store_true",
         help="Capture high-level device build properties for additional context",
@@ -304,10 +313,11 @@ def evaluate_thresholds(args: argparse.Namespace, snapshot: Snapshot) -> Tuple[b
     if available_mb < args.min_available_mb:
         exhausted = True
         reasons.append(f"available memory {available_mb:.1f} MiB below threshold {args.min_available_mb:.1f} MiB")
-    if snapshot.cpu_usage_percent > args.max_cpu_percent:
+    cpu_limit = args.max_cpu_percent + max(args.cpu_threshold_margin, 0.0)
+    if snapshot.cpu_usage_percent > cpu_limit:
         exhausted = True
         reasons.append(
-            f"cpu utilisation {snapshot.cpu_usage_percent:.1f}% above threshold {args.max_cpu_percent:.1f}%"
+            f"cpu utilisation {snapshot.cpu_usage_percent:.1f}% above threshold {cpu_limit:.1f}%"
         )
     return exhausted, reasons
 
