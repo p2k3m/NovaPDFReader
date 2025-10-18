@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.novapdf.reader.model.UserPreferences
+import com.novapdf.reader.model.FallbackMode
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -71,12 +72,22 @@ class UserPreferencesRepository @Inject constructor(
         }
     }
 
+    suspend fun setFallbackMode(mode: FallbackMode) {
+        dataStore.edit { preferences ->
+            preferences[FALLBACK_MODE_KEY] = mode.name
+        }
+    }
+
     private fun Preferences.toDomainModel(): UserPreferences {
         return UserPreferences(
             nightMode = this[NIGHT_MODE_KEY],
             lastDocumentUri = this[LAST_DOCUMENT_URI_KEY],
             lastDocumentPageIndex = this[LAST_DOCUMENT_PAGE_INDEX_KEY],
             lastDocumentZoom = this[LAST_DOCUMENT_ZOOM_KEY],
+            fallbackMode = this[FALLBACK_MODE_KEY]?.let { stored ->
+                runCatching { FallbackMode.valueOf(stored) }
+                    .getOrDefault(FallbackMode.NONE)
+            } ?: FallbackMode.NONE,
         )
     }
 
@@ -85,5 +96,6 @@ class UserPreferencesRepository @Inject constructor(
         val LAST_DOCUMENT_URI_KEY = stringPreferencesKey("last_document_uri")
         val LAST_DOCUMENT_PAGE_INDEX_KEY = intPreferencesKey("last_document_page_index")
         val LAST_DOCUMENT_ZOOM_KEY = floatPreferencesKey("last_document_zoom")
+        val FALLBACK_MODE_KEY = stringPreferencesKey("fallback_mode")
     }
 }

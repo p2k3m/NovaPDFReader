@@ -2,6 +2,7 @@ package com.novapdf.reader.domain.usecase
 
 import com.novapdf.reader.data.UserPreferencesRepository
 import com.novapdf.reader.model.UserPreferences
+import com.novapdf.reader.model.FallbackMode
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +17,8 @@ interface UserPreferencesUseCase {
     suspend fun setLastDocumentViewport(pageIndex: Int, zoom: Float)
 
     suspend fun clearLastDocumentViewport()
+
+    suspend fun setFallbackMode(mode: FallbackMode)
 }
 
 @Singleton
@@ -39,5 +42,9 @@ class DefaultUserPreferencesUseCase @Inject constructor(
 
     override suspend fun clearLastDocumentViewport() {
         repository.clearLastDocumentViewport()
+    }
+
+    override suspend fun setFallbackMode(mode: FallbackMode) {
+        repository.setFallbackMode(mode)
     }
 }

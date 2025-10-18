@@ -137,6 +137,8 @@
     <string name="error_document_io_issue">We couldn\'t access the document. Check your connection or file permissions and try again.</string>
     <string name="error_document_render_limit">NovaPDF Reader ran out of memory while loading this PDF. Close other apps or restart the device, then try again.</string>
     <string name="error_render_cache_unavailable">Render caches failed to initialize. Performance may be degraded.</string>
+    <string name="error_render_circuit_disabled">Background previews disabled after repeated render failures.</string>
+    <string name="error_simple_renderer_mode_enabled">Simple renderer fallback enabled for stability.</string>
     <string name="error_document_open_generic">We couldn\'t open the document. Please try again.</string>
     <string name="error_remote_open_failed">Download failed. Check the link and try again.</string>
     <string name="error_remote_open_failed_after_retries">Download failed after multiple attempts. Check your connection and try again.</string>

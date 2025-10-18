@@ -280,7 +280,9 @@ class PdfViewerViewModelCacheAndErrorTest {
         advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.renderCacheFallbackActive)
+        assertTrue(viewModel.uiState.value.renderCircuitBreakerActive)
         assertTrue(messages.contains(R.string.error_render_cache_unavailable))
+        assertTrue(messages.contains(R.string.error_render_circuit_disabled))
 
         job.cancel()
     }

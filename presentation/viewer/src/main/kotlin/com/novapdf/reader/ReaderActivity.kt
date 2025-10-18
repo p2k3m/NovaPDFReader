@@ -29,10 +29,13 @@ import com.google.android.material.snackbar.Snackbar
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
 import com.novapdf.reader.model.DocumentSource
+import com.novapdf.reader.model.FallbackMode
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -40,7 +43,6 @@ open class ReaderActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
     private var useComposeUi = true
-
     private var legacyAdapter: LegacyPdfPageAdapter? = null
     private var legacyRecyclerView: RecyclerView? = null
     private var legacyStatusContainer: View? = null
@@ -77,7 +79,11 @@ open class ReaderActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreenIfAvailable()
         super.onCreate(savedInstanceState)
-        useComposeUi = resources.getBoolean(R.bool.config_use_compose)
+        val fallbackMode = runBlocking {
+            useCases.preferences.preferences.first().fallbackMode
+        }
+        useComposeUi = resources.getBoolean(R.bool.config_use_compose) &&
+            fallbackMode != FallbackMode.LEGACY_SIMPLE_RENDERER
         if (useComposeUi) {
             setContent {
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()

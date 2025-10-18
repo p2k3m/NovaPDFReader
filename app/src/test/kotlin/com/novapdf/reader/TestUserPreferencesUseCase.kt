@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import com.novapdf.reader.domain.usecase.UserPreferencesUseCase
 import com.novapdf.reader.model.UserPreferences
+import com.novapdf.reader.model.FallbackMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -33,5 +34,9 @@ class TestUserPreferencesUseCase : UserPreferencesUseCase {
             lastDocumentPageIndex = null,
             lastDocumentZoom = null,
         )
+    }
+
+    override suspend fun setFallbackMode(mode: FallbackMode) {
+        mutablePreferences.value = mutablePreferences.value.copy(fallbackMode = mode)
     }
 }
