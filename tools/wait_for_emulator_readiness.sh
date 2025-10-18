@@ -103,6 +103,15 @@ normalize_bool() {
   esac
 }
 
+kvm_access_confirmed() {
+  if [[ -c /dev/kvm ]]; then
+    if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 start_time=$(date +%s)
 end_time=$((start_time + timeout_seconds))
 
@@ -274,6 +283,17 @@ validate_emulator_configuration() {
       hardware_gpu_authorized=1
       ;;
   esac
+  local kvm_safe_env="${NOVAPDF_EMULATOR_KVM_CONFIRMED_SAFE:-${NOVAPDF_KVM_CONFIRMED_SAFE:-${KVM_CONFIRMED_SAFE:-}}}"
+  local kvm_confirmed_safe=0
+  if [[ -n "$kvm_safe_env" ]]; then
+    kvm_confirmed_safe=$(normalize_bool "$kvm_safe_env")
+  fi
+  if (( kvm_confirmed_safe == 0 )); then
+    if kvm_access_confirmed; then
+      kvm_confirmed_safe=1
+    fi
+  fi
+
   if (( hardware_gpu_authorized == 0 )); then
     case "$gpu_normalized" in
       swiftshader_indirect|swiftshader)
@@ -283,10 +303,20 @@ validate_emulator_configuration() {
         exit 1
         ;;
     esac
+  else
+    if (( kvm_confirmed_safe == 0 )); then
+      echo "Hardware GPU requested for emulator PID ${pid}, but KVM availability was not confirmed. Set NOVAPDF_EMULATOR_KVM_CONFIRMED_SAFE=1 or ensure /dev/kvm is accessible." >&2
+      exit 1
+    fi
   fi
 
+  local enforce_snapshot_flags_value="${NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-${EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-}}"
   local enforce_snapshot_flags
-  enforce_snapshot_flags=$(normalize_bool "${NOVAPDF_EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-${EMULATOR_ENFORCE_SNAPSHOT_FLAGS:-0}}")
+  if [[ -z "$enforce_snapshot_flags_value" ]]; then
+    enforce_snapshot_flags=1
+  else
+    enforce_snapshot_flags=$(normalize_bool "$enforce_snapshot_flags_value")
+  fi
 
   if (( has_no_snapshot_save == 0 )); then
     if (( enforce_snapshot_flags == 0 )); then
