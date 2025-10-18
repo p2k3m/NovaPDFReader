@@ -198,9 +198,41 @@ validate_emulator_configuration() {
     exit 1
   fi
   local accel_normalized=${accel_value,,}
-  if [[ "$accel_normalized" != "on" && "$accel_normalized" != "auto" ]]; then
-    echo "Emulator PID ${pid} launched with -accel ${accel_value}; expected hardware acceleration (on/auto)" >&2
-    exit 1
+
+  local allow_software_accel=${NOVAPDF_ALLOW_SOFTWARE_ACCELERATION:-${NOVAPDF_EMULATOR_ALLOW_SOFTWARE_ACCELERATION:-${ALLOW_SOFTWARE_ACCELERATION:-0}}}
+  allow_software_accel=${allow_software_accel,,}
+  case "$allow_software_accel" in
+    1|true|yes|on|allowed)
+      allow_software_accel=1
+      ;;
+    *)
+      allow_software_accel=0
+      ;;
+  esac
+
+  if (( allow_software_accel == 0 )); then
+    case "${ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION:-}" in
+      1|true|yes|on)
+        allow_software_accel=1
+        ;;
+    esac
+  fi
+
+  if (( allow_software_accel == 0 )); then
+    if [[ "$accel_normalized" != "on" && "$accel_normalized" != "auto" ]]; then
+      echo "Emulator PID ${pid} launched with -accel ${accel_value}; expected hardware acceleration (on/auto)" >&2
+      exit 1
+    fi
+  else
+    if [[ "$accel_normalized" != "off" && "$accel_normalized" != "on" && "$accel_normalized" != "auto" ]]; then
+      echo "Emulator PID ${pid} launched with unsupported -accel ${accel_value}; expected on/auto or off when software acceleration is allowed" >&2
+      exit 1
+    fi
+    if [[ "$accel_normalized" != "off" ]]; then
+      echo "Emulator PID ${pid} launched with hardware acceleration '${accel_value}' while software acceleration override is enabled" >&2
+    else
+      echo "Emulator PID ${pid} running without hardware acceleration; proceeding due to allowed software acceleration" >&2
+    fi
   fi
 
   if (( gpu_flag_present == 0 )); then
