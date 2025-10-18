@@ -28,6 +28,10 @@ MULTIPLE_PERIODS = re.compile(r"\.+")
 PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 HARNESS_ENV_PATH = Path(__file__).resolve().parents[1] / "config" / "screenshot-harness.env"
 HARNESS_START_TIMEOUT_SECONDS = 10
+HARNESS_HEALTHCHECK_TEST = (
+    "com.novapdf.reader.HarnessHealthcheckTest#harnessDependencyGraph"
+)
+HARNESS_HEALTHCHECK_TIMEOUT_SECONDS = 30
 LOGCAT_TAIL_LINES = 200
 
 
@@ -317,6 +321,8 @@ def launch_instrumentation(
     args: argparse.Namespace,
     extra_args: Iterable[Tuple[str, str]],
     component: str,
+    *,
+    test_override: Optional[str] = None,
 ) -> subprocess.Popen:
     if not component:
         raise RuntimeError(
@@ -339,7 +345,7 @@ def launch_instrumentation(
         "false",
         "-e",
         "class",
-        args.test,
+        test_override or args.test,
     ]
     for key, value in extra_args:
         instrumentation_cmd.extend(["-e", key, value])
@@ -943,6 +949,50 @@ def emit_startup_diagnostics(
         )
 
 
+def run_harness_healthcheck(
+    args: argparse.Namespace,
+    extra_args: Iterable[Tuple[str, str]],
+    component: Optional[str],
+) -> None:
+    if not component:
+        return
+
+    print("Attempting harness healthcheck instrumentation run...", file=sys.stderr)
+    try:
+        process = launch_instrumentation(
+            args,
+            extra_args,
+            component,
+            test_override=HARNESS_HEALTHCHECK_TEST,
+        )
+    except Exception as error:  # pragma: no cover - defensive
+        print(f"Unable to launch harness healthcheck: {error}", file=sys.stderr)
+        return
+
+    if process.stdout is None:
+        print("Harness healthcheck failed to provide output stream", file=sys.stderr)
+        return
+
+    try:
+        output, _ = process.communicate(timeout=HARNESS_HEALTHCHECK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        print("Harness healthcheck timed out before completing", file=sys.stderr)
+        return
+
+    if process.returncode not in (0, None):
+        print(
+            f"Harness healthcheck exited with code {process.returncode}",
+            file=sys.stderr,
+        )
+
+    if output:
+        print("Harness healthcheck output:", file=sys.stderr)
+        print(output, file=sys.stderr, end="" if output.endswith("\n") else "\n")
+    else:
+        print("Harness healthcheck completed without emitting output", file=sys.stderr)
+
+
 def parse_extra_args(extra_args: Iterable[str]) -> List[Tuple[str, str]]:
     parsed: List[Tuple[str, str]] = []
     for item in extra_args:
@@ -1104,6 +1154,7 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
                 pass
             print(str(error), file=sys.stderr)
             emit_startup_diagnostics(args, component, ctx)
+            run_harness_healthcheck(args, augmented_extra_args, component)
             ctx.maybe_emit_missing_instrumentation_guidance()
             ctx.maybe_emit_system_crash_guidance()
             return 1, ctx
