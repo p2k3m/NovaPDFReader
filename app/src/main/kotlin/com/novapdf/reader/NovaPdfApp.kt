@@ -1,7 +1,9 @@
 package com.novapdf.reader
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Application
+import android.app.Instrumentation
 import android.os.Build
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
@@ -139,6 +141,9 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private fun isInstrumentationRuntime(): Boolean {
+        if (isActivityThreadInstrumented()) {
+            return true
+        }
         val registryCandidates = listOf(
             "androidx.test.platform.app.InstrumentationRegistry",
             "androidx.test.InstrumentationRegistry",
@@ -151,6 +156,22 @@ open class NovaPdfApp : Application(), Configuration.Provider {
                 method.invoke(null)
             }.getOrNull() != null
         }
+    }
+
+    @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
+    private fun isActivityThreadInstrumented(): Boolean {
+        return runCatching {
+            val activityThreadClass = Class.forName("android.app.ActivityThread")
+            val currentThread = activityThreadClass
+                .getMethod("currentActivityThread")
+                .invoke(null)
+                ?: return@runCatching false
+            val instrumentationField = activityThreadClass.getDeclaredField("mInstrumentation")
+            instrumentationField.isAccessible = true
+            val instrumentation = instrumentationField.get(currentThread) as? Instrumentation
+                ?: return@runCatching false
+            instrumentation::class.java != Instrumentation::class.java
+        }.getOrDefault(false)
     }
 
     override fun onTerminate() {
