@@ -11,9 +11,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
-import com.novapdf.reader.logging.NovaLog
-import kotlin.math.max
-import kotlin.math.min
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
@@ -24,8 +21,10 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.novapdf.reader.CacheFileNames
+import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.util.sanitizeCacheFileName
+import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -33,11 +32,20 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.collections.buildList
 import org.json.JSONObject
 import org.junit.After
@@ -198,6 +206,22 @@ class ScreenshotHarnessTest {
         )
     }
 
+    private fun viewerStateFlow(): Flow<PdfViewerUiState> = callbackFlow {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var registration: Closeable? = null
+        activityRule.scenario.onActivity { activity ->
+            registration = activity.observeDocumentStateForTest { state ->
+                trySend(state).isSuccess
+            }
+        }
+        awaitClose {
+            val closeable = registration ?: return@awaitClose
+            instrumentation.runOnMainSync {
+                closeable.close()
+            }
+        }
+    }
+
     private fun fetchViewerState(): PdfViewerUiState? {
         var snapshot: PdfViewerUiState? = null
         activityRule.scenario.onActivity { activity ->
@@ -206,41 +230,51 @@ class ScreenshotHarnessTest {
         return snapshot
     }
 
-    private fun confirmInteractiveUiState(
+    private suspend fun confirmInteractiveUiState(
         timeoutMs: Long = UI_READY_CONFIRMATION_TIMEOUT_MS,
     ): PdfViewerUiState {
-        val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        var lastLog = 0L
+        val startTime = SystemClock.elapsedRealtime()
+        var lastLog = startTime
         var lastState: PdfViewerUiState? = null
-        while (SystemClock.elapsedRealtime() < deadline) {
-            val state = fetchViewerState()
-            if (state != null && isUiInteractive(state)) {
-                return state
-            }
-            lastState = state
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastLog >= 5_000L) {
-                logHarnessInfo(
-                    "Waiting for interactive UI confirmation; " +
-                        "status=${state?.documentStatus?.javaClass?.simpleName} " +
-                        "renderProgress=${state?.renderProgress} uiUnderLoad=${state?.uiUnderLoad} " +
-                        "pageCount=${state?.pageCount}"
-                )
-                lastLog = now
-            }
-            Thread.sleep(250)
-        }
 
-        val snapshot = lastState
-        val error = IllegalStateException(
-            "Timed out confirming interactive ReaderActivity for screenshot readiness " +
-                "(status=${snapshot?.documentStatus?.javaClass?.simpleName} " +
-                "renderProgress=${snapshot?.renderProgress} uiUnderLoad=${snapshot?.uiUnderLoad} " +
-                "pageCount=${snapshot?.pageCount})"
-        )
-        logHarnessError(error.message ?: "Timed out confirming interactive ReaderActivity", error)
-        publishHarnessFailureFlag("ui_ready_timeout", error)
-        throw error
+        return try {
+            withTimeout(timeoutMs) {
+                viewerStateFlow()
+                    .onEach { state ->
+                        if (!isUiInteractive(state)) {
+                            lastState = state
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastLog >= 5_000L) {
+                                logHarnessInfo(
+                                    "Waiting for interactive UI confirmation; " +
+                                        "status=${state.documentStatus.javaClass.simpleName} " +
+                                        "renderProgress=${state.renderProgress} uiUnderLoad=${state.uiUnderLoad} " +
+                                        "pageCount=${state.pageCount}"
+                                )
+                                lastLog = now
+                            }
+                        }
+                    }
+                    .first { state ->
+                        val interactive = isUiInteractive(state)
+                        if (interactive) {
+                            lastState = state
+                        }
+                        interactive
+                    }
+            }
+        } catch (error: TimeoutCancellationException) {
+            val snapshot = lastState
+            val message =
+                "Timed out confirming interactive ReaderActivity for screenshot readiness " +
+                    "(status=${snapshot?.documentStatus?.javaClass?.simpleName} " +
+                    "renderProgress=${snapshot?.renderProgress} uiUnderLoad=${snapshot?.uiUnderLoad} " +
+                    "pageCount=${snapshot?.pageCount})"
+            val wrapped = IllegalStateException(message, error)
+            logHarnessError(wrapped.message ?: "Timed out confirming interactive ReaderActivity", wrapped)
+            publishHarnessFailureFlag("ui_ready_timeout", wrapped)
+            throw wrapped
+        }
     }
 
     private fun isUiInteractive(state: PdfViewerUiState): Boolean {
@@ -367,7 +401,7 @@ class ScreenshotHarnessTest {
         }
     }
 
-    private fun confirmReadinessForScreenshots(): PdfViewerUiState {
+    private suspend fun confirmReadinessForScreenshots(): PdfViewerUiState {
         val initialState = confirmInteractiveUiState()
         recordHarnessProgress(
             HarnessProgressStep.UI_READY_OBSERVED,

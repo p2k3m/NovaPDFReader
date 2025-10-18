@@ -33,9 +33,11 @@ import com.novapdf.reader.model.FallbackMode
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.io.Closeable
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -167,6 +169,17 @@ open class ReaderActivity : ComponentActivity() {
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun currentDocumentStateForTest(): PdfViewerUiState {
         return viewModel.uiState.value
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun observeDocumentStateForTest(listener: (PdfViewerUiState) -> Unit): Closeable {
+        listener(viewModel.uiState.value)
+        val job = lifecycleScope.launch {
+            viewModel.uiState.collect { state ->
+                listener(state)
+            }
+        }
+        return Closeable { job.cancel() }
     }
 
     private fun setupLegacyUi() {
