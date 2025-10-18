@@ -12,10 +12,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -25,6 +27,8 @@ MULTIPLE_UNDERSCORES = re.compile(r"_+")
 MULTIPLE_PERIODS = re.compile(r"\.+")
 PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._]+$")
 HARNESS_ENV_PATH = Path(__file__).resolve().parents[1] / "config" / "screenshot-harness.env"
+HARNESS_START_TIMEOUT_SECONDS = 10
+LOGCAT_TAIL_LINES = 200
 
 
 def load_harness_environment(path: Path = HARNESS_ENV_PATH) -> None:
@@ -135,6 +139,10 @@ def parse_args() -> argparse.Namespace:
         args.instrumentation = normalized_component
 
     return args
+
+
+class HarnessStartTimeout(RuntimeError):
+    """Raised when the instrumentation fails to emit output within the startup deadline."""
 
 
 def adb_command(args: argparse.Namespace, *cmd: str, text: bool = True, **kwargs):
@@ -803,13 +811,136 @@ def signal_completion(args: argparse.Namespace, ctx: HarnessContext) -> None:
 
 
 def stream_instrumentation_output(
-    process: subprocess.Popen, ctx: HarnessContext
+    process: subprocess.Popen,
+    ctx: HarnessContext,
+    *,
+    start_timeout: int = HARNESS_START_TIMEOUT_SECONDS,
 ) -> Iterable[str]:
     assert process.stdout is not None
-    for line in process.stdout:
+
+    output_queue: queue.Queue[Optional[str]] = queue.Queue()
+    sentinel = object()
+
+    def _reader() -> None:
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(sentinel)
+
+    reader_thread = threading.Thread(
+        target=_reader, name="screenshot-harness-output", daemon=True
+    )
+    reader_thread.start()
+
+    started = False
+    deadline: Optional[float]
+    if start_timeout is None:
+        deadline = None
+    else:
+        deadline = time.monotonic() + max(0, start_timeout)
+
+    while True:
+        try:
+            if not started and deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise HarnessStartTimeout(
+                        "Screenshot harness did not emit output within "
+                        f"{start_timeout} seconds"
+                    )
+                item = output_queue.get(timeout=remaining)
+            else:
+                item = output_queue.get()
+        except queue.Empty:  # pragma: no cover - defensive
+            raise HarnessStartTimeout(
+                "Screenshot harness did not emit output within "
+                f"{start_timeout} seconds"
+            )
+
+        if item is sentinel:
+            break
+
+        started = True
+        line = item
         sys.stdout.write(line)
+        sys.stdout.flush()
         ctx.observe_line(line)
         yield line
+
+
+def emit_startup_diagnostics(
+    args: argparse.Namespace,
+    component: Optional[str],
+    ctx: HarnessContext,
+) -> None:
+    print(
+        "Screenshot harness did not reach the startup handshake in time; collecting diagnostics...",
+        file=sys.stderr,
+    )
+
+    candidates: List[str] = []
+    if component:
+        package, _slash, _runner = component.partition("/")
+        if package:
+            candidates.append(package)
+    if ctx.package:
+        candidates.append(ctx.package)
+
+    unique_candidates: List[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+
+    if unique_candidates:
+        print("Candidate harness packages:", file=sys.stderr)
+        for package in unique_candidates:
+            try:
+                pid_output = adb_command_output(args, "shell", "pidof", package).strip()
+            except subprocess.CalledProcessError:
+                print(f"  {package}: not running", file=sys.stderr)
+                continue
+            status = pid_output or "<unknown>"
+            print(f"  {package}: pid(s) {status}", file=sys.stderr)
+
+    ps_commands = (("shell", "ps", "-A"), ("shell", "ps"))
+    captured_ps = False
+    for command in ps_commands:
+        try:
+            output = adb_command_output(args, *command)
+        except subprocess.CalledProcessError:
+            continue
+        print(f"Process table ({' '.join(command)}):", file=sys.stderr)
+        print(output, file=sys.stderr, end="" if output.endswith("\n") else "\n")
+        captured_ps = True
+        break
+    if not captured_ps:
+        print("Unable to capture process table from device", file=sys.stderr)
+
+    try:
+        logcat_output = adb_command_output(
+            args,
+            "shell",
+            "logcat",
+            "-d",
+            "-v",
+            "brief",
+            "-t",
+            str(LOGCAT_TAIL_LINES),
+        )
+    except subprocess.CalledProcessError as error:
+        print(f"Failed to capture logcat: {error}", file=sys.stderr)
+    else:
+        print(
+            f"Recent logcat (last {LOGCAT_TAIL_LINES} lines):",
+            file=sys.stderr,
+        )
+        print(
+            logcat_output,
+            file=sys.stderr,
+            end="" if logcat_output.endswith("\n") else "\n",
+        )
 
 
 def parse_extra_args(extra_args: Iterable[str]) -> List[Tuple[str, str]]:
@@ -944,24 +1075,38 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     return_code: Optional[int] = None
     try:
-        for line in stream_instrumentation_output(process, ctx):
-            ctx.maybe_collect_package(line)
-            ctx.maybe_collect_ready_flag(line)
-            ctx.maybe_collect_done_flags(line)
-
-            if (
-                not ctx.capture_completed
-                and ctx.package
-                and ctx.ready_flags
-                and ctx.done_flags
+        try:
+            for line in stream_instrumentation_output(
+                process, ctx, start_timeout=HARNESS_START_TIMEOUT_SECONDS
             ):
-                payload = read_ready_payload(args, ctx)
-                if not payload:
-                    continue
-                screenshot_path = capture_screenshot(args, ctx, payload)
-                print(f"Captured screenshot -> {screenshot_path}")
-                signal_completion(args, ctx)
-                ctx.capture_completed = True
+                ctx.maybe_collect_package(line)
+                ctx.maybe_collect_ready_flag(line)
+                ctx.maybe_collect_done_flags(line)
+
+                if (
+                    not ctx.capture_completed
+                    and ctx.package
+                    and ctx.ready_flags
+                    and ctx.done_flags
+                ):
+                    payload = read_ready_payload(args, ctx)
+                    if not payload:
+                        continue
+                    screenshot_path = capture_screenshot(args, ctx, payload)
+                    print(f"Captured screenshot -> {screenshot_path}")
+                    signal_completion(args, ctx)
+                    ctx.capture_completed = True
+        except HarnessStartTimeout as error:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            print(str(error), file=sys.stderr)
+            emit_startup_diagnostics(args, component, ctx)
+            ctx.maybe_emit_missing_instrumentation_guidance()
+            ctx.maybe_emit_system_crash_guidance()
+            return 1, ctx
 
         return_code = process.wait(timeout=args.timeout)
     except subprocess.TimeoutExpired:
