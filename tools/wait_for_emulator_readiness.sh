@@ -4,6 +4,7 @@ set -euo pipefail
 serial="emulator-5554"
 timeout_seconds=900
 poll_interval=5
+emulator_config_validated=0
 
 print_usage() {
   cat <<'USAGE'
@@ -76,13 +77,120 @@ start_time=$(date +%s)
 end_time=$((start_time + timeout_seconds))
 
 check_emulator_pid() {
-  local pid="${EMULATOR_PID:-}" 
+  local pid="${EMULATOR_PID:-}"
   if [[ -n "$pid" ]]; then
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       echo "Emulator process $pid exited while waiting for readiness" >&2
       exit 1
     fi
+
+    if (( emulator_config_validated == 0 )); then
+      validate_emulator_configuration "$pid"
+      emulator_config_validated=1
+    fi
   fi
+}
+
+validate_emulator_configuration() {
+  local pid="$1"
+  local -a args=()
+
+  if [[ -r "/proc/${pid}/cmdline" ]]; then
+    while IFS= read -r -d '' entry; do
+      if [[ -n "$entry" ]]; then
+        args+=("$entry")
+      fi
+    done < "/proc/${pid}/cmdline"
+  else
+    local ps_output
+    if ! ps_output=$(ps -ww -p "$pid" -o command= 2>/dev/null); then
+      echo "Unable to inspect emulator command line for PID ${pid}" >&2
+      exit 1
+    fi
+    read -r -a args <<< "$ps_output"
+  fi
+
+  if (( ${#args[@]} == 0 )); then
+    echo "Unable to parse emulator command line for PID ${pid}" >&2
+    exit 1
+  fi
+
+  local memory_value=""
+  local partition_value=""
+  local accel_value=""
+  local has_no_snapshot_save=0
+
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+      -memory)
+        if (( i + 1 >= ${#args[@]} )); then
+          echo "Emulator launched without a value for -memory; expected at least 4096" >&2
+          exit 1
+        fi
+        memory_value="${args[$((i + 1))]}"
+        ;;
+      -partition-size)
+        if (( i + 1 >= ${#args[@]} )); then
+          echo "Emulator launched without a value for -partition-size; expected at least 4096" >&2
+          exit 1
+        fi
+        partition_value="${args[$((i + 1))]}"
+        ;;
+      -accel)
+        if (( i + 1 >= ${#args[@]} )); then
+          echo "Emulator launched without a value for -accel; expected 'on'" >&2
+          exit 1
+        fi
+        accel_value="${args[$((i + 1))]}"
+        ;;
+      -no-snapshot-save)
+        has_no_snapshot_save=1
+        ;;
+    esac
+  done
+
+  if [[ -z "$memory_value" ]]; then
+    echo "Emulator PID ${pid} missing -memory flag; launch with at least -memory 4096" >&2
+    exit 1
+  fi
+  if ! [[ "$memory_value" =~ ^[0-9]+$ ]]; then
+    echo "Emulator PID ${pid} has non-numeric -memory value '${memory_value}'" >&2
+    exit 1
+  fi
+  if (( memory_value < 4096 )); then
+    echo "Emulator PID ${pid} configured with ${memory_value} MiB RAM; expected at least 4096" >&2
+    exit 1
+  fi
+
+  if [[ -z "$partition_value" ]]; then
+    echo "Emulator PID ${pid} missing -partition-size flag; launch with at least -partition-size 4096" >&2
+    exit 1
+  fi
+  if ! [[ "$partition_value" =~ ^[0-9]+$ ]]; then
+    echo "Emulator PID ${pid} has non-numeric -partition-size value '${partition_value}'" >&2
+    exit 1
+  fi
+  if (( partition_value < 4096 )); then
+    echo "Emulator PID ${pid} configured with ${partition_value} MiB data partition; expected at least 4096" >&2
+    exit 1
+  fi
+
+  if [[ -z "$accel_value" ]]; then
+    echo "Emulator PID ${pid} missing -accel flag; launch with hardware acceleration enabled (-accel on)" >&2
+    exit 1
+  fi
+  local accel_normalized=${accel_value,,}
+  if [[ "$accel_normalized" != "on" && "$accel_normalized" != "auto" ]]; then
+    echo "Emulator PID ${pid} launched with -accel ${accel_value}; expected hardware acceleration (on/auto)" >&2
+    exit 1
+  fi
+
+  if (( has_no_snapshot_save == 0 )); then
+    echo "Emulator PID ${pid} missing -no-snapshot-save; launch with snapshots disabled" >&2
+    exit 1
+  fi
+
+  echo "Verified emulator PID ${pid} meets memory, storage, and acceleration requirements." >&2
 }
 
 remaining_time() {
