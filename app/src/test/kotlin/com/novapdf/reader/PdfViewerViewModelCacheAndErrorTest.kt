@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.asTestMainDispatcher
@@ -120,6 +121,107 @@ class PdfViewerViewModelCacheAndErrorTest {
         assertEquals(0, pageCache.size())
         assertEquals(0, tileCache.size())
         assertTrue(pageBitmap.isRecycled)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `memory callbacks clear caches on low memory`() = runTest {
+        val viewModel = createViewModel()
+        advanceUntilIdle()
+
+        val requirePageCache = PdfViewerViewModel::class.java.getDeclaredMethod("requirePageBitmapCache").apply {
+            isAccessible = true
+        }
+        val requireTileCache = PdfViewerViewModel::class.java.getDeclaredMethod("requireTileBitmapCache").apply {
+            isAccessible = true
+        }
+        val callbacksField = PdfViewerViewModel::class.java.getDeclaredField("memoryCallbacks").apply {
+            isAccessible = true
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val pageCache = requirePageCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
+        @Suppress("UNCHECKED_CAST")
+        val tileCache = requireTileCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
+        val callbacks = callbacksField.get(viewModel) as ComponentCallbacks2
+
+        val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
+        val pageKey = pageKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 0, 256, PageRenderProfile.HIGH_DETAIL)
+        val tileKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$TileCacheKey")
+        val tileKey = tileKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 0, 0, 128, 256, 512, 1f.toBits())
+
+        val pageBitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+        val tileBitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        pageCache.put(pageKey, pageBitmap)
+        tileCache.put(tileKey, tileBitmap)
+
+        callbacks.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
+
+        assertEquals(0, pageCache.size())
+        assertEquals(0, tileCache.size())
+
+        pageBitmap.recycle()
+        tileBitmap.recycle()
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `memory callbacks trim caches when UI hidden`() = runTest {
+        val viewModel = createViewModel()
+        advanceUntilIdle()
+
+        val requirePageCache = PdfViewerViewModel::class.java.getDeclaredMethod("requirePageBitmapCache").apply {
+            isAccessible = true
+        }
+        val requireTileCache = PdfViewerViewModel::class.java.getDeclaredMethod("requireTileBitmapCache").apply {
+            isAccessible = true
+        }
+        val callbacksField = PdfViewerViewModel::class.java.getDeclaredField("memoryCallbacks").apply {
+            isAccessible = true
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val pageCache = requirePageCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
+        @Suppress("UNCHECKED_CAST")
+        val tileCache = requireTileCache.invoke(viewModel) as android.util.LruCache<Any, Bitmap>
+        val callbacks = callbacksField.get(viewModel) as ComponentCallbacks2
+
+        val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
+        val pageKey1 = pageKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 0, 256, PageRenderProfile.HIGH_DETAIL)
+        val pageKey2 = pageKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 1, 256, PageRenderProfile.HIGH_DETAIL)
+        val tileKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$TileCacheKey")
+        val tileKey1 = tileKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 0, 0, 128, 256, 512, 1f.toBits())
+        val tileKey2 = tileKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
+            .newInstance("doc", 1, 0, 128, 256, 512, 1f.toBits())
+
+        val pageBitmap1 = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
+        val pageBitmap2 = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
+        val tileBitmap1 = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+        val tileBitmap2 = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+        pageCache.put(pageKey1, pageBitmap1)
+        pageCache.put(pageKey2, pageBitmap2)
+        tileCache.put(tileKey1, tileBitmap1)
+        tileCache.put(tileKey2, tileBitmap2)
+
+        val initialPageSize = pageCache.size()
+        val initialTileSize = tileCache.size()
+
+        callbacks.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+
+        assertTrue(pageCache.size() < initialPageSize)
+        assertTrue(tileCache.size() < initialTileSize)
+        assertTrue(pageCache.evictionCount() > 0)
+        assertTrue(tileCache.evictionCount() > 0)
+
+        pageBitmap1.recycle()
+        pageBitmap2.recycle()
+        tileBitmap1.recycle()
+        tileBitmap2.recycle()
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.novapdf.reader.data
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
@@ -17,6 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -65,6 +67,62 @@ class PdfDocumentRepositoryThreadingTest {
         }.start()
         assertTrue(backgroundLatch.await(2, TimeUnit.SECONDS))
         assertEquals(PdfRenderProgress.Idle, repository.renderProgress.value)
+        repository.dispose()
+    }
+
+    @Test
+    fun bitmapCacheOperationsAreThreadSafe() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val requireCache = PdfDocumentRepository::class.java.getDeclaredMethod("requireBitmapCache").apply {
+            isAccessible = true
+        }
+        val bitmapCache = requireCache.invoke(repository)
+        val putMethod = bitmapCache.javaClass.getDeclaredMethod("putBitmap", String::class.java, Bitmap::class.java).apply {
+            isAccessible = true
+        }
+        val getMethod = bitmapCache.javaClass.getDeclaredMethod("getBitmap", String::class.java).apply {
+            isAccessible = true
+        }
+
+        val startLatch = CountDownLatch(4)
+        val goLatch = CountDownLatch(1)
+        val finishedLatch = CountDownLatch(4)
+        val failure = AtomicReference<Throwable?>()
+
+        repeat(4) { index ->
+            Thread {
+                try {
+                    startLatch.countDown()
+                    goLatch.await(2, TimeUnit.SECONDS)
+                    repeat(64) { iteration ->
+                        val key = "thread-$index-$iteration"
+                        val bitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+                        putMethod.invoke(bitmapCache, key, bitmap)
+                        val cached = getMethod.invoke(bitmapCache, key) as? Bitmap
+                        if (cached == null) {
+                            failure.compareAndSet(null, AssertionError("Missing cached bitmap for $key"))
+                        }
+                    }
+                } catch (throwable: Throwable) {
+                    failure.compareAndSet(null, throwable)
+                } finally {
+                    finishedLatch.countDown()
+                }
+            }.start()
+        }
+
+        assertTrue("Worker threads failed to start", startLatch.await(2, TimeUnit.SECONDS))
+        goLatch.countDown()
+        assertTrue("Worker threads timed out", finishedLatch.await(5, TimeUnit.SECONDS))
+
+        failure.get()?.let { throw it }
+
         repository.dispose()
     }
 }
