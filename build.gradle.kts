@@ -258,6 +258,19 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
                 )
             )
         }
+        if (apiLevel >= 26) {
+            add(
+                listOf(
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "set",
+                    "com.google.android.gms",
+                    "REQUEST_INSTALL_PACKAGES",
+                    "ignore"
+                )
+            )
+        }
         if (apiLevel >= 28) {
             add(
                 listOf(
@@ -267,6 +280,19 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
                     "set",
                     "com.google.android.gms",
                     "RUN_ANY_IN_BACKGROUND",
+                    "ignore"
+                )
+            )
+        }
+        if (apiLevel >= 31) {
+            add(
+                listOf(
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "set",
+                    "com.google.android.gms",
+                    "UPDATE_PACKAGES_WITHOUT_USER_ACTION",
                     "ignore"
                 )
             )
@@ -291,9 +317,21 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
             return
         }
 
-        commandApplied = true
         val trimmedOutput = output.trim()
-        if (trimmedOutput.isNotEmpty() && !trimmedOutput.equals("No operations.", ignoreCase = true)) {
+        val normalizedOutput = trimmedOutput.lowercase()
+        if (normalizedOutput.startsWith("error:") ||
+            normalizedOutput.contains("unknown operation") ||
+            normalizedOutput.contains("securityexception") ||
+            normalizedOutput.contains("security exception")
+        ) {
+            logger.info(
+                "Play Services auto-update suppression command '${command.joinToString(" ")}' is unsupported on device $serial: $trimmedOutput"
+            )
+            return@forEach
+        }
+
+        commandApplied = true
+        if (trimmedOutput.isNotEmpty() && trimmedOutput.equals("No operations.", ignoreCase = true).not()) {
             logger.info(
                 "adb ${command.joinToString(" ")} for device $serial responded with: $trimmedOutput"
             )
