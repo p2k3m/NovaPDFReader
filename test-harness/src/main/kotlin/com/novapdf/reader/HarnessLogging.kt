@@ -2,6 +2,8 @@ package com.novapdf.reader
 
 import android.os.Debug
 import android.os.Process
+import android.util.Log
+import java.util.LinkedHashMap
 
 internal object HarnessLogging {
     private const val TAG = "HarnessEntryPoint"
@@ -70,6 +72,147 @@ private object HarnessPhaseMetricsLogging {
     }
 }
 
+private object HarnessPhaseLifecycleLogging {
+    private const val TAG = "HarnessPhase"
+    private const val PREFIX = "HARNESS PHASE: "
+
+    fun logStart(
+        component: String,
+        operation: String,
+        attempt: Int,
+        context: Map<String, String>,
+    ) {
+        emit(
+            type = "start",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            context = context,
+        )
+    }
+
+    fun logCheckpoint(
+        component: String,
+        operation: String,
+        attempt: Int,
+        checkpoint: String,
+        detail: String?,
+        context: Map<String, String>,
+    ) {
+        emit(
+            type = "checkpoint",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            checkpoint = checkpoint,
+            detail = detail,
+            context = context,
+        )
+    }
+
+    fun logMessage(
+        component: String,
+        operation: String,
+        attempt: Int,
+        detail: String,
+        context: Map<String, String>,
+    ) {
+        emit(
+            type = "log",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            detail = detail,
+            context = context,
+        )
+    }
+
+    fun logAbort(
+        component: String,
+        operation: String,
+        attempt: Int,
+        context: Map<String, String>,
+        error: Throwable,
+    ) {
+        emit(
+            type = "abort",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            context = context,
+            error = error,
+        )
+    }
+
+    fun logRetry(
+        component: String,
+        operation: String,
+        attempt: Int,
+        nextAttempt: Int,
+        context: Map<String, String>,
+        error: Throwable,
+    ) {
+        emit(
+            type = "retry",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            nextAttempt = nextAttempt,
+            context = context,
+            error = error,
+        )
+    }
+
+    fun logComplete(
+        component: String,
+        operation: String,
+        attempt: Int,
+        context: Map<String, String>,
+    ) {
+        emit(
+            type = "complete",
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            context = context,
+        )
+    }
+
+    private fun emit(
+        type: String,
+        component: String,
+        operation: String,
+        attempt: Int,
+        context: Map<String, String>,
+        checkpoint: String? = null,
+        detail: String? = null,
+        nextAttempt: Int? = null,
+        error: Throwable? = null,
+    ) {
+        val fields = mutableListOf<String>()
+        fields += "\"event\":\"harness_phase\""
+        fields += "\"type\":\"${type.escapeForJson()}\""
+        fields += "\"component\":\"${component.escapeForJson()}\""
+        fields += "\"operation\":\"${operation.escapeForJson()}\""
+        fields += "\"attempt\":$attempt"
+        fields += "\"timestampMs\":${System.currentTimeMillis()}"
+        fields += "\"context\":${context.toJsonObject()}"
+        checkpoint?.let { fields += "\"checkpoint\":\"${it.escapeForJson()}\"" }
+        detail?.let { fields += "\"detail\":\"${it.escapeForJson()}\"" }
+        nextAttempt?.let { fields += "\"nextAttempt\":$it" }
+        if (error != null) {
+            val typeName = error::class.java.name
+            val message = error.message ?: error::class.java.simpleName ?: "Unknown"
+            fields += "\"errorType\":\"${typeName.escapeForJson()}\""
+            fields += "\"errorMessage\":\"${message.escapeForJson()}\""
+        }
+        val payload = fields.joinToString(prefix = "{", postfix = "}")
+        val message = "$PREFIX$payload"
+        println(message)
+        Log.i(TAG, message)
+    }
+}
+
 @PublishedApi
 internal class HarnessPhaseMetricsSession(
     private val component: String,
@@ -114,18 +257,150 @@ internal class HarnessPhaseMetricsSession(
     }.getOrNull()
 }
 
+@PublishedApi
+internal class HarnessPhaseScope internal constructor(
+    private val component: String,
+    private val operation: String,
+    val attempt: Int,
+    initialContext: Map<String, String>,
+) {
+    private val context: LinkedHashMap<String, String> = LinkedHashMap<String, String>().apply {
+        for ((key, value) in initialContext) {
+            put(key, value)
+        }
+    }
+
+    fun annotate(key: String, value: Any?) {
+        val normalizedKey = key.trim()
+        if (normalizedKey.isEmpty()) return
+        val normalizedValue = value?.toString()?.trim()
+        if (normalizedValue.isNullOrEmpty()) return
+        context[normalizedKey] = normalizedValue
+    }
+
+    fun checkpoint(name: String, detail: String? = null) {
+        val normalized = name.trim()
+        if (normalized.isEmpty()) return
+        HarnessPhaseLifecycleLogging.logCheckpoint(
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            checkpoint = normalized,
+            detail = detail?.takeIf { it.isNotBlank() }?.trim(),
+            context = contextSnapshot(),
+        )
+    }
+
+    fun log(detail: String) {
+        val normalized = detail.trim()
+        if (normalized.isEmpty()) return
+        HarnessPhaseLifecycleLogging.logMessage(
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            detail = normalized,
+            context = contextSnapshot(),
+        )
+    }
+
+    internal fun contextSnapshot(): Map<String, String> = LinkedHashMap(context)
+}
+
 internal inline fun <T> runHarnessOperation(
     component: String,
     operation: String,
     block: () -> T,
 ): T {
-    val metricsSession = HarnessPhaseMetricsSession(component, operation)
-    return try {
-        block().also { metricsSession.recordSuccess() }
-    } catch (error: Throwable) {
-        metricsSession.recordFailure(error)
-        HarnessLogging.log(component, operation, error)
-        throw error
+    return runHarnessOperationWithScope(
+        component = component,
+        operation = operation,
+        maxAttempts = 1,
+        baseContext = emptyMap(),
+    ) {
+        block()
+    }
+}
+
+internal inline fun <T> runHarnessOperationWithRetries(
+    component: String,
+    operation: String,
+    maxAttempts: Int,
+    baseContext: Map<String, String> = emptyMap(),
+    crossinline block: HarnessPhaseScope.() -> T,
+): T {
+    return runHarnessOperationWithScope(
+        component = component,
+        operation = operation,
+        maxAttempts = maxAttempts,
+        baseContext = baseContext,
+        block = block,
+    )
+}
+
+@PublishedApi
+internal inline fun <T> runHarnessOperationWithScope(
+    component: String,
+    operation: String,
+    maxAttempts: Int = 1,
+    baseContext: Map<String, String> = emptyMap(),
+    crossinline block: HarnessPhaseScope.() -> T,
+): T {
+    require(maxAttempts >= 1) { "maxAttempts must be at least 1" }
+
+    val persistentContext = LinkedHashMap<String, String>().apply {
+        for ((key, value) in baseContext) {
+            put(key, value)
+        }
+    }
+
+    var attempt = 1
+    while (true) {
+        val scope = HarnessPhaseScope(component, operation, attempt, persistentContext)
+        val metricsSession = HarnessPhaseMetricsSession(component, operation)
+        HarnessPhaseLifecycleLogging.logStart(
+            component = component,
+            operation = operation,
+            attempt = attempt,
+            context = scope.contextSnapshot(),
+        )
+        try {
+            val result = scope.block()
+            metricsSession.recordSuccess()
+            val snapshot = scope.contextSnapshot()
+            persistentContext.putAll(snapshot)
+            HarnessPhaseLifecycleLogging.logComplete(
+                component = component,
+                operation = operation,
+                attempt = attempt,
+                context = snapshot,
+            )
+            return result
+        } catch (error: Throwable) {
+            metricsSession.recordFailure(error)
+            val snapshot = scope.contextSnapshot()
+            persistentContext.putAll(snapshot)
+            HarnessPhaseLifecycleLogging.logAbort(
+                component = component,
+                operation = operation,
+                attempt = attempt,
+                context = snapshot,
+                error = error,
+            )
+            HarnessLogging.log(component, operation, error)
+            if (attempt >= maxAttempts) {
+                throw error
+            }
+            val nextAttempt = attempt + 1
+            HarnessPhaseLifecycleLogging.logRetry(
+                component = component,
+                operation = operation,
+                attempt = attempt,
+                nextAttempt = nextAttempt,
+                context = snapshot,
+                error = error,
+            )
+            attempt = nextAttempt
+        }
     }
 }
 
@@ -141,5 +416,14 @@ private fun String.escapeForJson(): String {
                 else -> append(char)
             }
         }
+    }
+}
+
+private fun Map<String, String>.toJsonObject(): String {
+    if (isEmpty()) return "{}"
+    return entries.joinToString(prefix = "{", postfix = "}") { (key, value) ->
+        val sanitizedKey = key.escapeForJson()
+        val sanitizedValue = value.escapeForJson()
+        "\"$sanitizedKey\":\"$sanitizedValue\""
     }
 }

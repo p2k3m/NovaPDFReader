@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
@@ -41,6 +42,94 @@ HARNESS_HEALTHCHECK_TEST = (
 HARNESS_HEALTHCHECK_TIMEOUT_SECONDS = 30
 LOGCAT_TAIL_LINES = 200
 NATIVE_CRASH_ARTIFACT_ROOT = Path("native-crash-artifacts")
+HARNESS_PHASE_PREFIX = "HARNESS PHASE: "
+
+
+@dataclass
+class HarnessPhaseEvent:
+    """Structured representation of harness phase lifecycle events."""
+
+    type: str
+    component: str
+    operation: str
+    attempt: int
+    timestamp_ms: Optional[int]
+    context: Dict[str, str]
+    checkpoint: Optional[str] = None
+    detail: Optional[str] = None
+    next_attempt: Optional[int] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+def parse_phase_event(line: str) -> Optional[HarnessPhaseEvent]:
+    stripped = line.strip()
+    if not stripped.startswith(HARNESS_PHASE_PREFIX):
+        return None
+    payload = stripped[len(HARNESS_PHASE_PREFIX) :].strip()
+    if not payload:
+        return None
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if data.get("event") != "harness_phase":
+        return None
+
+    type_value = data.get("type")
+    component = data.get("component")
+    operation = data.get("operation")
+    attempt_value = data.get("attempt")
+    if not isinstance(type_value, str) or not type_value:
+        return None
+    if not isinstance(component, str) or not component:
+        return None
+    if not isinstance(operation, str) or not operation:
+        return None
+
+    attempt = _coerce_int(attempt_value)
+    if attempt is None:
+        return None
+
+    context_raw = data.get("context") or {}
+    context: Dict[str, str] = {}
+    if isinstance(context_raw, dict):
+        for key, value in context_raw.items():
+            if not isinstance(key, str):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                context[key] = str(value)
+
+    return HarnessPhaseEvent(
+        type=type_value,
+        component=component,
+        operation=operation,
+        attempt=attempt,
+        timestamp_ms=_coerce_int(data.get("timestampMs")),
+        context=context,
+        checkpoint=data.get("checkpoint"),
+        detail=data.get("detail"),
+        next_attempt=_coerce_int(data.get("nextAttempt")),
+        error_type=data.get("errorType"),
+        error_message=data.get("errorMessage"),
+    )
+
+
+def _coerce_int(value: object) -> Optional[int]:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_context(context: Dict[str, str]) -> str:
+    if not context:
+        return ""
+    return ", ".join(f"{key}={value}" for key, value in sorted(context.items()))
 
 
 def load_harness_environment(path: Path = HARNESS_ENV_PATH) -> None:
@@ -658,6 +747,9 @@ class HarnessContext:
         self.testpoints = TestPointDispatcher()
         self.instrumentation_components: Set[str] = set()
         self._candidate_packages: Set[str] = set()
+        self.phase_events: List[HarnessPhaseEvent] = []
+        self._phase_attempt_events: Dict[Tuple[str, str, int], List[HarnessPhaseEvent]] = {}
+        self._phase_guidance_emitted: bool = False
 
         if fallback_package:
             self._maybe_set_package(fallback_package, suppress_warning=True)
@@ -668,6 +760,9 @@ class HarnessContext:
         if parsed:
             point, detail = parsed
             self.testpoints.dispatch(point, detail)
+        phase_event = parse_phase_event(stripped)
+        if phase_event:
+            self._handle_phase_event(phase_event)
         if "System has crashed" in stripped:
             self.system_crash_detected = True
         if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
@@ -722,6 +817,55 @@ class HarnessContext:
             file=sys.stderr,
         )
         self._missing_instrumentation_guidance_emitted = True
+
+    def maybe_emit_phase_guidance(self) -> None:
+        if self._phase_guidance_emitted or not self._phase_attempt_events:
+            return
+        print("Harness phase timeline:", file=sys.stderr)
+        for (component, operation, attempt), events in sorted(
+            self._phase_attempt_events.items(),
+            key=lambda item: (item[0][0], item[0][1], item[0][2]),
+        ):
+            phases = " -> ".join(event.type for event in events)
+            print(
+                f"  {component}.{operation} attempt {attempt}: {phases}",
+                file=sys.stderr,
+            )
+            final = events[-1]
+            context_event = next((event for event in reversed(events) if event.context), final)
+            context = _format_context(context_event.context)
+            if context:
+                print(f"    context: {context}", file=sys.stderr)
+            checkpoint_event = next(
+                (event for event in reversed(events) if event.checkpoint), None
+            )
+            if checkpoint_event and checkpoint_event.checkpoint:
+                print(f"    checkpoint: {checkpoint_event.checkpoint}", file=sys.stderr)
+            detail_event = next((event for event in reversed(events) if event.detail), None)
+            if detail_event and detail_event.detail:
+                print(f"    detail: {detail_event.detail}", file=sys.stderr)
+            error_event = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.error_type or event.error_message
+                ),
+                None,
+            )
+            if error_event:
+                print(
+                    "    error: {}: {}".format(
+                        error_event.error_type or "<unknown>",
+                        error_event.error_message or "<none>",
+                    ),
+                    file=sys.stderr,
+                )
+            if final.type == "retry" and final.next_attempt:
+                print(
+                    f"    next attempt: {final.next_attempt}",
+                    file=sys.stderr,
+                )
+        self._phase_guidance_emitted = True
 
     def maybe_collect_ready_flag(self, line: str) -> None:
         match = re.search(r"Writing screenshot ready flag to (.+)", line)
@@ -802,6 +946,42 @@ class HarnessContext:
     @property
     def candidate_packages(self) -> Set[str]:
         return set(self._candidate_packages)
+
+    def _handle_phase_event(self, event: "HarnessPhaseEvent") -> None:
+        self.phase_events.append(event)
+        key = (event.component, event.operation, event.attempt)
+        self._phase_attempt_events.setdefault(key, []).append(event)
+        if event.type in {"abort", "retry"}:
+            self._emit_phase_alert(event)
+
+    def _emit_phase_alert(self, event: "HarnessPhaseEvent") -> None:
+        headline = (
+            f"Harness phase {event.type.upper()}: "
+            f"{event.component}.{event.operation} (attempt {event.attempt})"
+        )
+        if event.checkpoint and event.type == "abort":
+            headline = f"{headline} at checkpoint {event.checkpoint}"
+        elif event.checkpoint:
+            headline = f"{headline} checkpoint {event.checkpoint}"
+        if event.detail:
+            headline = f"{headline} - {event.detail}"
+        print(headline, file=sys.stderr)
+        context = _format_context(event.context)
+        if context:
+            print(f"  context: {context}", file=sys.stderr)
+        if event.error_type or event.error_message:
+            print(
+                "  error: {}: {}".format(
+                    event.error_type or "<unknown>",
+                    event.error_message or "<none>",
+                ),
+                file=sys.stderr,
+            )
+        if event.type == "retry" and event.next_attempt:
+            print(
+                f"  scheduling retry attempt {event.next_attempt}",
+                file=sys.stderr,
+            )
 
 
 def read_ready_payload(args: argparse.Namespace, ctx: HarnessContext) -> Optional[str]:
@@ -1467,6 +1647,7 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
             run_harness_healthcheck(args, augmented_extra_args, component)
             ctx.maybe_emit_missing_instrumentation_guidance()
             ctx.maybe_emit_system_crash_guidance()
+            ctx.maybe_emit_phase_guidance()
             return 1, ctx
 
         return_code = process.wait(timeout=args.timeout)
@@ -1480,6 +1661,7 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         )
         collect_native_crash_artifacts(args, ctx, component, reason)
         ctx.maybe_emit_system_crash_guidance()
+        ctx.maybe_emit_phase_guidance()
         return 1, ctx
     finally:
         if process and process.stdout:
@@ -1494,6 +1676,7 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         )
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
+        ctx.maybe_emit_phase_guidance()
         return 1, ctx
 
     if return_code != 0:
@@ -1507,12 +1690,14 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
             collect_native_crash_artifacts(args, ctx, component, reason)
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
+        ctx.maybe_emit_phase_guidance()
         return return_code, ctx
 
     if not ctx.capture_completed:
         print("Did not capture any screenshots", file=sys.stderr)
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
+        ctx.maybe_emit_phase_guidance()
         return 1, ctx
 
     return 0, ctx

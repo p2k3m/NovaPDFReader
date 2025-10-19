@@ -1,9 +1,14 @@
 import argparse
+import json
 from typing import List, Tuple
 
 import pytest
 
-from tools.capture_screenshots import HarnessContext, HarnessTestPoint
+from tools.capture_screenshots import (
+    HARNESS_PHASE_PREFIX,
+    HarnessContext,
+    HarnessTestPoint,
+)
 
 
 def test_observe_line_tracks_state_machine() -> None:
@@ -87,3 +92,118 @@ def test_guidance_emitted_once(capsys: pytest.CaptureFixture[str]) -> None:
     output = capsys.readouterr().err
     assert output.count("system_server crashed") == 1
     assert output.count("Screenshot harness instrumentation is not installed") == 1
+
+
+def test_observe_line_emits_phase_alerts(capsys: pytest.CaptureFixture[str]) -> None:
+    ctx = HarnessContext(args=argparse.Namespace())
+
+    retry_payload = {
+        "event": "harness_phase",
+        "type": "retry",
+        "component": "Foo",
+        "operation": "bar",
+        "attempt": 1,
+        "timestampMs": 1,
+        "context": {"docId": "abc"},
+        "nextAttempt": 2,
+        "errorType": "java.lang.RuntimeException",
+        "errorMessage": "boom",
+    }
+    ctx.observe_line(f"{HARNESS_PHASE_PREFIX}{json.dumps(retry_payload)}")
+
+    output = capsys.readouterr().err
+    assert "Harness phase RETRY: Foo.bar" in output
+    assert "context: docId=abc" in output
+    assert "scheduling retry attempt 2" in output
+
+
+def test_phase_guidance_summarizes_attempts(capsys: pytest.CaptureFixture[str]) -> None:
+    ctx = HarnessContext(args=argparse.Namespace())
+
+    def emit(event: dict) -> None:
+        ctx.observe_line(f"{HARNESS_PHASE_PREFIX}{json.dumps(event)}")
+
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "start",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 1,
+            "timestampMs": 1,
+            "context": {"docId": "alpha"},
+        }
+    )
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "checkpoint",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 1,
+            "timestampMs": 2,
+            "checkpoint": "download",
+            "context": {"docId": "alpha", "page": 1},
+        }
+    )
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "abort",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 1,
+            "timestampMs": 3,
+            "context": {"docId": "alpha", "page": 1},
+            "errorType": "java.lang.RuntimeException",
+            "errorMessage": "boom",
+        }
+    )
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "retry",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 1,
+            "timestampMs": 4,
+            "context": {"docId": "alpha", "page": 1},
+            "nextAttempt": 2,
+        }
+    )
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "start",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 2,
+            "timestampMs": 5,
+            "context": {"docId": "alpha"},
+        }
+    )
+    emit(
+        {
+            "event": "harness_phase",
+            "type": "complete",
+            "component": "Foo",
+            "operation": "bar",
+            "attempt": 2,
+            "timestampMs": 6,
+            "context": {"docId": "alpha", "page": 10},
+            "detail": "done",
+        }
+    )
+
+    ctx.maybe_emit_phase_guidance()
+    output = capsys.readouterr().err
+    assert "Harness phase timeline:" in output
+    assert "Foo.bar attempt 1" in output
+    assert "checkpoint: download" in output
+    assert "error: java.lang.RuntimeException: boom" in output
+    assert "next attempt: 2" in output
+    assert "Foo.bar attempt 2" in output
+    assert "detail: done" in output
+
+    ctx.maybe_emit_phase_guidance()
+    assert capsys.readouterr().err == ""
