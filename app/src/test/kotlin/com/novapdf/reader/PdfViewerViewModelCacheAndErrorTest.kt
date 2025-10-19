@@ -68,6 +68,8 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -403,6 +405,13 @@ class PdfViewerViewModelCacheAndErrorTest {
             isAccessible = true
         }
         assertTrue(safetyField.getBoolean(viewModel))
+
+        val fourthAttempt = viewModel.renderPage(0, 600, RenderWorkQueue.Priority.VISIBLE_PAGE)
+        assertEquals(null, fourthAttempt)
+        verify(
+            pdfRepository,
+            times(3),
+        ).renderPage(any(), any(), any<PageRenderProfile>(), anyOrNull())
     }
 
     private class RecordingCache<K : Any> : ViewerBitmapCache<K> {

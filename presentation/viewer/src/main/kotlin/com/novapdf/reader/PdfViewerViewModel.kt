@@ -1199,6 +1199,9 @@ open class PdfViewerViewModel @Inject constructor(
         targetWidth: Int,
         priority: RenderWorkQueue.Priority,
     ): Bitmap? {
+        if (shouldBlockRenderRequest()) {
+            return null
+        }
         if (isPageMalformed(index)) {
             return null
         }
@@ -1379,6 +1382,9 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     suspend fun renderTile(index: Int, rect: Rect, scale: Float): Bitmap? {
+        if (shouldBlockRenderRequest()) {
+            return null
+        }
         if (isPageMalformed(index)) {
             return null
         }
@@ -1653,6 +1659,15 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun notifyOperationTimeout() {
         enqueueMessage(R.string.error_document_io_issue)
+    }
+
+    private fun shouldBlockRenderRequest(): Boolean {
+        if (!renderSafetyLockActive) return false
+        if (!renderSafetyErrorShown) {
+            renderSafetyErrorShown = true
+            showError(app.getString(R.string.error_render_session_disabled))
+        }
+        return true
     }
 
     private fun recordRenderSuccess() {
