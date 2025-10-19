@@ -10,6 +10,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dagger.multibindings.IntoSet
 import javax.inject.Singleton
 import okhttp3.OkHttpClient
 
@@ -23,7 +24,8 @@ object S3Module {
 
     @Provides
     @Singleton
-    fun provideStorageClient(
+    @IntoSet
+    fun provideS3StorageClient(
         s3StorageClient: S3StorageClient,
     ): StorageClient = s3StorageClient
 

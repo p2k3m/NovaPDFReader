@@ -64,7 +64,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.BufferedInputStream
@@ -77,8 +76,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
 import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
@@ -111,8 +108,6 @@ private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
-private const val REMOTE_CONNECT_TIMEOUT_MS = 15_000
-private const val REMOTE_READ_TIMEOUT_MS = 30_000
 private const val MIN_DISK_CACHE_BYTES = 16L * 1024L * 1024L
 private const val MAX_DISK_CACHE_BYTES = 256L * 1024L * 1024L
 private const val FALLBACK_MEMORY_FRACTION = 4
@@ -1510,7 +1505,8 @@ class PdfDocumentRepository(
             if (scheme == ContentResolver.SCHEME_FILE || scheme == ContentResolver.SCHEME_CONTENT) {
                 return@traceOperation null
             }
-            if (scheme != "http" && scheme != "https" && scheme != "s3") {
+            val client = storageClient ?: return@traceOperation null
+            if (!client.handles(uri)) {
                 return@traceOperation null
             }
             if (!remoteDocumentDir.isDirectory) {
@@ -1560,33 +1556,11 @@ class PdfDocumentRepository(
     }
 
     private suspend fun openRemoteInputStream(uri: Uri): InputStream {
-        val scheme = uri.scheme?.lowercase(Locale.US)
-        return when (scheme) {
-            "http", "https" -> {
-                val url = URL(uri.toString())
-                val connection = url.openConnection() as? HttpURLConnection
-                    ?: throw IOException("Unsupported connection for $uri")
-                connection.connectTimeout = REMOTE_CONNECT_TIMEOUT_MS
-                connection.readTimeout = REMOTE_READ_TIMEOUT_MS
-                connection.instanceFollowRedirects = true
-                connection.connect()
-                val stream = connection.inputStream
-                object : FilterInputStream(stream) {
-                    override fun close() {
-                        try {
-                            super.close()
-                        } finally {
-                            connection.disconnect()
-                        }
-                    }
-                }
-            }
-
-            "s3" -> storageClient?.openInputStream(uri)
-                ?: throw IOException("Unable to resolve storage client for $uri")
-
-            else -> throw IOException("Unsupported remote URI scheme: $scheme")
+        val client = storageClient ?: throw IOException("No storage client configured for remote URIs")
+        if (!client.handles(uri)) {
+            throw IOException("Unsupported remote URI scheme: ${uri.scheme}")
         }
+        return client.openInputStream(uri)
     }
 
     private suspend fun detectOversizedPageTree(
