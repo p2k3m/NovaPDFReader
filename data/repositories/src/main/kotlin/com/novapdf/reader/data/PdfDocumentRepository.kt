@@ -247,6 +247,7 @@ class PdfDocumentRepository(
     }
     private val pdfiumCore = PdfiumCore(appContext)
     private val pdfiumCallVerifier = PdfiumCallVerifier()
+    // SensitiveApi[Reflection]: Access hidden PdfDocument native page pointer for manual cleanup.
     private val pdfiumPagesField by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
             PdfDocument::class.java.getDeclaredField("mNativePagesPtr").apply {
@@ -254,6 +255,7 @@ class PdfDocumentRepository(
             }
         }.getOrNull()
     }
+    // SensitiveApi[Reflection]: Invoke hidden PdfiumCore.nativeClosePage for page lifecycle management.
     private val pdfiumClosePageMethod by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
             PdfiumCore::class.java.getDeclaredMethod("nativeClosePage", java.lang.Long.TYPE).apply {
@@ -261,6 +263,7 @@ class PdfDocumentRepository(
             }
         }.getOrNull()
     }
+    // SensitiveApi[Reflection]: Reach into PdfiumCore.lock to coordinate native access.
     private val pdfiumLockObject by lazy(LazyThreadSafetyMode.PUBLICATION) {
         runCatching {
             PdfiumCore::class.java.getDeclaredField("lock").apply {
@@ -2281,6 +2284,7 @@ class PdfDocumentRepository(
     private fun parseOutlineFromDescriptor(descriptor: ParcelFileDescriptor): List<PdfOutlineNode> {
         ensureWorkerThread()
         return try {
+            // SensitiveApi[Reflection]: Dynamically load hidden android.graphics.pdf.PdfDocument for outline parsing.
             val pdfDocumentClass = Class.forName("android.graphics.pdf.PdfDocument")
             val instance = instantiatePdfDocument(pdfDocumentClass, descriptor) ?: return emptyList()
             try {
@@ -2305,6 +2309,7 @@ class PdfDocumentRepository(
     @WorkerThread
     private fun instantiatePdfDocument(pdfDocumentClass: Class<*>, descriptor: ParcelFileDescriptor): Any? {
         ensureWorkerThread()
+        // SensitiveApi[Reflection]: Invoke hidden PdfDocument constructors for ParcelFileDescriptor inputs.
         pdfDocumentClass.constructors.firstOrNull { constructor ->
             constructor.parameterCount == 1 && ParcelFileDescriptor::class.java.isAssignableFrom(constructor.parameterTypes[0])
         }?.let { constructor ->
@@ -2314,6 +2319,7 @@ class PdfDocumentRepository(
                 null
             }
         }
+        // SensitiveApi[Reflection]: Fallback to hidden PdfDocument.open method when constructors are unavailable.
         pdfDocumentClass.methods.firstOrNull { method ->
             method.parameterCount == 1 && method.name.equals("open", ignoreCase = true) &&
                 ParcelFileDescriptor::class.java.isAssignableFrom(method.parameterTypes[0])

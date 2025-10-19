@@ -437,6 +437,7 @@ open class ReaderActivity : ComponentActivity() {
 
     private fun installSplashScreenIfAvailable() {
         runCatching {
+            // SensitiveApi[Reflection]: Attempt to load optional SplashScreen.installSplashScreen dynamically.
             val splashScreenClass = Class.forName("androidx.core.splashscreen.SplashScreen")
             val installMethod = splashScreenClass.getDeclaredMethod(
                 "installSplashScreen",

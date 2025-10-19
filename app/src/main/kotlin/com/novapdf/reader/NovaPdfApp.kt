@@ -209,6 +209,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
 
         return registryCandidates.any { className ->
             runCatching {
+                // SensitiveApi[Reflection]: Probe instrumentation registries to detect test runtime.
                 val registryClass = Class.forName(className)
                 val method = registryClass.getMethod("getInstrumentation")
                 method.invoke(null)
@@ -219,11 +220,13 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
     private fun isActivityThreadInstrumented(): Boolean {
         return runCatching {
+            // SensitiveApi[Reflection]: Inspect android.app.ActivityThread internals for instrumentation overrides.
             val activityThreadClass = Class.forName("android.app.ActivityThread")
             val currentThread = activityThreadClass
                 .getMethod("currentActivityThread")
                 .invoke(null)
                 ?: return@runCatching false
+            // SensitiveApi[Reflection]: Access ActivityThread.mInstrumentation to validate injected instrumentation.
             val instrumentationField = activityThreadClass.getDeclaredField("mInstrumentation")
             instrumentationField.isAccessible = true
             val instrumentation = instrumentationField.get(currentThread) as? Instrumentation
