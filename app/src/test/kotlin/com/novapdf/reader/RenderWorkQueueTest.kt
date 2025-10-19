@@ -9,8 +9,10 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import com.novapdf.reader.asTestMainDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RenderWorkQueueTest {
@@ -104,5 +106,16 @@ class RenderWorkQueueTest {
         background.await()
 
         scope.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun dispatcherRejectsMainCoroutineDispatcher() = runTest {
+        val mainDispatcher = StandardTestDispatcher(testScheduler).asTestMainDispatcher()
+        val scope = TestScope(mainDispatcher)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            RenderWorkQueue(scope, mainDispatcher, parallelism = 1)
+        }
     }
 }

@@ -37,6 +37,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
@@ -1381,6 +1382,9 @@ class PdfDocumentRepository(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun createPdfDispatcher(base: CoroutineDispatcher): DispatcherHandle {
+        require(base !is MainCoroutineDispatcher) {
+            "Pdf dispatcher base must not be a MainCoroutineDispatcher"
+        }
         return try {
             val threadFactory = ThreadFactory { runnable ->
                 Thread({

@@ -46,6 +46,11 @@ style:
     active: false
   NewLineAtEndOfFile:
     active: false
+  ForbiddenMethodCall:
+    active: true
+    methods:
+      - 'kotlinx.coroutines.Dispatchers.Main'
+    excludes: 'presentation/**,domain/model/**,app/src/androidTest/**,app/src/test/**'
 
 exceptions:
   active: true
