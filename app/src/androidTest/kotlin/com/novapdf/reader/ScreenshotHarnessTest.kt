@@ -1941,7 +1941,7 @@ class ScreenshotHarnessTest {
     ) {
         val detail = buildHarnessStatusDetail(reason, error)
         recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
-        HarnessTestPoints.emit(HarnessTestPoint.ERROR_SIGNALED, detail ?: reason)
+        HarnessTestPoints.emit(HarnessTestPoint.ERROR_SIGNALED, detail)
         val directories = resolveStatusDirectories()
         if (directories.isNotEmpty()) {
             val payload = buildHarnessStatusPayload(
