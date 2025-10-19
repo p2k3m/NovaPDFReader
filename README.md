@@ -329,6 +329,27 @@ custom package name if needed:
 tools/check_logcat_for_crashes.py path/to/log.txt --package com.example.app
 ```
 
+## CI runner maintenance
+
+Stable CI throughput depends on proactively maintaining the runner fleet.
+
+* Apply OS, emulator, and virtualization updates on a regular cadence so new jobs inherit
+  the latest fixes. Nodes that lag behind the rest of the fleet add avoidable latency to
+  Gradle configuration and instrumentation start-up, so favour rebuilding outdated images
+  instead of patching them piecemeal.
+* Investigate runners that repeatedly trigger the emulator watchdog or stall during boot;
+  the `tools/emulator_watchdog.sh` probe emits structured errors after a configurable period
+  of failed health checks, making it easy to spot machines that need to be recycled.
+  Retire or reprovision any host that accumulates these alerts instead of letting flakiness
+  accumulate in the queue.
+* Before opening the queue, run the screenshot harness health check so instrumentation
+  dependencies are verified on real hardware. The screenshot tooling embeds a
+  `HarnessHealthcheckTest` and automatically executes it whenever a capture attempt times out,
+  which surfaces misconfigured or unhealthy devices early.
+* When a job stops making progress (no log output, Gradle stuck in `IDLE`, emulator never boots),
+  reboot the affected runner immediately and re-run the health check. Persistent offenders should
+  be rebuilt or removed from rotation so they do not soak up capacity.
+
 ## Android cache compatibility
 
 Android 9 (API 28) and higher restrict access to `Thread.threadLocalRandomProbe`, a hidden
