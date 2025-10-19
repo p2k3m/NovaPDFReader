@@ -73,6 +73,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core)
+    implementation(libs.androidx.collection)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.annotation)
     implementation(libs.androidx.appcompat)

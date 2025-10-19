@@ -335,7 +335,7 @@ Android 9 (API 28) and higher restrict access to `Thread.threadLocalRandomProbe`
 runtime API that Caffeine depends on for its concurrent cache implementation. Starting with
 Android 12L/13 (API 32) the method is completely blocked which causes an immediate crash as
 soon as Caffeine tries to initialize. NovaPDF therefore no longer ships Caffeine on any
-runtime target. The bitmap/page cache now relies on `android.util.LruCache`, which is safe on
+runtime target. The bitmap/page cache now relies on `androidx.collection.LruCache`, which is safe on
 all supported API levels and runs on a lightweight `Mutex` to guarantee thread-safety.
 
 If you need eviction or expiry semantics beyond the built-in LRU behaviour, prefer layering

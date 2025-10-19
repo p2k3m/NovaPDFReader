@@ -15,7 +15,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.os.Trace
-import android.util.LruCache
+import androidx.collection.LruCache
 import android.util.Size
 import android.util.SparseArray
 import androidx.annotation.VisibleForTesting
