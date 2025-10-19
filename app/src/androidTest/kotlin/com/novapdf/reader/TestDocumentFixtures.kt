@@ -31,16 +31,20 @@ class TestDocumentFixtures @Inject constructor() {
         runHarnessEntrySuspending("TestDocumentFixtures", "installThousandPageDocument") {
             withContext(Dispatchers.IO) {
                 val storageCandidates = resolveStorageCandidates(context)
+                val randomizedCandidates = DocumentOrderRandom
+                    .shuffled("thousandPageStorageCandidates", storageCandidates)
+                val (preferredCandidates, fallbackCandidates) = randomizedCandidates
+                    .partition(StorageCandidate::preferred)
+                val orderedCandidates = preferredCandidates + fallbackCandidates
                 NovaLog.i(
                     TAG,
-                    "Resolved ${storageCandidates.size} candidate directories for thousand-page PDF: " +
-                        storageCandidates.joinToString { candidate ->
+                    "Resolved ${orderedCandidates.size} candidate directories for thousand-page PDF: " +
+                        orderedCandidates.joinToString { candidate ->
                             val marker = if (candidate.preferred) "*" else ""
                             "${candidate.directory.absolutePath}$marker"
                         }
                 )
 
-                val orderedCandidates = storageCandidates.sortedByDescending { it.preferred }
                 locateReusableFixture(orderedCandidates)?.let { reusable ->
                     val accessible = ensureAccessibleForApp(context, reusable)
                     return@withContext accessible.toUri()

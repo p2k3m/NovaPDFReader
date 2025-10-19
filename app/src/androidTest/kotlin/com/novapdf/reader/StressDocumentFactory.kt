@@ -24,7 +24,8 @@ class StressDocumentFactory @Inject constructor() {
     suspend fun installStressDocument(context: Context) =
         runHarnessEntrySuspending("StressDocumentFactory", "installStressDocument") {
             withContext(Dispatchers.IO) {
-                val candidateDirectories = writableStorageCandidates(context)
+                val candidateDirectories = DocumentOrderRandom
+                    .shuffled("stressDocumentDirectories", writableStorageCandidates(context))
 
                 val existing = candidateDirectories
                     .map { File(it, CacheFileNames.STRESS_PDF_CACHE) }

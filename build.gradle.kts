@@ -17,12 +17,14 @@ import org.jlleitschuh.gradle.ktlint.tasks.KtLintCheckTask
 import org.jlleitschuh.gradle.ktlint.tasks.KtLintFormatTask
 import kotlin.LazyThreadSafetyMode
 import kotlin.math.max
+import kotlin.random.Random
 import java.io.File
 import java.util.Properties
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.gradle.api.tasks.StopExecutionException
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -150,6 +152,33 @@ val androidSdkDirectory = locateAndroidSdkDir()
 val adbExecutable = findAdbExecutable(androidSdkDirectory)
 
 val playServicesAutoUpdateDisabledDevices = ConcurrentHashMap.newKeySet<String>()
+
+val testShuffleSeedOverride = (findProperty("novapdf.testShuffleSeed") as? String)
+    ?.takeIf { it.isNotBlank() }
+    ?: System.getenv("NOVAPDF_TEST_SHUFFLE_SEED")?.takeIf { it.isNotBlank() }
+
+private val testShuffleSeedLogged = AtomicBoolean(false)
+
+val testShuffleSeed: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
+    val override = testShuffleSeedOverride
+    if (override != null) {
+        if (testShuffleSeedLogged.compareAndSet(false, true)) {
+            logger.lifecycle("NovaPDF tests using provided shuffle seed $override")
+        }
+        override
+    } else {
+        val generatedValue = Random.Default.nextLong()
+        val normalized = if (generatedValue == Long.MIN_VALUE) 0L else generatedValue
+        val seed = normalized.toString()
+        if (testShuffleSeedLogged.compareAndSet(false, true)) {
+            logger.lifecycle(
+                "NovaPDF tests generated shuffle seed $seed. " +
+                    "Re-run with -Pnovapdf.testShuffleSeed=$seed or NOVAPDF_TEST_SHUFFLE_SEED=$seed to reproduce ordering.",
+            )
+        }
+        seed
+    }
+}
 
 fun queryDeviceApiLevel(serial: String): Int? {
     val executable = adbExecutable ?: return null
@@ -440,6 +469,18 @@ private fun isEnvFlagEnabled(name: String): Boolean {
         value.equals("true", ignoreCase = true) ||
         value.equals("yes", ignoreCase = true) ||
         value.equals("on", ignoreCase = true)
+}
+
+subprojects {
+    tasks.withType<Test>().configureEach {
+        val seed = testShuffleSeed
+        systemProperty("junit.jupiter.testclass.order.default", "org.junit.jupiter.api.ClassOrderer\$Random")
+        systemProperty("junit.jupiter.testmethod.order.default", "org.junit.jupiter.api.MethodOrderer\$Random")
+        systemProperty("junit.jupiter.execution.order.random.seed", seed)
+        doFirst {
+            logger.lifecycle("Executing $path with JUnit random order seed $seed")
+        }
+    }
 }
 
 fun ensureDeviceReadyForApkInstall(serial: String, logger: Logger): Boolean {
