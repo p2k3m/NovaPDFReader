@@ -22,6 +22,7 @@ import com.novapdf.reader.domain.usecase.DefaultBuildSearchIndexUseCase
 import com.novapdf.reader.domain.usecase.DefaultOpenDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
+import com.novapdf.reader.createTestModuleContractsRegistry
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
@@ -127,6 +128,7 @@ class PdfViewerViewModelSearchTest {
             crashReporting = DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager),
             preferences = preferencesUseCase,
+            contractRegistry = createTestModuleContractsRegistry(),
         )
         val app = ApplicationProvider.getApplicationContext<TestPdfApp>()
         return PdfViewerViewModel(
