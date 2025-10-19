@@ -56,6 +56,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -1990,6 +1991,9 @@ open class PdfViewerViewModel @Inject constructor(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun createRenderDispatcher(base: CoroutineDispatcher): DispatcherHandle {
+        require(base !is MainCoroutineDispatcher) {
+            "Render dispatcher base must not be a MainCoroutineDispatcher"
+        }
         return try {
             val threadFactory = ThreadFactory { runnable ->
                 Thread({

@@ -10,6 +10,8 @@ import com.novapdf.reader.model.PdfRenderProgress
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import com.novapdf.reader.asTestMainDispatcher
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,6 +70,19 @@ class PdfDocumentRepositoryThreadingTest {
         assertTrue(backgroundLatch.await(2, TimeUnit.SECONDS))
         assertEquals(PdfRenderProgress.Idle, repository.renderProgress.value)
         repository.dispose()
+    }
+
+    @Test
+    fun pdfDispatcherRejectsMainCoroutineDispatcher() {
+        val mainDispatcher = StandardTestDispatcher().asTestMainDispatcher()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PdfDocumentRepository(
+                context,
+                mainDispatcher,
+                cacheDirectories = DefaultCacheDirectories(context),
+            )
+        }
     }
 
     @Test

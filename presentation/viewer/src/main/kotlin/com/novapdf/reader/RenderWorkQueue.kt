@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.MainCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,11 @@ class RenderWorkQueue(
     private val dispatcher: CoroutineDispatcher,
     private val parallelism: Int,
 ) {
+    init {
+        require(dispatcher !is MainCoroutineDispatcher) {
+            "RenderWorkQueue dispatcher must not be a MainCoroutineDispatcher"
+        }
+    }
     enum class Priority {
         VISIBLE_PAGE,
         NEARBY_PAGE,
