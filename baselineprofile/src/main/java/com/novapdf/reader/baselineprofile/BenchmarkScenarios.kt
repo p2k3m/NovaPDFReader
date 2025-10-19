@@ -2,7 +2,6 @@ package com.novapdf.reader.baselineprofile
 
 import android.app.Activity
 import android.app.Instrumentation
-import android.net.Uri
 import androidx.benchmark.macro.MacrobenchmarkScope
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
@@ -12,6 +11,9 @@ import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.UiObject2
 import kotlin.system.measureTimeMillis
+import android.net.Uri
+import com.novapdf.reader.HarnessDocument
+import com.novapdf.reader.model.DocumentSource
 
 internal const val TARGET_PACKAGE = "com.novapdf.reader"
 private const val READER_ACTIVITY_CLASS_NAME = "com.novapdf.reader.ReaderActivity"
@@ -46,7 +48,7 @@ internal fun MacrobenchmarkScope.measureStressDocumentLoadTimeMs(): Long {
 private fun MacrobenchmarkScope.openStressDocumentAndAwaitInternal(): Long {
     val instrumentation = InstrumentationRegistry.getInstrumentation()
     val context = instrumentation.targetContext
-    val documentUri = StressDocumentFixtures.ensureStressDocument(context)
+    val document = StressDocumentFixtures.ensureStressDocument(context)
 
     val activity = waitForReaderActivity(instrumentation)
     val readerActivityClass = instrumentation.targetContext.classLoader.loadClass(
@@ -54,12 +56,24 @@ private fun MacrobenchmarkScope.openStressDocumentAndAwaitInternal(): Long {
     )
     return measureTimeMillis {
         instrumentation.runOnMainSync {
-            val method = readerActivityClass.getDeclaredMethod(
-                "openDocumentForTest",
-                Uri::class.java
-            )
-            method.isAccessible = true
-            method.invoke(activity, documentUri)
+            when (document) {
+                is HarnessDocument.Local -> {
+                    val method = readerActivityClass.getDeclaredMethod(
+                        "openDocumentForTest",
+                        Uri::class.java,
+                    )
+                    method.isAccessible = true
+                    method.invoke(activity, document.uri)
+                }
+                is HarnessDocument.Remote -> {
+                    val method = readerActivityClass.getDeclaredMethod(
+                        "openRemoteDocumentForTest",
+                        DocumentSource::class.java,
+                    )
+                    method.isAccessible = true
+                    method.invoke(activity, document.source)
+                }
+            }
         }
 
         device.wait(Until.hasObject(By.textContains("Loading your document…")), 5_000)

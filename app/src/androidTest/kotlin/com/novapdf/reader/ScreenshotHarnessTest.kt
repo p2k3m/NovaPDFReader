@@ -22,6 +22,7 @@ import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.novapdf.reader.CacheFileNames
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.util.sanitizeCacheFileName
 import java.io.Closeable
@@ -96,9 +97,13 @@ class ScreenshotHarnessTest {
     @Inject
     lateinit var testDocumentFixtures: TestDocumentFixtures
 
+    @Inject
+    lateinit var harnessOverrides: HarnessOverrideRegistry
+
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
     private lateinit var documentUri: Uri
+    private var documentSourceOverride: DocumentSource? = null
     private lateinit var handshakeCacheDirs: List<File>
     private lateinit var handshakePackageName: String
     private lateinit var deviceTimeouts: DeviceAdaptiveTimeouts
@@ -146,9 +151,30 @@ class ScreenshotHarnessTest {
             logHarnessInfo("Programmatic screenshots enabled=$programmaticScreenshotsEnabled")
             metricsRecorder = PerformanceMetricsRecorder(appContext)
             ensureWorkManagerInitialized(appContext)
-            logHarnessInfo("Installing thousand-page stress document for screenshot harness")
-            documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
-            logHarnessInfo("Thousand-page document installed at $documentUri")
+            documentSourceOverride = null
+            val harnessDocument = harnessOverrides.prepareDocument(appContext)
+            if (harnessDocument != null) {
+                when (harnessDocument) {
+                    is HarnessDocument.Local -> {
+                        documentUri = harnessDocument.uri
+                        logHarnessInfo(
+                            "Using override local document for screenshot harness: $documentUri",
+                        )
+                    }
+                    is HarnessDocument.Remote -> {
+                        documentSourceOverride = harnessDocument.source
+                        documentUri = Uri.parse(harnessDocument.source.id)
+                        logHarnessInfo(
+                            "Using override document source for screenshot harness: " +
+                                "${harnessDocument.source.kind}:${harnessDocument.source.id}",
+                        )
+                    }
+                }
+            } else {
+                logHarnessInfo("Installing thousand-page stress document for screenshot harness")
+                documentUri = testDocumentFixtures.installThousandPageDocument(appContext)
+                logHarnessInfo("Thousand-page document installed at $documentUri")
+            }
             cancelWorkManagerJobs()
         } catch (error: Throwable) {
             if (error is AssumptionViolatedException || error is CancellationException) {
@@ -1281,14 +1307,29 @@ class ScreenshotHarnessTest {
     }
 
     private fun openDocumentInViewer() {
-        logHarnessInfo("Opening thousand-page document in viewer: $documentUri")
+        val remoteSource = documentSourceOverride
+        if (remoteSource != null) {
+            logHarnessInfo(
+                "Opening remote document in viewer: ${remoteSource.kind}:${remoteSource.id}"
+            )
+        } else {
+            logHarnessInfo("Opening thousand-page document in viewer: $documentUri")
+        }
         metricsRecorder?.start(activityRule.scenario)
         activityRule.scenario.onActivity { activity ->
-            activity.openDocumentForTest(documentUri)
+            if (remoteSource != null) {
+                activity.openRemoteDocumentForTest(remoteSource)
+            } else {
+                activity.openDocumentForTest(documentUri)
+            }
+        }
+        val progressDetail = buildString {
+            append("uri=$documentUri")
+            remoteSource?.let { append(", source=${it.kind}:${it.id}") }
         }
         recordHarnessProgress(
             HarnessProgressStep.PAGE_OPEN_REQUESTED,
-            "uri=$documentUri"
+            progressDetail
         )
 
         val deadline = SystemClock.elapsedRealtime() + DOCUMENT_OPEN_TIMEOUT

@@ -176,6 +176,20 @@ open class ReaderActivity : ComponentActivity() {
     }
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun openRemoteDocumentForTest(source: DocumentSource) {
+        if (!useComposeUi) {
+            viewModel.openRemoteDocument(source)
+            return
+        }
+
+        lifecycleScope.launch {
+            lifecycle.withStarted {
+                viewModel.openRemoteDocument(source)
+            }
+        }
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun currentDocumentStateForTest(): PdfViewerUiState {
         return viewModel.uiState.value
     }
