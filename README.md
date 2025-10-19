@@ -359,6 +359,11 @@ Stable CI throughput depends on proactively maintaining the runner fleet.
 * When a job stops making progress (no log output, Gradle stuck in `IDLE`, emulator never boots),
   reboot the affected runner immediately and re-run the health check. Persistent offenders should
   be rebuilt or removed from rotation so they do not soak up capacity.
+* Use `tools/device_fleet_health.py` to orchestrate the screenshot harness health check across
+  every connected device or emulator. The script captures instrumentation phase/testpoint metrics
+  alongside CPU, memory, and hardware properties so repeated failures can be correlated with
+  specific models or hosts. Invoke it with `--output-json fleet-health.json` inside maintenance
+  windows to archive instability trends over time.
 
 ## Android cache compatibility
 
