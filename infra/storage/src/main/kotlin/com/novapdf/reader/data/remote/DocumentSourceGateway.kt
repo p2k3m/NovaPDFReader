@@ -18,6 +18,7 @@ interface DocumentSourceHandler {
     fun fetch(source: DocumentSource): Flow<RemoteDocumentFetchEvent>
 }
 
+/** Raised when no handler claims the provided [DocumentSource]. */
 class UnsupportedDocumentSourceException(
     val source: DocumentSource,
 ) : Exception("Unsupported document source: $source")
