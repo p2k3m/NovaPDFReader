@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from tools.testpoints import (
     HarnessTestPoint,
@@ -656,6 +656,8 @@ class HarnessContext:
         self._system_crash_guidance_emitted: bool = False
         self._missing_instrumentation_guidance_emitted: bool = False
         self.testpoints = TestPointDispatcher()
+        self.instrumentation_components: Set[str] = set()
+        self._candidate_packages: Set[str] = set()
 
         if fallback_package:
             self._maybe_set_package(fallback_package, suppress_warning=True)
@@ -757,6 +759,7 @@ class HarnessContext:
         normalized = self._normalize_package(candidate)
         if normalized:
             self.package = normalized
+            self._candidate_packages.add(normalized)
             return True
         if not suppress_warning and not self._sanitized_package_warning_emitted:
             fallback = self.package or candidate or "<unknown>"
@@ -781,6 +784,24 @@ class HarnessContext:
                 file=sys.stderr,
             )
         return normalized
+
+    def add_candidate_package(self, candidate: str) -> None:
+        normalized = self._normalize_package(candidate)
+        if normalized:
+            self._candidate_packages.add(normalized)
+
+    def register_instrumentation_component(self, component: str) -> None:
+        component = component.strip()
+        if not component:
+            return
+        self.instrumentation_components.add(component)
+        package = component.split("/", 1)[0].strip()
+        if package:
+            self.add_candidate_package(package)
+
+    @property
+    def candidate_packages(self) -> Set[str]:
+        return set(self._candidate_packages)
 
 
 def read_ready_payload(args: argparse.Namespace, ctx: HarnessContext) -> Optional[str]:
@@ -1202,6 +1223,150 @@ def derive_fallback_package(
     return None
 
 
+def _parse_process_listing(output: str) -> List[Tuple[str, str]]:
+    processes: List[Tuple[str, str]] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        upper = stripped.upper()
+        if upper.startswith("PID") or upper.startswith("USER"):
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, _, name = parts
+        if pid and name:
+            processes.append((pid.strip(), name.strip()))
+    return processes
+
+
+def cleanup_lingering_instrumentation_processes(
+    args: argparse.Namespace, ctx: HarnessContext
+) -> None:
+    packages = sorted(ctx.candidate_packages)
+    if not packages:
+        return
+
+    try:
+        output = adb_command_output(
+            args, "shell", "ps", "-A", "-o", "PID,PPID,NAME"
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"Unable to inspect device processes for lingering instrumentation: {error}",
+            file=sys.stderr,
+        )
+        return
+
+    processes = _parse_process_listing(output)
+    lingering: List[Tuple[str, str, str]] = []
+    for pid, name in processes:
+        for package in packages:
+            if name == package or name.startswith(f"{package}:"):
+                lingering.append((package, pid, name))
+                break
+
+    if not lingering:
+        return
+
+    unique_entries = {(package, name): pid for package, pid, name in lingering}
+    for (package, name), pid in unique_entries.items():
+        print(
+            f"Detected lingering instrumentation process {name} (pid {pid}) for {package}",
+            file=sys.stderr,
+        )
+
+    packages_to_force_stop = sorted({package for package, _, _ in lingering})
+    for package in packages_to_force_stop:
+        message = (
+            f"Detected lingering instrumentation processes for {package}; force stopping package"
+        )
+        print(message, file=sys.stderr)
+        print(f"::warning::{message}")
+        try:
+            adb_command(
+                args,
+                "shell",
+                "am",
+                "force-stop",
+                package,
+                text=True,
+                check=False,
+            )
+        except subprocess.CalledProcessError as error:
+            print(f"Unable to force-stop {package}: {error}", file=sys.stderr)
+
+    time.sleep(1)
+
+    try:
+        post_stop_output = adb_command_output(
+            args, "shell", "ps", "-A", "-o", "PID,PPID,NAME"
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"Unable to verify lingering instrumentation cleanup: {error}",
+            file=sys.stderr,
+        )
+        return
+
+    remaining = []
+    for pid, name in _parse_process_listing(post_stop_output):
+        for package in packages:
+            if name == package or name.startswith(f"{package}:"):
+                remaining.append((package, pid, name))
+                break
+
+    if not remaining:
+        return
+
+    for package, pid, name in remaining:
+        message = (
+            f"Lingering instrumentation process {name} (pid {pid}) survived force-stop; sending SIGKILL"
+        )
+        print(message, file=sys.stderr)
+        print(f"::error::{message}")
+        try:
+            adb_command(
+                args,
+                "shell",
+                "kill",
+                "-9",
+                pid,
+                text=True,
+                check=False,
+            )
+        except subprocess.CalledProcessError as error:
+            print(
+                f"Unable to terminate instrumentation process {name} (pid {pid}): {error}",
+                file=sys.stderr,
+            )
+
+    time.sleep(0.5)
+
+    try:
+        final_output = adb_command_output(
+            args, "shell", "ps", "-A", "-o", "PID,PPID,NAME"
+        )
+    except subprocess.CalledProcessError:
+        return
+
+    stubborn = []
+    for pid, name in _parse_process_listing(final_output):
+        for package in packages:
+            if name == package or name.startswith(f"{package}:"):
+                stubborn.append((package, pid, name))
+                break
+
+    for package, pid, name in stubborn:
+        message = (
+            "Instrumentation process {} (pid {}) could not be terminated automatically; "
+            "manual cleanup required for {}".format(name, pid, package)
+        )
+        print(message, file=sys.stderr)
+        print(f"::error::{message}")
+
+
 def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessContext]:
     try:
         parsed_extra_args = parse_extra_args(args.extra_arg)
@@ -1229,6 +1394,8 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         args, augmented_extra_args, component
     )
 
+    extras_map: Dict[str, str] = {key: value for key, value in augmented_extra_args}
+
     try:
         ensure_instrumentation_target_installed(args, component)
     except RuntimeError as error:
@@ -1242,9 +1409,18 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         derive_fallback_package(args, augmented_extra_args, component),
         args=args,
     )
+    ctx.register_instrumentation_component(component)
+    test_package_extra = extras_map.get("testPackageName")
+    if test_package_extra:
+        ctx.add_candidate_package(test_package_extra)
+    target_instrumentation_extra = extras_map.get("targetInstrumentation")
+    if target_instrumentation_extra:
+        ctx.register_instrumentation_component(target_instrumentation_extra)
     process: Optional[subprocess.Popen] = None
+    instrumentation_launched = False
     try:
         process = launch_instrumentation(args, augmented_extra_args, component)
+        instrumentation_launched = True
     except Exception as error:  # pragma: no cover - defensive
         print(f"Failed to start instrumentation: {error}", file=sys.stderr)
         return 1, ctx
@@ -1308,6 +1484,8 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     finally:
         if process and process.stdout:
             process.stdout.close()
+        if instrumentation_launched:
+            cleanup_lingering_instrumentation_processes(args, ctx)
 
     if return_code is None:
         print("Instrumentation terminated unexpectedly", file=sys.stderr)
