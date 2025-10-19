@@ -6,7 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
 import android.util.Size
-import android.util.LruCache
 import android.os.Build
 import android.os.CancellationSignal
 import android.os.Handler
@@ -16,6 +15,7 @@ import android.print.PrintAttributes
 import android.print.PrintManager
 import androidx.annotation.StringRes
 import android.content.res.Configuration
+import androidx.collection.LruCache
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
@@ -94,11 +94,11 @@ private const val RENDER_CIRCUIT_PERSIST_THRESHOLD = 2
 private const val SIMPLE_RENDERER_MAX_WIDTH = 1280
 private const val SIMPLE_RENDERER_MAX_SCALE = 2.0f
 
-fun interface ViewerBitmapCacheFactory<K> {
+fun interface ViewerBitmapCacheFactory<K : Any> {
     fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): FractionalBitmapLruCache<K>
 }
 
-class FractionalBitmapLruCache<K>(
+class FractionalBitmapLruCache<K : Any>(
     maxSizeBytes: Int,
     private val sizeCalculator: (Bitmap) -> Int,
 ) : LruCache<K, Bitmap>(maxSizeBytes) {
@@ -1847,7 +1847,7 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    private fun <K, V> captureCacheStats(lock: Any, cache: LruCache<K, V>?): CacheStats {
+    private fun <K : Any, V : Any> captureCacheStats(lock: Any, cache: LruCache<K, V>?): CacheStats {
         if (cache == null) {
             return CacheStats(0, 0, 0, 0, 0, 0)
         }
