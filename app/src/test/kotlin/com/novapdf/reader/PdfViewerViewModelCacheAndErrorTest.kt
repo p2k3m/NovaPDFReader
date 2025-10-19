@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
+import com.novapdf.reader.DocumentStatus
 import com.novapdf.reader.PageCacheKey
 import com.novapdf.reader.RenderWorkQueue
 import com.novapdf.reader.ViewerBitmapCache
@@ -58,6 +59,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
 import org.junit.Before
@@ -366,6 +368,41 @@ class PdfViewerViewModelCacheAndErrorTest {
             isAccessible = true
         }
         assertTrue(cacheFaultField.getInt(viewModel) >= 3)
+    }
+
+    @Test
+    fun `consecutive render failures disable prefetch and surface safe error`() = runTest {
+        val viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.setDocument("doc")
+
+        whenever(
+            pdfRepository.renderPage(any(), any(), any<PageRenderProfile>(), anyOrNull())
+        ).thenAnswer {
+            throw DomainException(DomainErrorCode.IO_TIMEOUT)
+        }
+
+        repeat(3) {
+            val bitmap = viewModel.renderPage(0, 600, RenderWorkQueue.Priority.VISIBLE_PAGE)
+            assertEquals(null, bitmap)
+        }
+
+        val status = viewModel.uiState.value.documentStatus
+        assertTrue(status is DocumentStatus.Error)
+        val expectedMessage = ApplicationProvider.getApplicationContext<Application>()
+            .getString(R.string.error_render_session_disabled)
+        assertEquals(expectedMessage, (status as DocumentStatus.Error).message)
+
+        val prefetchField = PdfViewerViewModel::class.java.getDeclaredField("prefetchEnabled").apply {
+            isAccessible = true
+        }
+        assertFalse(prefetchField.getBoolean(viewModel))
+
+        val safetyField = PdfViewerViewModel::class.java.getDeclaredField("renderSafetyLockActive").apply {
+            isAccessible = true
+        }
+        assertTrue(safetyField.getBoolean(viewModel))
     }
 
     private class RecordingCache<K : Any> : ViewerBitmapCache<K> {
