@@ -12,7 +12,21 @@ internal object HarnessExceptionLogging {
 
     fun log(component: String, operation: String, error: Throwable) {
         val payload = buildPayload(component, operation, error)
-        NovaLog.e(tag = TAG, message = payload, throwable = error)
+        val failureContext = HarnessFailureContext(
+            testName = component,
+            userAction = operation,
+        )
+        val fields = mutableListOf<LogField>()
+        fields += field("component", component)
+        fields += field("operation", operation)
+        fields.addAll(
+            HarnessFailureMetadata.buildFields(
+                reason = error.message,
+                context = failureContext,
+                error = error,
+            )
+        )
+        NovaLog.e(tag = TAG, message = payload, throwable = error, fields = fields.toTypedArray())
         Log.e(TAG, payload, error)
         println("$TAG: $payload\n${Log.getStackTraceString(error)}")
     }

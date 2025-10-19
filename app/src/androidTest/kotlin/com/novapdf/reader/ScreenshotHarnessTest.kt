@@ -2083,9 +2083,40 @@ class ScreenshotHarnessTest {
     }
 
     private fun logHarnessError(message: String, error: Throwable, vararg fields: LogField) {
-        val enriched = harnessFields(*fields)
+        val failureContext = HarnessFailureContext(
+            testName = currentTestDescription,
+            documentId = resolveFailureDocumentId(),
+            pageIndex = lastLoggedUiState?.currentPage,
+            pageCount = lastLoggedUiState?.pageCount,
+            userAction = lastProgressStep?.label,
+        )
+        val failureFields = HarnessFailureMetadata.buildFields(
+            reason = message,
+            context = failureContext,
+            error = error,
+            includeDeviceStats = false,
+        )
+        val combinedFields = mutableListOf<LogField>()
+        combinedFields.addAll(failureFields.toList())
+        combinedFields.addAll(fields.asList())
+        val enriched = harnessFields(*combinedFields.toTypedArray())
         NovaLog.e(tag = TAG, message = message, throwable = error, fields = enriched)
         printHarnessConsole(message, enriched, error)
+    }
+
+    private fun resolveFailureDocumentId(): String? {
+        val stateDocumentId = lastLoggedUiState?.documentId
+        val fallbackDocumentId = if (::documentUri.isInitialized) {
+            documentUri.toString()
+        } else {
+            null
+        }
+        val rawDocumentId = stateDocumentId ?: fallbackDocumentId ?: return null
+        return sanitizeCacheFileName(
+            raw = rawDocumentId,
+            fallback = rawDocumentId,
+            label = "failure_document",
+        ).ifEmpty { rawDocumentId }
     }
 
     class HarnessTestWatcher(

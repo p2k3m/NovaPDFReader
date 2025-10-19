@@ -3,7 +3,9 @@ package com.novapdf.reader
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import java.util.Locale
@@ -57,7 +59,19 @@ class HarnessHealthcheckTest {
     }
 
     private fun logHarnessError(message: String, error: Throwable) {
-        NovaLog.e(tag = TAG, message = message, throwable = error)
+        val failureFields = mutableListOf<LogField>()
+        failureFields += field("component", TAG)
+        failureFields.addAll(
+            HarnessFailureMetadata.buildFields(
+                reason = message,
+                context = HarnessFailureContext(
+                    testName = TAG,
+                    userAction = message,
+                ),
+                error = error,
+            )
+        )
+        NovaLog.e(tag = TAG, message = message, throwable = error, fields = failureFields.toTypedArray())
         println("$TAG: $message\n${Log.getStackTraceString(error)}")
     }
 
