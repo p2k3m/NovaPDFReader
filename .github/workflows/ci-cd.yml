@@ -2871,66 +2871,7 @@ jobs:
             fi
 
             local resolved
-            resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$runner_name" <<'PY') || return 1
-import re
-import sys
-
-package_name = sys.argv[1]
-runner_name = sys.argv[2]
-lines = sys.stdin.read().splitlines()
-
-default_component = ""
-if package_name:
-    default_component = f"{package_name}.test/{runner_name}"
-
-candidates = []
-for line in lines:
-    stripped = line.strip()
-    if not stripped.startswith("instrumentation:"):
-        continue
-    component = stripped[len("instrumentation:"):].split(" ", 1)[0].strip()
-    target = ""
-    if "(target=" in stripped:
-        start = stripped.find("(target=") + len("(target=")
-        end = stripped.find(")", start)
-        if end == -1:
-            end = len(stripped)
-        target = stripped[start:end]
-    candidates.append((component, target))
-
-if default_component:
-    for component, _target in candidates:
-        if component == default_component:
-            print(component)
-            sys.exit(0)
-
-for component, target in candidates:
-    if package_name and target == package_name and component.endswith(f"/{runner_name}"):
-        print(component)
-        sys.exit(0)
-
-if package_name:
-    sanitized = re.sub(r"\*+", "", package_name)
-    if sanitized and sanitized != package_name:
-        sanitized_default = f"{sanitized}.test/{runner_name}"
-        for component, _target in candidates:
-            if component == sanitized_default:
-                print(component)
-                sys.exit(0)
-        for component, target in candidates:
-            if target == sanitized and component.endswith(f"/{runner_name}"):
-                print(component)
-                sys.exit(0)
-
-for component, _target in candidates:
-    if component.endswith(f"/{runner_name}"):
-        print(component)
-        sys.exit(0)
-
-if candidates:
-    print(candidates[0][0])
-PY
-            )
+            resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$runner_name" -c $'import re\nimport sys\n\npackage_name = sys.argv[1]\nrunner_name = sys.argv[2]\nlines = sys.stdin.read().splitlines()\n\ndefault_component = ""\nif package_name:\n    default_component = f"{package_name}.test/{runner_name}"\n\ncandidates = []\nfor line in lines:\n    stripped = line.strip()\n    if not stripped.startswith("instrumentation:"):\n        continue\n    component = stripped[len("instrumentation:"):].split(" ", 1)[0].strip()\n    target = ""\n    if "(target=" in stripped:\n        start = stripped.find("(target=") + len("(target=")\n        end = stripped.find(")", start)\n        if end == -1:\n            end = len(stripped)\n        target = stripped[start:end]\n    candidates.append((component, target))\n\nif default_component:\n    for component, _target in candidates:\n        if component == default_component:\n            print(component)\n            sys.exit(0)\n\nfor component, target in candidates:\n    if package_name and target == package_name and component.endswith(f"/{runner_name}"):\n        print(component)\n        sys.exit(0)\n\nif package_name:\n    sanitized = re.sub(r"\\*+", "", package_name)\n    if sanitized and sanitized != package_name:\n        sanitized_default = f"{sanitized}.test/{runner_name}"\n        for component, _target in candidates:\n            if component == sanitized_default:\n                print(component)\n                sys.exit(0)\n        for component, target in candidates:\n            if target == sanitized and component.endswith(f"/{runner_name}"):\n                print(component)\n                sys.exit(0)\n\nfor component, _target in candidates:\n    if component.endswith(f"/{runner_name}"):\n        print(component)\n        sys.exit(0)\n\nif candidates:\n    print(candidates[0][0])\n') || return 1
 
             resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
             if [ -n "$resolved" ]; then
