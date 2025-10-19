@@ -9,6 +9,7 @@ import com.novapdf.reader.data.PdfDocumentSession
 import android.net.Uri
 import com.novapdf.reader.data.remote.DocumentSourceGateway
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
 import com.novapdf.reader.domain.usecase.DefaultAdaptiveFlowUseCase
 import com.novapdf.reader.domain.usecase.DefaultAnnotationUseCase
 import com.novapdf.reader.domain.usecase.DefaultBookmarkUseCase
@@ -33,6 +34,7 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -102,9 +104,11 @@ class PdfViewerViewModelRenderProgressTest {
         val buildIndexUseCase = DefaultBuildSearchIndexUseCase(searchCoordinator)
 
         val documentSourceGateway = object : DocumentSourceGateway {
-            override suspend fun fetch(source: DocumentSource): Result<Uri> {
-                return Result.failure(RemotePdfException(RemotePdfException.Reason.NETWORK))
-            }
+            override fun fetch(source: DocumentSource) = flowOf<RemoteDocumentFetchEvent>(
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(RemotePdfException.Reason.NETWORK)
+                )
+            )
         }
 
         val preferencesUseCase = TestUserPreferencesUseCase()

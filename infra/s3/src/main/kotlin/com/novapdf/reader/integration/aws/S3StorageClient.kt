@@ -1,6 +1,7 @@
 package com.novapdf.reader.integration.aws
 
 import android.net.Uri
+import com.novapdf.reader.data.remote.ContentLengthAwareInputStream
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.data.remote.UnsupportedStorageUriException
 import javax.inject.Inject
@@ -44,7 +45,10 @@ class S3StorageClient @Inject constructor(
                 throw IOException("S3 response missing body for $uri")
             }
             val stream = body.byteStream()
-            object : FilterInputStream(stream) {
+            val reportedLength = body.contentLength().takeIf { it >= 0L }
+            object : FilterInputStream(stream), ContentLengthAwareInputStream {
+                override val contentLength: Long? = reportedLength
+
                 override fun close() {
                     try {
                         super.close()

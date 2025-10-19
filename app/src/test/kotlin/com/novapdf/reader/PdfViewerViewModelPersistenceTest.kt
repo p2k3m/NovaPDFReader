@@ -21,6 +21,8 @@ import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
+import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.model.BitmapMemoryLevel
@@ -34,6 +36,7 @@ import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -141,7 +144,11 @@ class PdfViewerViewModelPersistenceTest {
         }
 
         val documentSourceGateway = object : com.novapdf.reader.data.remote.DocumentSourceGateway {
-            override suspend fun fetch(source: DocumentSource) = Result.failure<Uri>(IllegalStateException("unsupported"))
+            override fun fetch(source: DocumentSource) = flowOf<RemoteDocumentFetchEvent>(
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(RemotePdfException.Reason.NETWORK, IllegalStateException("unsupported"))
+                )
+            )
         }
 
         val preferencesUseCase = TestUserPreferencesUseCase()
