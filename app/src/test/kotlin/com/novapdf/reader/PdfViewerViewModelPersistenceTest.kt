@@ -18,6 +18,7 @@ import com.novapdf.reader.domain.usecase.DefaultDocumentSearchUseCase
 import com.novapdf.reader.domain.usecase.DefaultOpenDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultPdfViewerUseCases
+import com.novapdf.reader.createTestModuleContractsRegistry
 import com.novapdf.reader.domain.usecase.DefaultRemoteDocumentUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderPageUseCase
 import com.novapdf.reader.domain.usecase.DefaultRenderTileUseCase
@@ -167,6 +168,7 @@ class PdfViewerViewModelPersistenceTest {
             crashReporting = com.novapdf.reader.domain.usecase.DefaultCrashReportingUseCase(crashReporter),
             adaptiveFlow = DefaultAdaptiveFlowUseCase(adaptiveFlowManager),
             preferences = preferencesUseCase,
+            contractRegistry = createTestModuleContractsRegistry(),
         )
 
         val dispatchers = TestCoroutineDispatchers(dispatcher, dispatcher, mainDispatcher)
