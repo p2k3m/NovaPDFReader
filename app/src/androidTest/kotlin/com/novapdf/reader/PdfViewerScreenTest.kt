@@ -12,6 +12,7 @@ import com.novapdf.reader.ui.theme.NovaPdfTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.emptyFlow
 
 @RunWith(AndroidJUnit4::class)
@@ -56,6 +57,7 @@ class PdfViewerScreenTest {
                     onToggleDevDiagnostics = {},
                     onToggleDevCaches = {},
                     onToggleDevArtificialDelay = {},
+                    renderDispatcher = Dispatchers.Unconfined,
                     dynamicColorSupported = true
                 )
             }
