@@ -45,6 +45,7 @@ import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.ProcessMetricsLogger
 import com.novapdf.reader.logging.field
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.presentation.viewer.BuildConfig
@@ -111,8 +112,49 @@ interface ViewerBitmapCache<K : Any> {
 class FractionalBitmapLruCache<K : Any>(
     maxSizeBytes: Int,
     private val sizeCalculator: (Bitmap) -> Int,
-) : androidx.collection.LruCache<K, Bitmap>(maxSizeBytes), ViewerBitmapCache<K> {
-    override fun sizeOf(key: K, value: Bitmap): Int = sizeCalculator(value)
+    metricsName: String = "FractionalBitmapLruCache",
+) : ViewerBitmapCache<K> {
+    private val cacheName = "$metricsName@${Integer.toHexString(System.identityHashCode(this))}"
+    private val staleRemovalKeys = mutableSetOf<K>()
+    private val delegate = object : androidx.collection.LruCache<K, Bitmap>(maxSizeBytes) {
+        override fun sizeOf(key: K, value: Bitmap): Int = sizeCalculator(value)
+
+        override fun entryRemoved(evicted: Boolean, key: K, oldValue: Bitmap, newValue: Bitmap?) {
+            val reason = when {
+                staleRemovalKeys.remove(key) -> ProcessMetricsLogger.EvictionReason.STALE
+                evicted -> ProcessMetricsLogger.EvictionReason.SIZE
+                newValue == null -> ProcessMetricsLogger.EvictionReason.MANUAL
+                else -> ProcessMetricsLogger.EvictionReason.REPLACED
+            }
+            ProcessMetricsLogger.logCacheEviction(
+                cacheName,
+                key,
+                runCatching { sizeCalculator(oldValue) }.getOrNull(),
+                reason
+            )
+        }
+    }
+
+    override fun get(key: K): Bitmap? {
+        val candidate = delegate.get(key)
+        val resolved = candidate?.takeIf { !it.isRecycled }
+        if (candidate != null && resolved == null) {
+            staleRemovalKeys += key
+            delegate.remove(key)
+        }
+        if (resolved != null) {
+            ProcessMetricsLogger.logCacheHit(cacheName, key, runCatching { sizeCalculator(resolved) }.getOrNull())
+        } else {
+            ProcessMetricsLogger.logCacheMiss(cacheName, key)
+        }
+        return resolved
+    }
+
+    override fun put(key: K, value: Bitmap): Bitmap? = delegate.put(key, value)
+
+    override fun remove(key: K): Bitmap? = delegate.remove(key)
+
+    override fun evictAll() = delegate.evictAll()
 
     override fun trimToFraction(fraction: Float) {
         val clamped = fraction.coerceIn(0f, 1f)
@@ -120,25 +162,42 @@ class FractionalBitmapLruCache<K : Any>(
             clamped <= 0f -> evictAll()
             clamped >= 1f -> Unit
             else -> {
-                val currentSize = size()
+                val currentSize = delegate.size()
                 if (currentSize > 0) {
                     val target = (currentSize.toFloat() * clamped).toInt().coerceAtLeast(0)
-                    trimToSize(target)
+                    delegate.trimToSize(target)
                 }
             }
         }
     }
+
+    override fun size(): Int = delegate.size()
+
+    override fun maxSize(): Int = delegate.maxSize()
+
+    override fun hitCount(): Int = delegate.hitCount()
+
+    override fun missCount(): Int = delegate.missCount()
+
+    override fun putCount(): Int = delegate.putCount()
+
+    override fun evictionCount(): Int = delegate.evictionCount()
+
+    fun snapshot(): Map<K, Bitmap> = delegate.snapshot()
 }
 
 class NonCachingBitmapCache<K : Any>(
     @Suppress("UNUSED_PARAMETER")
     private val sizeCalculator: (Bitmap) -> Int,
+    metricsName: String = "NonCachingBitmapCache",
 ) : ViewerBitmapCache<K> {
+    private val cacheName = "$metricsName@${Integer.toHexString(System.identityHashCode(this))}"
     private var missCount = 0
     private var putCount = 0
 
     override fun get(key: K): Bitmap? {
         missCount++
+        ProcessMetricsLogger.logCacheMiss(cacheName, key)
         return null
     }
 
@@ -1951,12 +2010,12 @@ open class PdfViewerViewModel @Inject constructor(
     companion object {
         fun defaultPageBitmapCacheFactory(): ViewerBitmapCacheFactory<PageCacheKey> =
             ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
-                FractionalBitmapLruCache(maxBytes, sizeCalculator)
+                FractionalBitmapLruCache(maxBytes, sizeCalculator, metricsName = "viewer_page_cache")
             }
 
         fun defaultTileBitmapCacheFactory(): ViewerBitmapCacheFactory<TileCacheKey> =
             ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
-                FractionalBitmapLruCache(maxBytes, sizeCalculator)
+                FractionalBitmapLruCache(maxBytes, sizeCalculator, metricsName = "viewer_tile_cache")
             }
     }
 

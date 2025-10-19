@@ -16,9 +16,10 @@ class FractionalBitmapLruCacheTest {
 
     @Test
     fun trimToFractionEvictsExpectedProportion() {
-        val cache = FractionalBitmapLruCache<String>(maxSizeBytes = 4 * 4096) { bitmap ->
-            bitmap.byteCount
-        }
+        val cache = FractionalBitmapLruCache<String>(
+            maxSizeBytes = 4 * 4096,
+            sizeCalculator = { bitmap -> bitmap.byteCount }
+        )
         val entries = (0 until 4).map { index ->
             val key = "page-$index"
             val bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
@@ -45,9 +46,10 @@ class FractionalBitmapLruCacheTest {
 
     @Test
     fun evictsLeastRecentlyUsedDuringRapidInsertions() {
-        val cache = FractionalBitmapLruCache<String>(maxSizeBytes = 2 * 4096) { bitmap ->
-            bitmap.byteCount
-        }
+        val cache = FractionalBitmapLruCache<String>(
+            maxSizeBytes = 2 * 4096,
+            sizeCalculator = { bitmap -> bitmap.byteCount }
+        )
         val first = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
         val second = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
         val third = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)

@@ -27,26 +27,27 @@ object ViewerCacheModule {
     fun providePageBitmapCacheFactory(
         policyConfig: ViewerCachePolicyConfig,
     ): ViewerBitmapCacheFactory<PageCacheKey> =
-        createFactory(policyConfig.pageBitmap)
+        createFactory(policyConfig.pageBitmap, metricsName = "viewer_page_cache")
 
     @Provides
     fun provideTileBitmapCacheFactory(
         policyConfig: ViewerCachePolicyConfig,
     ): ViewerBitmapCacheFactory<TileCacheKey> =
-        createFactory(policyConfig.tileBitmap)
+        createFactory(policyConfig.tileBitmap, metricsName = "viewer_tile_cache")
 
     private fun <K : Any> createFactory(
         policy: ViewerCachePolicyConfig.BitmapCachePolicy,
+        metricsName: String,
     ): ViewerBitmapCacheFactory<K> {
         return when (policy.eviction) {
             ViewerCachePolicyConfig.EvictionPolicy.LRU ->
                 ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
-                    FractionalBitmapLruCache(maxBytes, sizeCalculator)
+                    FractionalBitmapLruCache(maxBytes, sizeCalculator, metricsName)
                 }
 
             ViewerCachePolicyConfig.EvictionPolicy.DISABLED ->
                 ViewerBitmapCacheFactory { _, sizeCalculator ->
-                    NonCachingBitmapCache(sizeCalculator)
+                    NonCachingBitmapCache(sizeCalculator, metricsName)
                 }
         }
     }
