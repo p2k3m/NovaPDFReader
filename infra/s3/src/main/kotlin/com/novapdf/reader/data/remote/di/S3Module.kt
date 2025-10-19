@@ -13,6 +13,7 @@ import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoSet
 import javax.inject.Singleton
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -20,7 +21,12 @@ object S3Module {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(): OkHttpClient = OkHttpClient()
+    fun provideOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .callTimeout(DOWNLOAD_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .connectTimeout(DOWNLOAD_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(DOWNLOAD_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
 
     @Provides
     @Singleton
@@ -37,3 +43,5 @@ object S3Module {
         cacheDirectories: CacheDirectories,
     ): PdfDownloadManager = PdfDownloadManager(context, storageClient, cacheDirectories)
 }
+
+private const val DOWNLOAD_CALL_TIMEOUT_SECONDS = 10L

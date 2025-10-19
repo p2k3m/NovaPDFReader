@@ -4,10 +4,12 @@ import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.model.RemoteDocumentFetchEvent
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeout
 import kotlin.random.Random
 import javax.inject.Inject
 
@@ -40,25 +42,40 @@ class S3RemotePdfDownloader @Inject constructor(
                 var attemptFailure: RemotePdfException? = null
                 var attemptSucceeded = false
 
-                downloadManager.download(url, allowLargeFile).collect { event ->
-                    when (event) {
-                        is RemoteDocumentFetchEvent.Progress -> emit(event)
-                        is RemoteDocumentFetchEvent.Success -> {
-                            emit(event)
-                            attemptSucceeded = true
-                            return@collect
-                        }
-                        is RemoteDocumentFetchEvent.Failure -> {
-                            val failure = event.error
-                            if (failure is CancellationException) throw failure
-                            attemptFailure = when (failure) {
-                                is RemotePdfException -> failure
-                                else -> RemotePdfException(
-                                    RemotePdfException.Reason.NETWORK,
-                                    failure,
-                                )
+                try {
+                    withTimeout(DOWNLOAD_ATTEMPT_TIMEOUT_MS) {
+                        downloadManager.download(url, allowLargeFile).collect { event ->
+                            when (event) {
+                                is RemoteDocumentFetchEvent.Progress -> emit(event)
+                                is RemoteDocumentFetchEvent.Success -> {
+                                    emit(event)
+                                    attemptSucceeded = true
+                                    return@collect
+                                }
+                                is RemoteDocumentFetchEvent.Failure -> {
+                                    val failure = event.error
+                                    if (failure is CancellationException) throw failure
+                                    attemptFailure = when (failure) {
+                                        is RemotePdfException -> failure
+                                        else -> RemotePdfException(
+                                            RemotePdfException.Reason.NETWORK,
+                                            failure,
+                                        )
+                                    }
+                                }
                             }
                         }
+                    }
+                } catch (error: Throwable) {
+                    when (error) {
+                        is TimeoutCancellationException -> {
+                            attemptFailure = RemotePdfException(
+                                RemotePdfException.Reason.NETWORK,
+                                error,
+                            )
+                        }
+                        is CancellationException -> throw error
+                        else -> throw error
                     }
                 }
 
@@ -112,7 +129,8 @@ class S3RemotePdfDownloader @Inject constructor(
         return exponential + jitter
     }
 
-    private companion object {
+    companion object {
+        internal const val DOWNLOAD_ATTEMPT_TIMEOUT_MS = 10_000L
         private const val MAX_ATTEMPTS = 4
         private const val INITIAL_RETRY_DELAY_MS = 500L
     }
