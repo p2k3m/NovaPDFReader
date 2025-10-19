@@ -30,6 +30,7 @@ android {
 
 dependencies {
     api(project(":infra:storage"))
+    implementation(project(":core:cache"))
     implementation(project(":domain:model"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.hilt.android)

@@ -4,6 +4,9 @@ import com.novapdf.reader.data.remote.DelegatingStorageClient
 import com.novapdf.reader.data.remote.FileStorageClient
 import com.novapdf.reader.data.remote.HttpStorageClient
 import com.novapdf.reader.data.remote.StorageClient
+import com.novapdf.reader.data.remote.StorageClientEngine
+import com.novapdf.reader.data.remote.StorageEngine
+import com.novapdf.reader.data.remote.DelegatingStorageEngine
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -31,4 +34,13 @@ object StorageModule {
     fun provideDelegatingStorageClient(
         clients: Set<@JvmSuppressWildcards StorageClient>,
     ): StorageClient = DelegatingStorageClient(clients.toList())
+
+    @Provides
+    @Singleton
+    fun provideStorageEngine(
+        clients: Set<@JvmSuppressWildcards StorageClient>,
+    ): StorageEngine {
+        val engines = clients.map { StorageClientEngine(it) }
+        return DelegatingStorageEngine(engines)
+    }
 }

@@ -25,8 +25,9 @@ import androidx.annotation.VisibleForTesting
 import androidx.annotation.WorkerThread
 import androidx.core.net.toUri
 import com.novapdf.reader.cache.CacheDirectories
+import com.novapdf.reader.cache.FallbackController
 import com.novapdf.reader.logging.LogContext
-import com.novapdf.reader.data.remote.StorageClient
+import com.novapdf.reader.data.remote.StorageEngine
 import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.ProcessMetricsLogger
@@ -200,7 +201,7 @@ class PdfDocumentRepository(
     private val context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val crashReporter: CrashReporter? = null,
-    private val storageClient: StorageClient? = null,
+    private val storageEngine: StorageEngine? = null,
     private val cacheDirectories: CacheDirectories,
     private val bitmapCacheFactory: BitmapCacheFactory = defaultBitmapCacheFactory(),
     private val bitmapPoolFactory: BitmapPoolFactory = defaultBitmapPoolFactory(),
@@ -338,6 +339,7 @@ class PdfDocumentRepository(
 
     private fun bitmapPoolSnapshot(): BitmapPoolState =
         bitmapPoolOrNull()?.snapshotState() ?: BitmapPoolState(bitmapCount = 0, totalBytes = 0L)
+    private val persistentCacheFallback = AtomicBoolean(false)
     private val _cacheFallbackActive = MutableStateFlow(false)
     val cacheFallbackActive: StateFlow<Boolean> = _cacheFallbackActive.asStateFlow()
 
@@ -1514,8 +1516,8 @@ class PdfDocumentRepository(
             if (scheme == ContentResolver.SCHEME_FILE || scheme == ContentResolver.SCHEME_CONTENT) {
                 return@traceOperation null
             }
-            val client = storageClient ?: return@traceOperation null
-            if (!client.handles(uri)) {
+            val engine = storageEngine ?: return@traceOperation null
+            if (!engine.canOpen(uri)) {
                 return@traceOperation null
             }
             if (!remoteDocumentDir.isDirectory) {
@@ -1565,11 +1567,11 @@ class PdfDocumentRepository(
     }
 
     private suspend fun openRemoteInputStream(uri: Uri): InputStream {
-        val client = storageClient ?: throw IOException("No storage client configured for remote URIs")
-        if (!client.handles(uri)) {
+        val engine = storageEngine ?: throw IOException("No storage engine configured for remote URIs")
+        if (!engine.canOpen(uri)) {
             throw IOException("Unsupported remote URI scheme: ${uri.scheme}")
         }
-        return client.openInputStream(uri)
+        return engine.open(uri)
     }
 
     private suspend fun detectOversizedPageTree(
@@ -2176,6 +2178,7 @@ class PdfDocumentRepository(
 
     private fun reportCacheInitializationFailure(stage: String, throwable: Throwable) {
         val alreadyActive = _cacheFallbackActive.value
+        persistentCacheFallback.set(true)
         _cacheFallbackActive.value = true
         val metadata = mapOf(
             "stage" to stage,
@@ -3067,9 +3070,11 @@ class PdfDocumentRepository(
         private val mutex = Mutex()
         private val staleRemovalKeys = mutableSetOf<PageBitmapKey>()
         private val diskCache = DiskBitmapStore(diskDirectory, diskMaxBytes, ::recordBitmapAllocation)
-        private val fallbackReasons = mutableSetOf<String>()
-        private val fallbackLock = Any()
-        private val fallbackActive = AtomicBoolean(false)
+        private val fallbackController = FallbackController(
+            onActivated = { reason -> onFallbackEnabled(reason) },
+            onDeactivated = { onFallbackDisabled() },
+            onReasonWhileActive = { diskCache.prepare() },
+        )
         private val delegate = object : LruCache<PageBitmapKey, Bitmap>(cacheSize) {
             override fun sizeOf(key: PageBitmapKey, value: Bitmap): Int = safeByteCount(value)
 
@@ -3097,7 +3102,7 @@ class PdfDocumentRepository(
             if (cached != null) {
                 return cached
             }
-            if (!fallbackActive.get()) {
+            if (!fallbackController.isActive) {
                 return null
             }
             val disk = diskCache.get(key) ?: return null
@@ -3115,7 +3120,7 @@ class PdfDocumentRepository(
             if (previous != null && previous !== bitmap) {
                 recycleBitmap(previous)
             }
-            if (fallbackActive.get()) {
+            if (fallbackController.isActive) {
                 diskCache.put(key, bitmap)
             } else {
                 diskCache.remove(key)
@@ -3185,47 +3190,15 @@ class PdfDocumentRepository(
         }
 
         private fun activateFallback(reason: String) {
-            updateFallbackState(reason, add = true)
+            fallbackController.activate(reason)
         }
 
         private fun clearFallback() {
-            val shouldDisable: Boolean
-            synchronized(fallbackLock) {
-                shouldDisable = fallbackReasons.isNotEmpty()
-                fallbackReasons.clear()
-                fallbackActive.set(false)
-            }
-            if (shouldDisable) {
-                onFallbackDisabled()
-            }
-        }
-
-        private fun updateFallbackState(reason: String, add: Boolean) {
-            if (reason.isEmpty()) return
-            val changed: Boolean
-            synchronized(fallbackLock) {
-                val wasActive = fallbackReasons.isNotEmpty()
-                if (add) {
-                    fallbackReasons += reason
-                } else {
-                    fallbackReasons -= reason
-                }
-                val isActive = fallbackReasons.isNotEmpty()
-                changed = wasActive != isActive
-                fallbackActive.set(isActive)
-            }
-            if (changed) {
-                if (fallbackActive.get()) {
-                    onFallbackEnabled(reason)
-                } else {
-                    onFallbackDisabled()
-                }
-            } else if (add && fallbackActive.get()) {
-                diskCache.prepare()
-            }
+            fallbackController.clear()
         }
 
         private fun onFallbackEnabled(reason: String) {
+            _cacheFallbackActive.value = true
             diskCache.prepare()
             val snapshot = mutex.withLockBlocking(this) {
                 delegate.snapshot().filterValues { !it.isRecycled }
@@ -3255,6 +3228,7 @@ class PdfDocumentRepository(
             mutex.withLockBlocking(this) {
                 delegate.resize(cacheSize)
             }
+            _cacheFallbackActive.value = persistentCacheFallback.get()
             NovaLog.i(
                 TAG,
                 "Bitmap cache fallback disabled",
