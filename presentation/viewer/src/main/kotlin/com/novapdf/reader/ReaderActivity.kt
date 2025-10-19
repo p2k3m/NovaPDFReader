@@ -36,7 +36,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.io.Closeable
 import javax.inject.Inject
 
@@ -81,34 +80,11 @@ open class ReaderActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreenIfAvailable()
         super.onCreate(savedInstanceState)
-        val fallbackMode = runBlocking {
-            useCases.preferences.preferences.first().fallbackMode
-        }
-        useComposeUi = resources.getBoolean(R.bool.config_use_compose) &&
-            fallbackMode != FallbackMode.LEGACY_SIMPLE_RENDERER
-        if (useComposeUi) {
-            setContent {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-                NovaPdfTheme(
-                    useDarkTheme = uiState.isNightMode,
-                    dynamicColor = uiState.dynamicColorEnabled,
-                    highContrast = uiState.highContrastEnabled,
-                    seedColor = Color(uiState.themeSeedColor)
-                ) {
-                    PdfViewerRoute(
-                        viewModel = viewModel,
-                        snackbarHost = snackbarHost,
-                        onOpenLocalDocument = { openDocumentLauncher.launch("application/pdf") },
-                        onOpenCloudDocument = { launchCloudDocumentPicker() },
-                        onOpenLastDocument = { viewModel.openLastDocument() },
-                        onOpenRemoteDocument = { source -> openRemoteDocument(source) },
-                        onDismissError = { viewModel.dismissError() }
-                    )
-                }
-            }
-        } else {
-            setContentView(R.layout.activity_main)
-            setupLegacyUi()
+        lifecycleScope.launch {
+            val fallbackMode = runCatching {
+                useCases.preferences.preferences.first().fallbackMode
+            }.getOrDefault(FallbackMode.NONE)
+            initializeUi(fallbackMode)
         }
     }
 
@@ -149,6 +125,39 @@ open class ReaderActivity : ComponentActivity() {
         } else {
             val root = legacyRoot ?: return
             Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
+        }
+    }
+
+    private fun initializeUi(fallbackMode: FallbackMode) {
+        useComposeUi = resources.getBoolean(R.bool.config_use_compose) &&
+            fallbackMode != FallbackMode.LEGACY_SIMPLE_RENDERER
+        if (useComposeUi) {
+            setupComposeUi()
+        } else {
+            setContentView(R.layout.activity_main)
+            setupLegacyUi()
+        }
+    }
+
+    private fun setupComposeUi() {
+        setContent {
+            val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+            NovaPdfTheme(
+                useDarkTheme = uiState.isNightMode,
+                dynamicColor = uiState.dynamicColorEnabled,
+                highContrast = uiState.highContrastEnabled,
+                seedColor = Color(uiState.themeSeedColor)
+            ) {
+                PdfViewerRoute(
+                    viewModel = viewModel,
+                    snackbarHost = snackbarHost,
+                    onOpenLocalDocument = { openDocumentLauncher.launch("application/pdf") },
+                    onOpenCloudDocument = { launchCloudDocumentPicker() },
+                    onOpenLastDocument = { viewModel.openLastDocument() },
+                    onOpenRemoteDocument = { source -> openRemoteDocument(source) },
+                    onDismissError = { viewModel.dismissError() }
+                )
+            }
         }
     }
 
