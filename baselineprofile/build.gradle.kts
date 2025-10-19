@@ -207,6 +207,7 @@ val skipConnectedTestsOnCi = isCiBuild && allowCiConnectedTests != true && requi
 
 dependencies {
     implementation(project(":app"))
+    implementation(project(":presentation:viewer"))
     implementation(project(":infra:logging"))
     implementation(project(":test-harness"))
     implementation(project(":domain:model"))

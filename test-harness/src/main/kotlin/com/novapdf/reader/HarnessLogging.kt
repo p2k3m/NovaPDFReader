@@ -27,7 +27,7 @@ internal object HarnessLogging {
     }
 }
 
-private object HarnessPhaseMetricsLogging {
+internal object HarnessPhaseMetricsLogging {
     private const val TAG = "HarnessEntryPoint"
 
     fun log(
@@ -72,7 +72,7 @@ private object HarnessPhaseMetricsLogging {
     }
 }
 
-private object HarnessPhaseLifecycleLogging {
+internal object HarnessPhaseLifecycleLogging {
     private const val TAG = "HarnessPhase"
     private const val PREFIX = "HARNESS PHASE: "
 
@@ -213,7 +213,6 @@ private object HarnessPhaseLifecycleLogging {
     }
 }
 
-@PublishedApi
 internal class HarnessPhaseMetricsSession(
     private val component: String,
     private val operation: String,
@@ -257,7 +256,6 @@ internal class HarnessPhaseMetricsSession(
     }.getOrNull()
 }
 
-@PublishedApi
 internal class HarnessPhaseScope internal constructor(
     private val component: String,
     private val operation: String,
@@ -309,7 +307,7 @@ internal class HarnessPhaseScope internal constructor(
 internal inline fun <T> runHarnessOperation(
     component: String,
     operation: String,
-    block: () -> T,
+    crossinline block: () -> T,
 ): T {
     return runHarnessOperationWithScope(
         component = component,
@@ -337,7 +335,6 @@ internal inline fun <T> runHarnessOperationWithRetries(
     )
 }
 
-@PublishedApi
 internal inline fun <T> runHarnessOperationWithScope(
     component: String,
     operation: String,

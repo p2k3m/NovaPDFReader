@@ -1,6 +1,7 @@
 package com.novapdf.reader.baselineprofile
 
 import androidx.benchmark.macro.CompilationMode
+import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.MemoryUsageMetric
 import androidx.benchmark.macro.StartupMode
@@ -17,6 +18,7 @@ import org.junit.runner.RunWith
 private const val STRESS_TAG = "ReaderStressBenchmark"
 private const val LOAD_BUDGET_MS = 6_000L
 
+@OptIn(ExperimentalMetricApi::class)
 @LargeTest
 @RunWith(AndroidJUnit4::class)
 class ReaderStressMacrobenchmark {
@@ -29,7 +31,10 @@ class ReaderStressMacrobenchmark {
     fun repeatedOpenCloseCycles() {
         benchmarkRule.measureRepeated(
             packageName = TARGET_PACKAGE,
-            metrics = listOf(FrameTimingMetric(), MemoryUsageMetric()),
+            metrics = listOf(
+                FrameTimingMetric(),
+                MemoryUsageMetric(mode = MemoryUsageMetric.Mode.Max)
+            ),
             iterations = 3,
             startupMode = StartupMode.COLD,
             compilationMode = CompilationMode.Partial()
