@@ -70,7 +70,8 @@ private object HarnessPhaseMetricsLogging {
     }
 }
 
-private class HarnessPhaseMetricsSession(
+@PublishedApi
+internal class HarnessPhaseMetricsSession(
     private val component: String,
     private val operation: String,
 ) {
