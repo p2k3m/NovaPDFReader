@@ -122,8 +122,9 @@ class ScreenshotHarnessTest {
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
 
-            device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             appContext = ApplicationProvider.getApplicationContext()
+            performSlowSystemPreflight()
+            device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             handshakePackageName = resolveTestPackageName()
             logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
             screenshotCompletionTimeoutMs = resolveScreenshotCompletionTimeoutMillis(appContext)
@@ -159,6 +160,163 @@ class ScreenshotHarnessTest {
             throw error
         }
     }
+
+    private fun performSlowSystemPreflight() {
+        val sample = capturePreflightCpuSample()
+        if (sample == null) {
+            logHarnessInfo("Preflight CPU sample unavailable; continuing with screenshot harness setup")
+            return
+        }
+
+        val totalText = String.format(Locale.US, "%.1f%%", sample.totalPercent)
+        val processText = sample.processPercent?.let { percent ->
+            String.format(Locale.US, "%.1f%%", percent)
+        } ?: "n/a"
+        val otherText = sample.otherPercent?.let { percent ->
+            String.format(Locale.US, "%.1f%%", percent)
+        } ?: "n/a"
+
+        logHarnessInfo(
+            "Preflight CPU sample: total=$totalText, process=$processText, other=$otherText",
+        )
+
+        val otherPercent = sample.otherPercent
+        if (sample.totalPercent >= PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT &&
+            otherPercent != null &&
+            otherPercent >= PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT
+        ) {
+            val detail = String.format(
+                Locale.US,
+                "reason=preflight_system_cpu total=%s process=%s other=%.1f%% thresholds=%.0f/%.0f sampleIntervalMs=%d",
+                totalText,
+                processText,
+                otherPercent,
+                PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT.toDouble(),
+                PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT.toDouble(),
+                PREFLIGHT_CPU_SAMPLE_INTERVAL_MS,
+            )
+            logHarnessWarn("Skipping screenshot harness due to elevated system CPU load. $detail")
+            publishHarnessSkipFlag(
+                reason = "preflight_system_cpu",
+                detail = detail,
+                blacklistRunner = true,
+            )
+            assumeTrue("System CPU load too high for screenshot harness preflight", false)
+        }
+    }
+
+    private fun capturePreflightCpuSample(): CpuPreflightSample? {
+        val first = readPreflightSnapshot() ?: return null
+        SystemClock.sleep(PREFLIGHT_CPU_SAMPLE_INTERVAL_MS)
+        val second = readPreflightSnapshot() ?: return null
+
+        val totalDelta = second.total - first.total
+        val idleDelta = second.idle - first.idle
+        if (totalDelta <= 0 || idleDelta < 0) {
+            return null
+        }
+
+        val busy = totalDelta - idleDelta
+        if (busy <= 0) {
+            val processPercent = if (first.process != null) 0f else null
+            return CpuPreflightSample(
+                totalPercent = 0f,
+                processPercent = processPercent,
+                otherPercent = processPercent?.let { 0f },
+            )
+        }
+
+        val totalPercent = (busy.toDouble() / totalDelta.toDouble() * 100.0).toFloat()
+        val processPercent = if (first.process != null && second.process != null) {
+            val processDelta = second.process - first.process
+            if (processDelta <= 0) {
+                0f
+            } else {
+                val rawPercent = (processDelta.toDouble() / totalDelta.toDouble() * 100.0).toFloat()
+                rawPercent.coerceAtMost(totalPercent).coerceAtLeast(0f)
+            }
+        } else {
+            null
+        }
+        val otherPercent = processPercent?.let { percent ->
+            (totalPercent - percent).coerceAtLeast(0f)
+        }
+        return CpuPreflightSample(
+            totalPercent = totalPercent,
+            processPercent = processPercent,
+            otherPercent = otherPercent,
+        )
+    }
+
+    private fun readPreflightSnapshot(): CpuPreflightSnapshot? {
+        val times = readAggregateCpuTimes() ?: return null
+        val process = readProcessCpuJiffies()
+        return CpuPreflightSnapshot(
+            idle = times.idle,
+            total = times.total,
+            process = process,
+        )
+    }
+
+    private fun readAggregateCpuTimes(): AggregateCpuTimes? {
+        return runCatching {
+            File("/proc/stat").useLines { sequence ->
+                val line = sequence.firstOrNull() ?: return@useLines null
+                if (!line.startsWith("cpu")) {
+                    return@useLines null
+                }
+                val tokens = line.split(Regex("\\s+")).drop(1).filter { it.isNotBlank() }
+                if (tokens.size < 4) {
+                    return@useLines null
+                }
+                val values = tokens.mapNotNull { it.toLongOrNull() }
+                if (values.size < 4) {
+                    return@useLines null
+                }
+                val idle = values[3] + values.getOrElse(4) { 0L }
+                val total = values.fold(0L) { acc, value -> acc + max(value, 0L) }
+                AggregateCpuTimes(idle = idle, total = total)
+            }
+        }.getOrNull()
+    }
+
+    private fun readProcessCpuJiffies(): Long? {
+        return runCatching {
+            val statContents = File("/proc/self/stat").readText()
+            val closing = statContents.lastIndexOf(')')
+            if (closing < 0 || closing + 1 >= statContents.length) {
+                return@runCatching null
+            }
+            val remainder = statContents.substring(closing + 1).trim()
+            if (remainder.isEmpty()) {
+                return@runCatching null
+            }
+            val tokens = remainder.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (tokens.size < 13) {
+                return@runCatching null
+            }
+            val utime = tokens[11].toLongOrNull() ?: return@runCatching null
+            val stime = tokens[12].toLongOrNull() ?: return@runCatching null
+            utime + stime
+        }.getOrNull()
+    }
+
+    private data class CpuPreflightSample(
+        val totalPercent: Float,
+        val processPercent: Float?,
+        val otherPercent: Float?,
+    )
+
+    private data class CpuPreflightSnapshot(
+        val idle: Long,
+        val total: Long,
+        val process: Long?,
+    )
+
+    private data class AggregateCpuTimes(
+        val idle: Long,
+        val total: Long,
+    )
 
     private fun buildScreenshotReadyPayload(target: ScreenshotTarget?): String {
         return try {
@@ -694,6 +852,10 @@ class ScreenshotHarnessTest {
             if (deleteStatusArtifacts) {
                 deleteHandshakeFlag(
                     File(directory, CacheFileNames.SCREENSHOT_FAILED_FLAG),
+                    failOnError = false
+                )
+                deleteHandshakeFlag(
+                    File(directory, CacheFileNames.SCREENSHOT_SKIPPED_FLAG),
                     failOnError = false
                 )
                 deleteHandshakeFlag(
@@ -1481,6 +1643,39 @@ class ScreenshotHarnessTest {
         }
     }
 
+    private fun publishHarnessSkipFlag(
+        reason: String,
+        detail: String?,
+        blacklistRunner: Boolean,
+    ) {
+        val sanitizedDetail = detail?.takeIf { it.isNotBlank() }
+        val progressDetail = sanitizedDetail ?: reason
+        recordHarnessProgress(HarnessProgressStep.SKIPPED, progressDetail)
+        val directories = resolveStatusDirectories()
+        if (directories.isEmpty()) {
+            logHarnessWarn(
+                "Unable to publish screenshot skip flag; no status directories available"
+            )
+            return
+        }
+        val payload = buildHarnessStatusPayload(
+            status = "skipped",
+            reason = reason,
+            error = null,
+            detail = sanitizedDetail,
+            blacklistRunner = blacklistRunner,
+        )
+        directories.forEach { directory ->
+            val flag = File(directory, CacheFileNames.SCREENSHOT_SKIPPED_FLAG)
+            val success = writeHandshakeFlag(flag, payload)
+            if (!success) {
+                logHarnessWarn(
+                    "Unable to write screenshot skip flag to ${flag.absolutePath}"
+                )
+            }
+        }
+    }
+
     private fun publishHarnessFailureFlag(
         reason: String,
         error: Throwable?,
@@ -1490,7 +1685,12 @@ class ScreenshotHarnessTest {
         recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
         val directories = resolveStatusDirectories()
         if (directories.isNotEmpty()) {
-            val payload = buildHarnessStatusPayload("failed", reason, error)
+            val payload = buildHarnessStatusPayload(
+                status = "failed",
+                reason = reason,
+                error = error,
+                detail = detail,
+            )
             val published = directories.map { directory ->
                 val flag = File(directory, CacheFileNames.SCREENSHOT_FAILED_FLAG)
                 val success = writeHandshakeFlag(flag, payload)
@@ -1528,7 +1728,12 @@ class ScreenshotHarnessTest {
         ) {
             return
         }
-        val payload = buildHarnessStatusPayload("crashed", reason, error)
+        val payload = buildHarnessStatusPayload(
+            status = "crashed",
+            reason = reason,
+            error = error,
+            detail = crashDetail,
+        )
         val published = directories.map { directory ->
             val flag = File(directory, CacheFileNames.SCREENSHOT_CRASHED_FLAG)
             val success = writeHandshakeFlag(flag, payload)
@@ -1604,12 +1809,18 @@ class ScreenshotHarnessTest {
         status: String,
         reason: String,
         error: Throwable?,
+        detail: String? = null,
+        blacklistRunner: Boolean = false,
     ): String {
         return try {
             JSONObject().apply {
                 put("status", status)
                 put("reason", reason)
                 put("timestamp", System.currentTimeMillis())
+                detail?.let { put("detail", it) }
+                if (blacklistRunner) {
+                    put("blacklistRunner", true)
+                }
                 error?.let {
                     put("exception", it.javaClass.name)
                     put("message", it.message ?: "")
@@ -1617,7 +1828,19 @@ class ScreenshotHarnessTest {
             }.toString()
         } catch (encodingError: Exception) {
             val message = error?.message ?: ""
-            "status=$status;reason=$reason;message=$message;timestamp=${System.currentTimeMillis()}"
+            val components = mutableListOf(
+                "status=$status",
+                "reason=$reason",
+                "message=$message",
+                "timestamp=${System.currentTimeMillis()}",
+            )
+            if (!detail.isNullOrBlank()) {
+                components += "detail=$detail"
+            }
+            if (blacklistRunner) {
+                components += "blacklistRunner=true"
+            }
+            components.joinToString(";")
         }
     }
 
@@ -1657,6 +1880,7 @@ class ScreenshotHarnessTest {
         WAITING_FOR_COMPLETION("waiting_for_completion"),
         SCREENSHOT_CAPTURED("screenshot"),
         COMPLETED("completed"),
+        SKIPPED("skipped"),
         CRASHED("crashed"),
         FAILURE("failure"),
     }
@@ -1676,6 +1900,9 @@ class ScreenshotHarnessTest {
         private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
         private const val DEVICE_IDLE_TIMEOUT_MS = 10_000L
         private const val UI_READY_CONFIRMATION_TIMEOUT_MS = 30_000L
+        private const val PREFLIGHT_CPU_SAMPLE_INTERVAL_MS = 500L
+        private const val PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT = 90f
+        private const val PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT = 80f
         private const val TAG = "ScreenshotHarness"
         private val PACKAGE_NAME_PATTERN = Regex("^[A-Za-z0-9._]+$")
     }
