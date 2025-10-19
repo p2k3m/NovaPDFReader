@@ -45,6 +45,57 @@ internal fun MacrobenchmarkScope.measureStressDocumentLoadTimeMs(): Long {
     return openStressDocumentAndAwaitInternal()
 }
 
+internal fun MacrobenchmarkScope.finishReaderAndReturnHome() {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val activity = waitForReaderActivity(instrumentation)
+    instrumentation.runOnMainSync {
+        activity.finish()
+    }
+    device.wait(Until.gone(By.pkg(TARGET_PACKAGE).depth(0)), 10_000)
+    pressHome()
+    device.waitForIdle()
+}
+
+internal fun MacrobenchmarkScope.relaunchReaderAndAwait() {
+    pressHome()
+    device.waitForIdle()
+    startActivityAndWait()
+    device.wait(
+        Until.hasObject(By.pkg(TARGET_PACKAGE).depth(0)),
+        APP_LAUNCH_TIMEOUT_MS
+    )
+    device.waitForIdle()
+}
+
+internal fun MacrobenchmarkScope.repeatOpenCloseStress(iterations: Int): List<Long> {
+    require(iterations > 0) { "iterations must be greater than zero" }
+    val loads = mutableListOf<Long>()
+    repeat(iterations) { index ->
+        loads += measureStressDocumentLoadTimeMs()
+        finishReaderAndReturnHome()
+        if (index < iterations - 1) {
+            relaunchReaderAndAwait()
+        }
+    }
+    return loads
+}
+
+internal fun MacrobenchmarkScope.performOrientationStress() {
+    try {
+        device.unfreezeRotation()
+        device.setOrientationNatural()
+        device.waitForIdle()
+        device.setOrientationLeft()
+        device.waitForIdle()
+        device.setOrientationRight()
+        device.waitForIdle()
+        device.setOrientationNatural()
+        device.waitForIdle()
+    } finally {
+        device.unfreezeRotation()
+    }
+}
+
 private fun MacrobenchmarkScope.openStressDocumentAndAwaitInternal(): Long {
     val instrumentation = InstrumentationRegistry.getInstrumentation()
     val context = instrumentation.targetContext
@@ -146,7 +197,7 @@ private fun UiObject2.safeClick(): Boolean = runCatching {
 }.getOrDefault(false)
 
 
-private fun waitForReaderActivity(instrumentation: Instrumentation): Activity {
+internal fun waitForReaderActivity(instrumentation: Instrumentation): Activity {
     val readerActivityClass = instrumentation.targetContext.classLoader.loadClass(
         READER_ACTIVITY_CLASS_NAME
     )
