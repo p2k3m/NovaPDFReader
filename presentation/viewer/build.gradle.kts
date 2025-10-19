@@ -100,6 +100,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.kotlinx.coroutines.android)
+    androidTestImplementation("androidx.benchmark:benchmark-junit4:1.2.4")
 }
 
 kotlin {
