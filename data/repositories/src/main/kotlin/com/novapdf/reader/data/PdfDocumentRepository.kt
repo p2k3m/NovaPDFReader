@@ -26,6 +26,7 @@ import com.novapdf.reader.logging.LogContext
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.ProcessMetricsLogger
 import com.novapdf.reader.logging.field
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -2314,11 +2315,25 @@ class PdfDocumentRepository(
     }
 
     abstract inner class BitmapCache {
+        protected open val metricsLabel: String = "repository_bitmap_cache"
+        protected val cacheMetricsId: String = "$metricsLabel@${Integer.toHexString(System.identityHashCode(this))}"
         private val aliasMutex = Mutex()
         private val aliasKeys = mutableMapOf<String, PageBitmapKey>()
         private var nextAliasId = 0
 
-        fun get(key: PageBitmapKey): Bitmap? = getInternal(key)?.takeIf { !it.isRecycled }
+        fun get(key: PageBitmapKey): Bitmap? {
+            val candidate = getInternal(key)
+            val resolved = candidate?.takeIf { !it.isRecycled }
+            if (candidate != null && resolved == null) {
+                removeInternal(key)
+            }
+            if (resolved != null) {
+                ProcessMetricsLogger.logCacheHit(cacheMetricsId, key, safeByteCount(resolved))
+            } else {
+                ProcessMetricsLogger.logCacheMiss(cacheMetricsId, key)
+            }
+            return resolved
+        }
 
         fun put(key: PageBitmapKey, bitmap: Bitmap) {
             putInternal(key, bitmap)
@@ -2384,9 +2399,11 @@ class PdfDocumentRepository(
         protected abstract fun clearInternal()
         protected abstract fun cleanUpInternal()
         protected abstract fun trimInternal(fraction: Float)
+        protected abstract fun removeInternal(key: PageBitmapKey)
     }
 
     private inner class NoOpBitmapCache : BitmapCache() {
+        override val metricsLabel: String = "repository_noop_bitmap_cache"
         override fun getInternal(key: PageBitmapKey): Bitmap? = null
 
         override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
@@ -2400,6 +2417,8 @@ class PdfDocumentRepository(
         override fun cleanUpInternal() = Unit
 
         override fun trimInternal(fraction: Float) = Unit
+
+        override fun removeInternal(key: PageBitmapKey) = Unit
     }
 
     private inner class BitmapMemoryTracker(
@@ -2740,12 +2759,26 @@ class PdfDocumentRepository(
     }
 
     private inner class LruBitmapCache(maxCacheBytes: Long) : BitmapCache() {
+        override val metricsLabel: String = "repository_lru_bitmap_cache"
         private val cacheSize = maxCacheBytes.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         private val mutex = Mutex()
+        private val staleRemovalKeys = mutableSetOf<PageBitmapKey>()
         private val delegate = object : LruCache<PageBitmapKey, Bitmap>(cacheSize) {
             override fun sizeOf(key: PageBitmapKey, value: Bitmap): Int = safeByteCount(value)
 
             override fun entryRemoved(evicted: Boolean, key: PageBitmapKey, oldValue: Bitmap, newValue: Bitmap?) {
+                val reason = when {
+                    staleRemovalKeys.contains(key) -> ProcessMetricsLogger.EvictionReason.STALE
+                    evicted -> ProcessMetricsLogger.EvictionReason.SIZE
+                    newValue == null -> ProcessMetricsLogger.EvictionReason.MANUAL
+                    else -> ProcessMetricsLogger.EvictionReason.REPLACED
+                }
+                ProcessMetricsLogger.logCacheEviction(
+                    cacheMetricsId,
+                    key,
+                    safeByteCount(oldValue),
+                    reason
+                )
                 if (evicted || newValue == null) {
                     recycleBitmap(oldValue)
                 }
@@ -2787,6 +2820,17 @@ class PdfDocumentRepository(
                 }
                 val target = (currentSize.toDouble() * fraction.toDouble()).toInt().coerceAtLeast(0)
                 delegate.trimToSize(target)
+            }
+        }
+
+        override fun removeInternal(key: PageBitmapKey) {
+            mutex.withLockBlocking(this) {
+                staleRemovalKeys += key
+                try {
+                    delegate.remove(key)
+                } finally {
+                    staleRemovalKeys.remove(key)
+                }
             }
         }
     }

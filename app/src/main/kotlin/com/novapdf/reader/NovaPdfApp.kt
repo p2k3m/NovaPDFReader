@@ -16,6 +16,7 @@ import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.engine.AdaptiveFlowManager
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.ProcessMetricsLogger
 import com.novapdf.reader.logging.field
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
@@ -104,6 +105,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         NovaLog.install(debug = BuildConfig.DEBUG, crashReporter = crashReporter)
+        ProcessMetricsLogger.install(this)
         if (BuildConfig.DEBUG) {
             val runningInHarness = isRunningInTestHarness()
             if (!runningInHarness) {
