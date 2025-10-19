@@ -17,6 +17,16 @@ interface StorageClient {
     suspend fun openInputStream(uri: Uri): InputStream
 }
 
+/** Optional contract for streams that can report their total content length. */
+interface ContentLengthAwareInputStream {
+    val contentLength: Long?
+}
+
+/** Returns the total number of bytes exposed by this stream when available. */
+fun InputStream.contentLengthOrNull(): Long? {
+    return (this as? ContentLengthAwareInputStream)?.contentLength
+}
+
 /**
  * Exception thrown when no registered [StorageClient] is capable of resolving the provided URI.
  */

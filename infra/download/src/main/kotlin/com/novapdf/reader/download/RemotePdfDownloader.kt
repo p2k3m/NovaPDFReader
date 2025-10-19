@@ -1,10 +1,13 @@
 package com.novapdf.reader.download
 
-import android.net.Uri
 import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.RemotePdfException
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlin.random.Random
 import javax.inject.Inject
 
@@ -15,9 +18,10 @@ import javax.inject.Inject
  */
 interface RemotePdfDownloader {
     /**
-     * Attempts to download the given [url] and returns the resolved [Uri] when successful.
+     * Attempts to download the given [url], emitting structured progress updates and a terminal
+     * result.
      */
-    suspend fun download(url: String, allowLargeFile: Boolean = false): Result<Uri>
+    fun download(url: String, allowLargeFile: Boolean = false): Flow<RemoteDocumentFetchEvent>
 }
 
 /**
@@ -27,52 +31,68 @@ class S3RemotePdfDownloader @Inject constructor(
     private val downloadManager: PdfDownloadManager,
 ) : RemotePdfDownloader {
 
-    override suspend fun download(url: String, allowLargeFile: Boolean): Result<Uri> {
-        var lastFailure: RemotePdfException? = null
+    override fun download(url: String, allowLargeFile: Boolean): Flow<RemoteDocumentFetchEvent> =
+        flow {
+            var lastFailure: RemotePdfException? = null
 
-        repeat(MAX_ATTEMPTS) { attemptIndex ->
-            val attemptNumber = attemptIndex + 1
-            val result = try {
-                downloadManager.download(url, allowLargeFile)
-            } catch (throwable: Throwable) {
-                when (throwable) {
-                    is CancellationException -> throw throwable
-                    is RemotePdfException -> Result.failure(throwable)
-                    else -> Result.failure(
-                        RemotePdfException(RemotePdfException.Reason.NETWORK, throwable)
-                    )
+            repeat(MAX_ATTEMPTS) { attemptIndex ->
+                val attemptNumber = attemptIndex + 1
+                var attemptFailure: RemotePdfException? = null
+                var attemptSucceeded = false
+
+                downloadManager.download(url, allowLargeFile).collect { event ->
+                    when (event) {
+                        is RemoteDocumentFetchEvent.Progress -> emit(event)
+                        is RemoteDocumentFetchEvent.Success -> {
+                            emit(event)
+                            attemptSucceeded = true
+                            return@collect
+                        }
+                        is RemoteDocumentFetchEvent.Failure -> {
+                            val failure = event.error
+                            if (failure is CancellationException) throw failure
+                            attemptFailure = when (failure) {
+                                is RemotePdfException -> failure
+                                else -> RemotePdfException(
+                                    RemotePdfException.Reason.NETWORK,
+                                    failure,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (attemptSucceeded) {
+                    return@flow
+                }
+
+                val failure = attemptFailure
+                if (failure == null) {
+                    // Flow terminated without success or failure; treat as cancellation.
+                    return@flow
+                }
+
+                if (!failure.isRetryable()) {
+                    emit(RemoteDocumentFetchEvent.Failure(failure))
+                    return@flow
+                }
+
+                lastFailure = failure
+                if (attemptNumber < MAX_ATTEMPTS) {
+                    delay(computeBackoffDelay(attemptNumber))
                 }
             }
 
-            if (result.isSuccess) {
-                return result
-            }
-
-            val failure = result.exceptionOrNull()
-            if (failure is CancellationException) throw failure
-            val remoteFailure = when (failure) {
-                is RemotePdfException -> failure
-                else -> RemotePdfException(RemotePdfException.Reason.NETWORK, failure)
-            }
-
-            if (!remoteFailure.isRetryable()) {
-                return Result.failure(remoteFailure)
-            }
-
-            lastFailure = remoteFailure
-            if (attemptNumber < MAX_ATTEMPTS) {
-                delay(computeBackoffDelay(attemptNumber))
-            }
-        }
-
-        val finalFailure = lastFailure ?: RemotePdfException(RemotePdfException.Reason.NETWORK)
-        return Result.failure(
-            RemotePdfException(
-                RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED,
-                finalFailure,
+            val finalFailure = lastFailure ?: RemotePdfException(RemotePdfException.Reason.NETWORK)
+            emit(
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(
+                        RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED,
+                        finalFailure,
+                    )
+                )
             )
-        )
-    }
+        }
 
     private fun RemotePdfException.isRetryable(): Boolean {
         return when (reason) {

@@ -43,6 +43,8 @@ import com.novapdf.reader.model.FallbackMode
 import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.DocumentSource
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
+import com.novapdf.reader.model.RemoteDocumentStage
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.logging.NovaLog
@@ -823,61 +825,110 @@ open class PdfViewerViewModel @Inject constructor(
                 messageRes = R.string.loading_stage_downloading,
                 resetError = true
             )
-            val result = try {
-                remoteDocumentUseCase.fetch(source)
+            try {
+                var terminalEvent: RemoteDocumentFetchEvent? = null
+                remoteDocumentUseCase.fetch(source).collect { event ->
+                    when (event) {
+                        is RemoteDocumentFetchEvent.Progress -> {
+                            val messageRes = remoteStageMessage(event.stage)
+                            setLoadingState(
+                                isLoading = true,
+                                progress = event.fraction,
+                                messageRes = messageRes,
+                                resetError = false,
+                            )
+                        }
+                        is RemoteDocumentFetchEvent.Success,
+                        is RemoteDocumentFetchEvent.Failure -> {
+                            terminalEvent = event
+                            return@collect
+                        }
+                        else -> Unit
+                    }
+                }
+
+                when (val event = terminalEvent) {
+                    is RemoteDocumentFetchEvent.Success -> {
+                        val loadJob = launchDocumentLoad(this, event.uri, resetError = false)
+                        try {
+                            loadJob.join()
+                        } catch (cancellation: CancellationException) {
+                            loadJob.cancel()
+                            throw cancellation
+                        }
+                        return@launch
+                    }
+                    is RemoteDocumentFetchEvent.Failure -> {
+                        val throwable = event.error
+                        if (throwable is CancellationException) {
+                            setLoadingState(
+                                isLoading = false,
+                                progress = null,
+                                messageRes = null,
+                                resetError = false,
+                            )
+                            throw throwable
+                        }
+                        val remoteFailure = throwable.findCause<RemotePdfException>()
+                        if (remoteFailure?.reason == RemotePdfException.Reason.FILE_TOO_LARGE) {
+                            val sizeInfo = throwable.findCause<RemotePdfTooLargeException>()
+                            setLoadingState(
+                                isLoading = false,
+                                progress = null,
+                                messageRes = null,
+                                resetError = false,
+                            )
+                            promptLargeRemoteDownload(
+                                source = source,
+                                sizeBytes = sizeInfo?.sizeBytes ?: 0L,
+                                maxBytes = sizeInfo?.maxBytes ?: REMOTE_PDF_SAFE_SIZE_BYTES,
+                            )
+                            return@launch
+                        }
+                        setLoadingState(
+                            isLoading = false,
+                            progress = null,
+                            messageRes = null,
+                            resetError = false,
+                        )
+                        reportRemoteOpenFailure(throwable, source)
+                        return@launch
+                    }
+                    is RemoteDocumentFetchEvent.Progress -> {
+                        setLoadingState(
+                            isLoading = false,
+                            progress = null,
+                            messageRes = null,
+                            resetError = false,
+                        )
+                        return@launch
+                    }
+                    null -> {
+                        setLoadingState(
+                            isLoading = false,
+                            progress = null,
+                            messageRes = null,
+                            resetError = false,
+                        )
+                        return@launch
+                    }
+                }
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) {
                     setLoadingState(
                         isLoading = false,
                         progress = null,
                         messageRes = null,
-                        resetError = false
+                        resetError = false,
                     )
                     throw throwable
                 }
-                reportRemoteOpenFailure(throwable, source)
-                return@launch
-            }
-            val uri = result.getOrNull()
-            if (uri != null) {
-                val loadJob = launchDocumentLoad(this, uri, resetError = false)
-                try {
-                    loadJob.join()
-                } catch (cancellation: CancellationException) {
-                    loadJob.cancel()
-                    throw cancellation
-                }
-                return@launch
-            }
-
-            val throwable = result.exceptionOrNull()
-            if (throwable is CancellationException) {
                 setLoadingState(
                     isLoading = false,
                     progress = null,
                     messageRes = null,
-                    resetError = false
+                    resetError = false,
                 )
-                throw throwable
-            }
-
-            if (throwable != null) {
-                val remoteFailure = throwable.findCause<RemotePdfException>()
-                if (remoteFailure?.reason == RemotePdfException.Reason.FILE_TOO_LARGE) {
-                    val sizeInfo = throwable.findCause<RemotePdfTooLargeException>()
-                    setLoadingState(
-                        isLoading = false,
-                        progress = null,
-                        messageRes = null,
-                        resetError = false
-                    )
-                    promptLargeRemoteDownload(
-                        source = source,
-                        sizeBytes = sizeInfo?.sizeBytes ?: 0L,
-                        maxBytes = sizeInfo?.maxBytes ?: REMOTE_PDF_SAFE_SIZE_BYTES,
-                    )
-                    return@launch
-                }
                 reportRemoteOpenFailure(throwable, source)
             }
         }
@@ -901,6 +952,15 @@ open class PdfViewerViewModel @Inject constructor(
 
     fun cancelRemoteDocumentLoad() {
         remoteDownloadJob?.cancel()
+    }
+
+    @StringRes
+    private fun remoteStageMessage(stage: RemoteDocumentStage): Int {
+        return when (stage) {
+            RemoteDocumentStage.CONNECTING -> R.string.loading_stage_resolving
+            RemoteDocumentStage.DOWNLOADING -> R.string.loading_stage_downloading
+            RemoteDocumentStage.VALIDATING -> R.string.loading_stage_parsing
+        }
     }
 
     fun confirmLargeRemoteDownload() {

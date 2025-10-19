@@ -2,6 +2,7 @@ package com.novapdf.reader.storage
 
 import android.content.ContentResolver
 import android.net.Uri
+import com.novapdf.reader.data.remote.ContentLengthAwareInputStream
 import com.novapdf.reader.data.remote.DelegatingStorageClient
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.data.remote.UnsupportedStorageUriException
@@ -51,7 +52,11 @@ private class FileUriStorageClient(
         if (!target.isFile) {
             throw IOException("File not found for $uri")
         }
-        return withContext(Dispatchers.IO) { FileInputStream(target) }
+        return withContext(Dispatchers.IO) {
+            object : FileInputStream(target), ContentLengthAwareInputStream {
+                override val contentLength: Long? = target.length()
+            }
+        }
     }
 }
 
@@ -76,7 +81,11 @@ private class LocalS3StorageClient(
         if (!target.isFile) {
             throw IOException("File not found for $uri")
         }
-        return withContext(Dispatchers.IO) { FileInputStream(target) }
+        return withContext(Dispatchers.IO) {
+            object : FileInputStream(target), ContentLengthAwareInputStream {
+                override val contentLength: Long? = target.length()
+            }
+        }
     }
 
     private companion object {

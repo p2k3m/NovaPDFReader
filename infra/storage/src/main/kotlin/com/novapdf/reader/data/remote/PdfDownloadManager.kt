@@ -5,16 +5,25 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.core.content.FileProvider
 import com.novapdf.reader.cache.CacheDirectories
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
+import com.novapdf.reader.model.RemoteDocumentStage
+import com.novapdf.reader.data.remote.contentLengthOrNull
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.LinkedHashSet
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.Flow
+import kotlin.io.DEFAULT_BUFFER_SIZE
+import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 import kotlin.text.Charsets
 
@@ -32,38 +41,80 @@ class PdfDownloadManager(
         cacheDirectories.ensureSubdirectories()
     }
 
-    suspend fun download(url: String, allowLargeFile: Boolean = false): Result<Uri> =
-        withContext(Dispatchers.IO) {
-        val destination = File(downloadDirectory, buildFileName())
-        val parsedUri = try {
-            Uri.parse(url)
-        } catch (_: Throwable) {
-            null
-        }
-        if (parsedUri == null || parsedUri.scheme.isNullOrBlank()) {
-            destination.delete()
-            return@withContext Result.failure(
-                RemotePdfException(
-                    RemotePdfException.Reason.NETWORK,
-                    IllegalArgumentException("Invalid remote URI: $url"),
-                )
-            )
-        }
-
-        val outcome = try {
-            storageClient.copyTo(parsedUri, destination)
-            validateDownloadedPdf(destination, allowLargeFile)
-            val uri = FileProvider.getUriForFile(appContext, authority, destination)
-            Result.success(uri)
-        } catch (error: Throwable) {
-            destination.delete()
-            if (error is CancellationException) {
-                throw error
+    fun download(url: String, allowLargeFile: Boolean = false): Flow<RemoteDocumentFetchEvent> =
+        channelFlow {
+            val destination = File(downloadDirectory, buildFileName())
+            val parsedUri = try {
+                Uri.parse(url)
+            } catch (_: Throwable) {
+                null
             }
-            Result.failure(error.asNetworkFailure())
+            if (parsedUri == null || parsedUri.scheme.isNullOrBlank()) {
+                destination.delete()
+                trySend(
+                    RemoteDocumentFetchEvent.Failure(
+                        RemotePdfException(
+                            RemotePdfException.Reason.NETWORK,
+                            IllegalArgumentException("Invalid remote URI: $url"),
+                        )
+                    )
+                )
+                close()
+                return@channelFlow
+            }
+
+            try {
+                withContext(Dispatchers.IO) {
+                    trySend(RemoteDocumentFetchEvent.Progress(RemoteDocumentStage.CONNECTING))
+                    val totalBytes: Long?
+                    var downloadedBytes = 0L
+                    storageClient.openInputStream(parsedUri).use { input ->
+                        totalBytes = input.contentLengthOrNull()?.takeIf { it > 0L }
+                        FileOutputStream(destination).buffered().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                coroutineContext.ensureActive()
+                                val read = input.read(buffer)
+                                if (read == -1) break
+                                output.write(buffer, 0, read)
+                                downloadedBytes += read
+                                val fraction = totalBytes?.let { size ->
+                                    if (size > 0L) {
+                                        (downloadedBytes.toDouble() / size.toDouble())
+                                            .coerceIn(0.0, 1.0)
+                                            .toFloat()
+                                    } else {
+                                        null
+                                    }
+                                }
+                                trySend(
+                                    RemoteDocumentFetchEvent.Progress(
+                                        stage = RemoteDocumentStage.DOWNLOADING,
+                                        fraction = fraction,
+                                        bytesDownloaded = downloadedBytes,
+                                        totalBytes = totalBytes,
+                                    )
+                                )
+                            }
+                            output.flush()
+                        }
+                    }
+                    trySend(RemoteDocumentFetchEvent.Progress(RemoteDocumentStage.VALIDATING))
+                    validateDownloadedPdf(destination, allowLargeFile)
+                    val uri = FileProvider.getUriForFile(appContext, authority, destination)
+                    trySend(RemoteDocumentFetchEvent.Success(uri))
+                }
+            } catch (error: Throwable) {
+                destination.delete()
+                if (error is CancellationException) {
+                    close(error)
+                    throw error
+                }
+                trySend(RemoteDocumentFetchEvent.Failure(error.asNetworkFailure()))
+            } finally {
+                close()
+            }
         }
-        return@withContext outcome
-    }
 
     private fun buildFileName(): String {
         return "remote_${UUID.randomUUID()}.pdf"

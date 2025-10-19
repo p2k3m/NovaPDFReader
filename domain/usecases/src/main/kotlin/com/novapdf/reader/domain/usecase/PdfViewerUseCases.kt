@@ -19,6 +19,7 @@ import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.data.remote.RemotePdfException
 import com.novapdf.reader.data.remote.RemoteSourceDiagnostics
 import com.novapdf.reader.model.DocumentSource
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
 import com.novapdf.reader.model.AnnotationCommand
 import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.DomainErrorCode
@@ -38,7 +39,10 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
@@ -357,7 +361,7 @@ class DefaultDocumentSearchUseCase @Inject constructor(
 }
 
 interface RemoteDocumentUseCase {
-    suspend fun fetch(source: DocumentSource): Result<Uri>
+    fun fetch(source: DocumentSource): Flow<RemoteDocumentFetchEvent>
 }
 
 @Singleton
@@ -370,36 +374,48 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
     private var lastNetworkFailure: RemotePdfException? = null
     private var circuitDiagnostics: RemoteSourceDiagnostics? = null
 
-    override suspend fun fetch(source: DocumentSource): Result<Uri> {
-        val circuitBreakerFailure = stateLock.withLock {
-            if (circuitOpen) {
-                RemotePdfException(
-                    RemotePdfException.Reason.CIRCUIT_OPEN,
-                    lastNetworkFailure,
-                    circuitDiagnostics,
-                )
-            } else {
-                null
+    override fun fetch(source: DocumentSource): Flow<RemoteDocumentFetchEvent> = flow {
+        val circuitBreakerFailure = stateLock.withLock { buildCircuitOpenFailureLocked() }
+        if (circuitBreakerFailure != null) {
+            emit(RemoteDocumentFetchEvent.Failure(circuitBreakerFailure))
+            return@flow
+        }
+
+        var shouldTerminate = false
+        gateway.fetch(source).collect { event ->
+            when (event) {
+                is RemoteDocumentFetchEvent.Progress -> emit(event)
+                is RemoteDocumentFetchEvent.Success -> {
+                    stateLock.withLock { resetFailuresLocked() }
+                    emit(event)
+                    shouldTerminate = true
+                    return@collect
+                }
+                is RemoteDocumentFetchEvent.Failure -> {
+                    val error = event.error
+                    if (error is CancellationException) throw error
+                    val processed = stateLock.withLock { handleFailureLocked(error) }
+                    emit(RemoteDocumentFetchEvent.Failure(processed))
+                    shouldTerminate = true
+                    return@collect
+                }
             }
         }
-        if (circuitBreakerFailure != null) {
-            return Result.failure<Uri>(circuitBreakerFailure).mapDomainFailure()
+        if (shouldTerminate) {
+            return@flow
         }
-
-        val rawResult = gateway.fetch(source)
-        if (rawResult.isSuccess) {
-            stateLock.withLock { resetFailuresLocked() }
-            return rawResult.mapDomainFailure()
-        }
-
-        val failure = rawResult.exceptionOrNull()
-        if (failure is CancellationException) throw failure
-
-        val processed = stateLock.withLock { handleFailureLocked(failure) }
-        return processed.mapDomainFailure()
     }
 
-    private fun handleFailureLocked(throwable: Throwable?): Result<Uri> {
+    private fun buildCircuitOpenFailureLocked(): RemotePdfException? {
+        if (!circuitOpen) return null
+        return RemotePdfException(
+            RemotePdfException.Reason.CIRCUIT_OPEN,
+            lastNetworkFailure,
+            circuitDiagnostics,
+        )
+    }
+
+    private fun handleFailureLocked(throwable: Throwable?): RemotePdfException {
         val remoteFailure = when (throwable) {
             is RemotePdfException -> throwable
             null -> RemotePdfException(RemotePdfException.Reason.NETWORK)
@@ -419,12 +435,10 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
                         lastFailureMessage = resolveFailureMessage(remoteFailure),
                     )
                     circuitDiagnostics = diagnostics
-                    return Result.failure<Uri>(
-                        RemotePdfException(
-                            RemotePdfException.Reason.CIRCUIT_OPEN,
-                            remoteFailure,
-                            diagnostics,
-                        )
+                    return RemotePdfException(
+                        RemotePdfException.Reason.CIRCUIT_OPEN,
+                        remoteFailure,
+                        diagnostics,
                     )
                 }
             }
@@ -445,7 +459,7 @@ class DefaultRemoteDocumentUseCase @Inject constructor(
             }
         }
 
-        return Result.failure<Uri>(remoteFailure)
+        return remoteFailure
     }
 
     private fun resetFailuresLocked() {

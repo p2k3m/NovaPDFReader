@@ -34,6 +34,8 @@ import com.novapdf.reader.model.SearchMatch
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.SearchResult
 import com.novapdf.reader.model.DocumentSource
+import com.novapdf.reader.model.RemoteDocumentFetchEvent
+import com.novapdf.reader.model.RemoteDocumentStage
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -41,6 +43,8 @@ import com.shockwave.pdfium.PdfDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -332,7 +336,15 @@ class PdfViewerViewModelSearchTest {
         )
         val downloadUri = Uri.parse("https://example.com/doc.pdf")
         val remoteSource = DocumentSource.RemoteUrl(downloadUri.toString())
-        whenever(documentSourceGateway.fetch(eq(remoteSource))).thenReturn(Result.success(downloadUri))
+        whenever(documentSourceGateway.fetch(eq(remoteSource))).thenReturn(
+            flowOf(
+                RemoteDocumentFetchEvent.Progress(
+                    stage = RemoteDocumentStage.DOWNLOADING,
+                    fraction = 0.25f,
+                ),
+                RemoteDocumentFetchEvent.Success(downloadUri),
+            )
+        )
         whenever(pdfRepository.open(eq(downloadUri), anyOrNull())).thenReturn(session)
         whenever(pdfRepository.session).thenReturn(MutableStateFlow<PdfDocumentSession?>(session))
         whenever(pdfRepository.renderPage(eq(0), any(), any<PageRenderProfile>(), anyOrNull())).thenReturn(
@@ -382,7 +394,18 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         val failingSource = DocumentSource.RemoteUrl(failingUrl)
         whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
-            Result.failure(IllegalStateException("bad"))
+            flowOf(
+                RemoteDocumentFetchEvent.Progress(
+                    stage = RemoteDocumentStage.DOWNLOADING,
+                    fraction = 0.5f,
+                ),
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(
+                        RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED,
+                        IllegalStateException("bad"),
+                    )
+                ),
+            )
         )
 
         val viewModel = createViewModel(
@@ -398,7 +421,7 @@ class PdfViewerViewModelSearchTest {
         viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
 
-        verify(documentSourceGateway, times(4)).fetch(eq(failingSource))
+        verify(documentSourceGateway).fetch(eq(failingSource))
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
         assertEquals(
@@ -431,7 +454,14 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         val failingSource = DocumentSource.RemoteUrl(failingUrl)
         whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
-            Result.failure(IllegalStateException("bad net"))
+            flowOf(
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(
+                        RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED,
+                        IllegalStateException("bad net"),
+                    )
+                )
+            )
         )
 
         val viewModel = createViewModel(
@@ -450,7 +480,7 @@ class PdfViewerViewModelSearchTest {
             advanceUntilIdle()
         }
 
-        verify(documentSourceGateway, times(12)).fetch(eq(failingSource))
+        verify(documentSourceGateway, times(3)).fetch(eq(failingSource))
 
         val status = viewModel.uiState.value.documentStatus
         assertTrue(status is DocumentStatus.Error)
@@ -464,7 +494,7 @@ class PdfViewerViewModelSearchTest {
 
         viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
-        verify(documentSourceGateway, times(12)).fetch(eq(failingSource))
+        verify(documentSourceGateway, times(3)).fetch(eq(failingSource))
 
         val repeatedStatus = viewModel.uiState.value.documentStatus
         assertTrue(repeatedStatus is DocumentStatus.Error)
@@ -508,7 +538,9 @@ class PdfViewerViewModelSearchTest {
             IOException("Corrupt PDF"),
         )
         val failingSource = DocumentSource.RemoteUrl(failingUrl)
-        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(Result.failure(corruptFailure))
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
+            flowOf(RemoteDocumentFetchEvent.Failure(corruptFailure))
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -551,7 +583,9 @@ class PdfViewerViewModelSearchTest {
 
         val failingUrl = "https://example.com/bad.pdf"
         val failingSource = DocumentSource.RemoteUrl(failingUrl)
-        whenever(documentSourceGateway.fetch(eq(failingSource))).thenThrow(IllegalStateException("broken"))
+        whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
+            flow { throw IllegalStateException("broken") }
+        )
 
         val viewModel = createViewModel(
             annotationRepository,
@@ -566,7 +600,7 @@ class PdfViewerViewModelSearchTest {
         viewModel.openRemoteDocument(failingSource)
         advanceUntilIdle()
 
-        verify(documentSourceGateway, times(4)).fetch(eq(failingSource))
+        verify(documentSourceGateway).fetch(eq(failingSource))
         val uiState = viewModel.uiState.value
         assertTrue(uiState.documentStatus is DocumentStatus.Error)
         assertEquals(
@@ -598,7 +632,18 @@ class PdfViewerViewModelSearchTest {
         val failingUrl = "https://example.com/bad.pdf"
         val failingSource = DocumentSource.RemoteUrl(failingUrl)
         whenever(documentSourceGateway.fetch(eq(failingSource))).thenReturn(
-            Result.failure(IllegalStateException("bad"))
+            flowOf(
+                RemoteDocumentFetchEvent.Progress(
+                    stage = RemoteDocumentStage.DOWNLOADING,
+                    fraction = 0.4f,
+                ),
+                RemoteDocumentFetchEvent.Failure(
+                    RemotePdfException(
+                        RemotePdfException.Reason.NETWORK_RETRY_EXHAUSTED,
+                        IllegalStateException("bad"),
+                    )
+                ),
+            )
         )
 
         val viewModel = createViewModel(
