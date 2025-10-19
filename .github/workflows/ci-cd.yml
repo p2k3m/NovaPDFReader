@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '0 9 * * 1'
 
 concurrency:
   group: android-ci-${{ github.workflow }}-${{ github.ref }}
@@ -3678,3 +3680,75 @@ jobs:
       - name: Verify Caffeine is absent from build outputs
         if: always()
         run: python3 tools/scripts/verify_no_caffeine.py --github
+  weekly-regressions:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 29
+            suite: cache
+            device_task: pixel4Api29DebugAndroidTest
+            test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+          - api: 29
+            suite: repository
+            device_task: pixel4Api29DebugAndroidTest
+            test_class: com.novapdf.reader.LargePdfInstrumentedTest
+          - api: 29
+            suite: render
+            device_task: pixel4Api29DebugAndroidTest
+            test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+          - api: 32
+            suite: cache
+            device_task: pixel6Api32DebugAndroidTest
+            test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+          - api: 32
+            suite: repository
+            device_task: pixel6Api32DebugAndroidTest
+            test_class: com.novapdf.reader.LargePdfInstrumentedTest
+          - api: 32
+            suite: render
+            device_task: pixel6Api32DebugAndroidTest
+            test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+          - api: 34
+            suite: cache
+            device_task: pixel8Api34DebugAndroidTest
+            test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+          - api: 34
+            suite: repository
+            device_task: pixel8Api34DebugAndroidTest
+            test_class: com.novapdf.reader.LargePdfInstrumentedTest
+          - api: 34
+            suite: render
+            device_task: pixel8Api34DebugAndroidTest
+            test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - name: Run weekly regression suite
+        env:
+          DEVICE_TASK: ${{ matrix.device_task }}
+          TEST_CLASS: ${{ matrix.test_class }}
+        run: |
+          set -euo pipefail
+          echo "Executing ${TEST_CLASS} on ${DEVICE_TASK}"
+          ./gradlew --stacktrace --no-build-cache "${DEVICE_TASK}" \
+            -Pandroid.testInstrumentationRunnerArguments.class="${TEST_CLASS}" \
+            -Pandroid.experimental.testOptions.managedDevices.emulator.gpu=swiftshader_indirect
+      - name: Upload managed device reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-regression-${{ matrix.suite }}-api${{ matrix.api }}
+          path: |
+            app/build/reports/androidTests/managedDevice
+            app/build/outputs/androidTest-results/managedDevice
+          if-no-files-found: warn
