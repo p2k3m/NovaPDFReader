@@ -2987,52 +2987,8 @@ jobs:
             while [ "$attempts" -gt 0 ]; do
               local listing
               if listing=$(adb shell pm list instrumentation 2>/dev/null | tr -d '\r'); then
-                local resolved
-                resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$sanitized_package" "$runner_name" <<'PY'
-import sys
-
-requested = sys.argv[1]
-sanitized = sys.argv[2]
-runner = sys.argv[3]
-
-lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip().startswith("instrumentation:")]
-components = []
-for line in lines:
-    component = line[len("instrumentation:"):].split(" ", 1)[0].strip()
-    target = ""
-    if "(target=" in line:
-        start = line.find("(target=") + len("(target=")
-        end = line.find(")", start)
-        if end == -1:
-            end = len(line)
-        target = line[start:end]
-    components.append((component, target))
-
-def matches_package(package_candidate: str) -> bool:
-    if not package_candidate:
-        return False
-    if package_candidate == requested:
-        return True
-    if sanitized and package_candidate == sanitized:
-        return True
-    return False
-
-for component, target in components:
-    pkg, _, comp_runner = component.partition("/")
-    if matches_package(pkg):
-        if not runner or comp_runner == runner:
-            print(component)
-            sys.exit(0)
-
-for component, target in components:
-    if matches_package(target):
-        if not runner or component.rsplit("/", 1)[-1] == runner:
-            print(component)
-            sys.exit(0)
-
-sys.exit(1)
-PY
-)
+                  local resolved
+                  resolved=$(printf '%s\n' "$listing" | python3 -c $'import sys\n\nrequested = sys.argv[1]\nsanitized = sys.argv[2]\nrunner = sys.argv[3]\n\nlines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip().startswith("instrumentation:")]\ncomponents = []\nfor line in lines:\n    component = line[len("instrumentation:"):].split(" ", 1)[0].strip()\n    target = ""\n    if "(target=" in line:\n        start = line.find("(target=") + len("(target=")\n        end = line.find(")", start)\n        if end == -1:\n            end = len(line)\n        target = line[start:end]\n    components.append((component, target))\n\ndef matches_package(package_candidate: str) -> bool:\n    if not package_candidate:\n        return False\n    if package_candidate == requested:\n        return True\n    if sanitized and package_candidate == sanitized:\n        return True\n    return False\n\nfor component, target in components:\n    pkg, _, comp_runner = component.partition("/")\n    if matches_package(pkg):\n        if not runner or comp_runner == runner:\n            print(component)\n            sys.exit(0)\n\nfor component, target in components:\n    if matches_package(target):\n        if not runner or component.rsplit("/", 1)[-1] == runner:\n            print(component)\n            sys.exit(0)\n\nsys.exit(1)\n' "$package_name" "$sanitized_package" "$runner_name")
                 resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
                 if [ -n "$resolved" ]; then
                   echo "Confirmed availability of instrumentation component $resolved"
@@ -3223,19 +3179,19 @@ PY
             done
           }
 
-  wait_for_activity_manager
+          wait_for_activity_manager
 
-  if ! wait_for_instrumentation_component "$HARNESS_RUN_AS_PACKAGE" "$HARNESS_RUNNER" 20 3; then
-    echo "::error::Screenshot harness instrumentation ${HARNESS_RUN_AS_PACKAGE}/${HARNESS_RUNNER} not detected on device" >&2
-    adb shell pm list instrumentation 2>/dev/null || true
-    exit 1
-  fi
+          if ! wait_for_instrumentation_component "$HARNESS_RUN_AS_PACKAGE" "$HARNESS_RUNNER" 20 3; then
+            echo "::error::Screenshot harness instrumentation ${HARNESS_RUN_AS_PACKAGE}/${HARNESS_RUNNER} not detected on device" >&2
+            adb shell pm list instrumentation 2>/dev/null || true
+            exit 1
+          fi
 
-  if resolve_instrumentation_component "$PACKAGE_NAME" "$HARNESS_RUNNER"; then
-    echo "Resolved screenshot harness instrumentation component to $HARNESS_COMPONENT" >&2
-  else
-    HARNESS_COMPONENT="${HARNESS_RUN_AS_PACKAGE}/${HARNESS_RUNNER}"
-    echo "Unable to resolve screenshot harness instrumentation component; defaulting to $HARNESS_COMPONENT" >&2
+          if resolve_instrumentation_component "$PACKAGE_NAME" "$HARNESS_RUNNER"; then
+            echo "Resolved screenshot harness instrumentation component to $HARNESS_COMPONENT" >&2
+          else
+            HARNESS_COMPONENT="${HARNESS_RUN_AS_PACKAGE}/${HARNESS_RUNNER}"
+            echo "Unable to resolve screenshot harness instrumentation component; defaulting to $HARNESS_COMPONENT" >&2
           fi
 
           cleanup_flags
