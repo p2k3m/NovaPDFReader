@@ -62,7 +62,8 @@ class EngineRemotePdfDownloader(
                 }
                 is EngineAttempt.TerminalFailure -> {
                     lastFailure = attempt.error
-                    if (!attempt.error.isRetryable()) {
+                    val hasMoreCandidates = index < candidates.lastIndex
+                    if (!attempt.error.isRetryable() && !hasMoreCandidates) {
                         immediateFailure = attempt.error
                         break
                     }
