@@ -2,6 +2,10 @@ package com.novapdf.reader.data.remote
 
 import java.io.IOException
 
+/**
+ * Represents failures encountered while downloading or validating a remote PDF along with a
+ * machine-readable [Reason] and optional [diagnostics].
+ */
 class RemotePdfException(
     val reason: Reason,
     cause: Throwable? = null,
@@ -23,11 +27,13 @@ data class RemoteSourceDiagnostics(
     val lastFailureMessage: String?,
 )
 
+/** Raised when a downloaded PDF exceeds the configured safe file size limit. */
 class RemotePdfTooLargeException(
     val sizeBytes: Long,
     val maxBytes: Long,
 ) : IOException("Downloaded PDF exceeds safe size limit: $sizeBytes bytes")
 
+/** Raised when a downloaded PDF advertises features flagged as unsafe for local processing. */
 class RemotePdfUnsafeException(
     val indicators: List<String>,
 ) : IOException(

@@ -26,6 +26,9 @@ enum class PipelineType {
     INDEX,
 }
 
+/**
+ * Thrown when a monitored pipeline stops reporting progress for longer than the allowed timeout.
+ */
 class PipelineTimeoutException(
     val pipeline: PipelineType,
     message: String? = null,

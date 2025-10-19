@@ -118,6 +118,9 @@ private const val MAX_TRACE_SECTION_LENGTH = 127
 private const val PERSISTENT_REPAIR_PREFIX = "cached-"
 private val HEX_DIGITS = "0123456789abcdef".toCharArray()
 
+/**
+ * Signals that a document could not be opened along with a structured [Reason] explaining why.
+ */
 class PdfOpenException(
     val reason: Reason,
     cause: Throwable? = null,
@@ -129,6 +132,9 @@ class PdfOpenException(
     }
 }
 
+/**
+ * Indicates that rendering a page failed and surfaces the failure [Reason] to the caller.
+ */
 class PdfRenderException(
     val reason: Reason,
     val suggestedWidth: Int? = null,
