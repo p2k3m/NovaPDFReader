@@ -1,6 +1,6 @@
 # Native dependency audit
 
-NovaPDF Reader relies on a handful of libraries that either bundle native code or originate from desktop-first ecosystems. We maintain runtime coverage for each dependency across the Android API levels we support (30, 32, and 34) to ensure compatibility regressions are caught quickly.
+NovaPDF Reader relies on a handful of libraries that either bundle native code or originate from desktop-first ecosystems. We maintain runtime coverage for each dependency across the Android API levels we support (29, 32, and 34) to ensure compatibility regressions are caught quickly.
 
 ## Dependency coverage summary
 
@@ -13,4 +13,4 @@ NovaPDF Reader relies on a handful of libraries that either bundle native code o
 
 ## Test matrix
 
-Managed virtual devices are configured for API levels 30, 32, and 34. Running `./gradlew nativeDependencyAndroidTestMatrix` executes the full instrumentation suite—including the compatibility checks above—against all three system images so regressions are caught before release.【F:app/build.gradle.kts†L350-L378】【F:app/build.gradle.kts†L419-L431】
+Managed virtual devices are configured for API levels 29, 32, and 34. Running `./gradlew nativeDependencyAndroidTestMatrix` executes the full instrumentation suite—including the compatibility checks above—against all three system images so regressions are caught before release.【F:app/build.gradle.kts†L350-L378】【F:app/build.gradle.kts†L419-L431】

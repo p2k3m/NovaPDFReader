@@ -356,9 +356,9 @@ android {
 
         managedDevices {
             devices {
-                maybeCreate<ManagedVirtualDevice>("pixel4Api30").apply {
+                maybeCreate<ManagedVirtualDevice>("pixel4Api29").apply {
                     device = "Pixel 4"
-                    apiLevel = 30
+                    apiLevel = 29
                     systemImageSource = "google"
                 }
 
@@ -417,7 +417,7 @@ jacoco {
 }
 
 afterEvaluate {
-    val managedDeviceVariants = listOf("pixel4Api30", "pixel6Api32", "pixel8Api34")
+    val managedDeviceVariants = listOf("pixel4Api29", "pixel6Api32", "pixel8Api34")
     val debugAndroidTestTasks = managedDeviceVariants.mapNotNull { deviceName ->
         tasks.namedOrNull<Task>("${deviceName}DebugAndroidTest")
     }
@@ -425,7 +425,7 @@ afterEvaluate {
     if (debugAndroidTestTasks.isNotEmpty()) {
         tasks.register("nativeDependencyAndroidTestMatrix") {
             group = "verification"
-            description = "Runs the debug androidTest suite across managed devices for API 30, 32, and 34."
+            description = "Runs the debug androidTest suite across managed devices for API 29, 32, and 34."
             dependsOn(debugAndroidTestTasks)
         }
     }
