@@ -60,3 +60,22 @@ commits that modify relevant application code without staging a refreshed
 baseline profile. You can invoke the guard manually with
 `python3 tools/scripts/baseline_profile_guard.py --staged --fail-when-outdated`
 if you need to double-check the staged changes before committing.
+
+## Abstraction reviews for caching, bitmap, PDF, and storage layers
+
+Architectural changes to data flow are high risk for regressions. Whenever you
+introduce a new caching, bitmap, PDF, or storage abstraction—or significantly
+rewrite an existing one—open a design review and document the decision before
+landing the code. Follow the checklist in
+`docs/architecture/abstraction-review.md` and link the resulting document in
+your pull request description so reviewers can verify that:
+
+- The motivation and evaluated alternatives are captured.
+- Failure modes and monitoring hooks are enumerated.
+- The error surface exposed to callers is described along with mitigation
+  strategies.
+- Test coverage for happy paths and failure scenarios is listed.
+
+Pull requests that add these abstractions without an accompanying review
+document should be marked "changes requested" until the documentation is in
+place.
