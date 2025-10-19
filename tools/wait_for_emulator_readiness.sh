@@ -194,6 +194,10 @@ validate_emulator_configuration() {
         gpu_value="${args[$((i + 1))]}"
         gpu_flag_present=1
         ;;
+      -no-snapshot)
+        has_no_snapshot_save=1
+        has_no_snapshot_load=1
+        ;;
       -no-snapshot-save)
         has_no_snapshot_save=1
         ;;
