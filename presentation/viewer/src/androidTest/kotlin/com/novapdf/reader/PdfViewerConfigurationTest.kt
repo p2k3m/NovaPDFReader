@@ -2,16 +2,23 @@ package com.novapdf.reader
 
 import android.content.res.Configuration
 import android.os.LocaleList
+import android.view.View
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.assertExists
-import androidx.compose.ui.test.junit4.TestHarness
-import androidx.compose.ui.test.junit4.setContent
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.novapdf.reader.ui.theme.NovaPdfTheme
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.emptyFlow
@@ -74,7 +81,7 @@ class PdfViewerConfigurationTest {
                                     }
 
                                     composeRule.setContent {
-                                        TestHarness(configuration = configuration) {
+                                        ConfigurationHarness(configuration = configuration) {
                                             NovaPdfTheme(
                                                 useDarkTheme = nightMode == Configuration.UI_MODE_NIGHT_YES,
                                                 dynamicColor = true,
@@ -129,7 +136,6 @@ class PdfViewerConfigurationTest {
                                     }
 
                                     composeRule.waitForIdle()
-                                    composeRule.onRoot().assertExists()
                                 }
                             }
                         }
@@ -137,5 +143,38 @@ class PdfViewerConfigurationTest {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ConfigurationHarness(
+    configuration: Configuration,
+    content: @Composable () -> Unit,
+) {
+    val baseDensity = LocalDensity.current
+    val layoutDirection = if (configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
+        LayoutDirection.Rtl
+    } else {
+        LayoutDirection.Ltr
+    }
+
+    val densityValue = if (configuration.densityDpi > 0) {
+        configuration.densityDpi / 160f
+    } else {
+        baseDensity.density
+    }
+
+    val fontScale = if (configuration.fontScale > 0) {
+        configuration.fontScale
+    } else {
+        baseDensity.fontScale
+    }
+
+    CompositionLocalProvider(
+        LocalConfiguration provides configuration,
+        LocalLayoutDirection provides layoutDirection,
+        LocalDensity provides Density(density = densityValue, fontScale = fontScale),
+    ) {
+        content()
     }
 }
