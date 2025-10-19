@@ -82,7 +82,13 @@ class DefaultPdfViewerUseCases @Inject constructor(
     override val crashReporting: CrashReportingUseCase,
     override val adaptiveFlow: AdaptiveFlowUseCase,
     override val preferences: UserPreferencesUseCase,
-) : PdfViewerUseCases
+    contractRegistry: ModuleContractsRegistry,
+) : PdfViewerUseCases {
+
+    init {
+        contractRegistry.verifyDomainUseCases()
+    }
+}
 
 interface PdfDocumentUseCase {
     val session: StateFlow<PdfDocumentSession?>
