@@ -119,13 +119,13 @@ Adaptive Flow now records frame pacing through `Choreographer` on the main threa
 
 Both tasks reuse the Robolectric unit tests backing the Adaptive Flow manager and give fast feedback without running the full unit test suite.
 
-## Fallback mode shortcuts
+## Fallback modes
 
-When adaptive flow features misbehave in the field, engineers can toggle dedicated
-fallback shortcuts to keep the reader usable while investigating. The
-[fallback mode reference](docs/fallback-mode-shortcuts.md) explains each option—classic
-"safe" mode, simple legacy graphics, and the mid-run tutorial recovery flow—and
-outlines when to trigger them during debugging sessions.
+The reader automatically downgrades risky subsystems when repeated crashes or
+resource failures trip its safety guards. The [fallback mode
+reference](docs/fallback-modes.md) documents every recovery path, the
+conditions that enable it, how to reproduce each one manually, and the
+user-visible breadcrumbs/snackbars that confirm the fallback is active.
 
 ## Sample PDF fixture
 
