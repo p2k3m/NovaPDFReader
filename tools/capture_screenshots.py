@@ -22,6 +22,13 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from tools.testpoints import (
+    HarnessTestPoint,
+    TestPointCallback,
+    TestPointDispatcher,
+    parse_testpoint,
+)
+
 SAFE_PUNCTUATION = {".", "-", "_"}
 MULTIPLE_UNDERSCORES = re.compile(r"_+")
 MULTIPLE_PERIODS = re.compile(r"\.+")
@@ -648,12 +655,17 @@ class HarnessContext:
         self._sanitized_package_warning_emitted: bool = False
         self._system_crash_guidance_emitted: bool = False
         self._missing_instrumentation_guidance_emitted: bool = False
+        self.testpoints = TestPointDispatcher()
 
         if fallback_package:
             self._maybe_set_package(fallback_package, suppress_warning=True)
 
     def observe_line(self, line: str) -> None:
         stripped = line.strip()
+        parsed = parse_testpoint(stripped)
+        if parsed:
+            point, detail = parsed
+            self.testpoints.dispatch(point, detail)
         if "System has crashed" in stripped:
             self.system_crash_detected = True
         if stripped.startswith("INSTRUMENTATION_ABORTED") and "System has crashed" in stripped:
@@ -662,6 +674,12 @@ class HarnessContext:
             self.process_crash_detected = True
         if "Unable to find instrumentation info for" in stripped:
             self.missing_instrumentation_detected = True
+
+    def on_testpoint(self, point: HarnessTestPoint, callback: TestPointCallback) -> None:
+        self.testpoints.register(point, callback)
+
+    def on_any_testpoint(self, callback: TestPointCallback) -> None:
+        self.testpoints.register_any(callback)
 
     def maybe_emit_system_crash_guidance(self) -> None:
         if not self.system_crash_detected or self._system_crash_guidance_emitted:
