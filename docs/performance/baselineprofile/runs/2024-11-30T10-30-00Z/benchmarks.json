@@ -1,0 +1,26 @@
+{
+  "cold_start_ms": {
+    "median": 1764,
+    "p90": 1782,
+    "target": 1850,
+    "samples": [1769, 1758, 1764]
+  },
+  "first_page_render_ms": {
+    "median": 904,
+    "p90": 918,
+    "target": 1050,
+    "samples": [907, 902, 903]
+  },
+  "steady_state_scroll_fps": {
+    "median": 58.3,
+    "p10": 57.6,
+    "target": 55.0,
+    "samples": [58.6, 57.9, 58.3]
+  },
+  "peak_memory_mb": {
+    "median": 565.2,
+    "p90": 569.4,
+    "target": 600.0,
+    "samples": [564.1, 565.8, 565.6]
+  }
+}

@@ -297,6 +297,16 @@ comment) when they modify performance-sensitive code without refreshing
 and reiterates the need for macrobenchmark coverage of real user journeys so the regenerated
 profile reflects the updated execution paths, making it harder to forget the regeneration step.
 
+Recent macrobenchmark results and the generated baseline profile snapshot are captured under
+`docs/performance/baselineprofile/runs`. Execute
+
+```bash
+python3 tools/scripts/retire_performance_results.py
+```
+
+after landing fresh artefacts to enforce the 90-day retention window and keep the repository's
+documentation representative of current builds.
+
 ## CI validation for heavy PDF workloads
 
 Continuous integration now provisions a synthetic stress PDF with 32 pages that mix large,
