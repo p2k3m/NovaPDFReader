@@ -1,9 +1,11 @@
 package com.novapdf.reader.di
 
+import com.novapdf.reader.NonCachingBitmapCache
 import com.novapdf.reader.PageCacheKey
-import com.novapdf.reader.PdfViewerViewModel
 import com.novapdf.reader.TileCacheKey
 import com.novapdf.reader.ViewerBitmapCacheFactory
+import com.novapdf.reader.ViewerCachePolicyConfig
+import com.novapdf.reader.FractionalBitmapLruCache
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -11,13 +13,41 @@ import dagger.hilt.android.components.ViewModelComponent
 
 @Module
 @InstallIn(ViewModelComponent::class)
+object ViewerCachePolicyModule {
+
+    @Provides
+    fun provideViewerCachePolicyConfig(): ViewerCachePolicyConfig = ViewerCachePolicyConfig()
+}
+
+@Module
+@InstallIn(ViewModelComponent::class)
 object ViewerCacheModule {
 
     @Provides
-    fun providePageBitmapCacheFactory(): ViewerBitmapCacheFactory<PageCacheKey> =
-        PdfViewerViewModel.defaultPageBitmapCacheFactory()
+    fun providePageBitmapCacheFactory(
+        policyConfig: ViewerCachePolicyConfig,
+    ): ViewerBitmapCacheFactory<PageCacheKey> =
+        createFactory(policyConfig.pageBitmap)
 
     @Provides
-    fun provideTileBitmapCacheFactory(): ViewerBitmapCacheFactory<TileCacheKey> =
-        PdfViewerViewModel.defaultTileBitmapCacheFactory()
+    fun provideTileBitmapCacheFactory(
+        policyConfig: ViewerCachePolicyConfig,
+    ): ViewerBitmapCacheFactory<TileCacheKey> =
+        createFactory(policyConfig.tileBitmap)
+
+    private fun <K : Any> createFactory(
+        policy: ViewerCachePolicyConfig.BitmapCachePolicy,
+    ): ViewerBitmapCacheFactory<K> {
+        return when (policy.eviction) {
+            ViewerCachePolicyConfig.EvictionPolicy.LRU ->
+                ViewerBitmapCacheFactory { maxBytes, sizeCalculator ->
+                    FractionalBitmapLruCache(maxBytes, sizeCalculator)
+                }
+
+            ViewerCachePolicyConfig.EvictionPolicy.DISABLED ->
+                ViewerBitmapCacheFactory { _, sizeCalculator ->
+                    NonCachingBitmapCache(sizeCalculator)
+                }
+        }
+    }
 }
