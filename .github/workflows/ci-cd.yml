@@ -2708,6 +2708,8 @@ jobs:
           done
       - name: Install instrumentation harness for screenshots
         if: env.UNIT_TESTS_PASSED == 'true'
+        env:
+          PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
 
