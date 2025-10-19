@@ -579,12 +579,19 @@ class ScreenshotHarnessTest {
         if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
             return@runBlocking
         }
+        var thresholdError: Throwable? = null
         metricsRecorder?.finish()?.let { report ->
             publishPerformanceMetrics(report)
+            try {
+                enforcePerformanceThresholds(report)
+            } catch (error: Throwable) {
+                thresholdError = error
+            }
         }
         metricsRecorder = null
         cancelWorkManagerJobs()
         withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = false) }
+        thresholdError?.let { throw it }
     }
 
     @Test
@@ -632,9 +639,11 @@ class ScreenshotHarnessTest {
             }
 
             publishReadyFlags(readyFlags, readinessState)
+            metricsRecorder?.markScreenshotCaptureStarted()
 
             if (programmaticScreenshotsEnabled) {
                 captureProgrammaticScreenshot(doneFlags)
+                metricsRecorder?.markScreenshotCaptureFinished()
                 recordHarnessProgress(
                     HarnessProgressStep.COMPLETED,
                     "programmaticCapture=true"
@@ -651,6 +660,7 @@ class ScreenshotHarnessTest {
 
             val start = System.currentTimeMillis()
             val completedFlag = awaitScreenshotCompletionFlag(readyFlags, doneFlags, start)
+            metricsRecorder?.markScreenshotCaptureFinished()
             recordHarnessProgress(
                 HarnessProgressStep.SCREENSHOT_CAPTURED,
                 "flag=${completedFlag.absolutePath}"
@@ -930,12 +940,28 @@ class ScreenshotHarnessTest {
     private fun publishPerformanceMetrics(report: PerformanceMetricsReport) {
         val csv = buildString {
             appendLine("metric,value,unit,details")
+            appendLine("time_to_document_open,${report.timeToDocumentOpenMs},ms,")
             appendLine("time_to_first_page,${report.timeToFirstPageMs},ms,")
+            report.screenshotDurationMs?.let { duration ->
+                appendLine("screenshot_capture_duration,$duration,ms,")
+            }
             val peakBytes = report.peakTotalPssKb.toLong() * 1024L
             appendLine("peak_memory,${peakBytes},bytes,source=totalPss")
             appendLine(
                 "dropped_frames,${report.droppedFrames},frames,total_frames=${report.totalFrames}"
             )
+            report.droppedFramePercent?.let { percent ->
+                appendLine(
+                    "dropped_frame_percent," +
+                        "${String.format(Locale.US, "%.2f", percent)},percent,total_frames=${report.totalFrames}"
+                )
+            }
+            report.averageFps?.let { fps ->
+                appendLine(
+                    "average_fps," +
+                        "${String.format(Locale.US, "%.2f", fps)},fps,elapsed_ms=${report.elapsedMs}"
+                )
+            }
         }
         val directories = if (::handshakeCacheDirs.isInitialized && handshakeCacheDirs.isNotEmpty()) {
             handshakeCacheDirs
@@ -945,17 +971,104 @@ class ScreenshotHarnessTest {
         directories.forEach { directory ->
             val outputFile = File(directory, CacheFileNames.PERFORMANCE_METRICS_FILE)
             if (writeHandshakeFlag(outputFile, csv)) {
-                logHarnessInfo(
-                    "Wrote performance metrics to ${outputFile.absolutePath} " +
-                        "(timeToFirstPage=${report.timeToFirstPageMs}ms peakPss=${report.peakTotalPssKb}KiB " +
-                        "droppedFrames=${report.droppedFrames}/${report.totalFrames})"
-                )
+                val summary = buildString {
+                    append("Wrote performance metrics to ${outputFile.absolutePath} ")
+                    append(
+                        "(docOpen=${report.timeToDocumentOpenMs}ms firstPage=${report.timeToFirstPageMs}ms"
+                    )
+                    report.screenshotDurationMs?.let { duration ->
+                        append(" screenshot=${duration}ms")
+                    }
+                    append(" peakPss=${report.peakTotalPssKb}KiB")
+                    append(" dropped=${report.droppedFrames}/${report.totalFrames}")
+                    report.droppedFramePercent?.let { percent ->
+                        append(String.format(Locale.US, " (%.2f%%)", percent))
+                    }
+                    report.averageFps?.let { fps ->
+                        append(String.format(Locale.US, " avgFps=%.2f", fps))
+                    }
+                    append(')')
+                }
+                logHarnessInfo(summary)
             } else {
                 logHarnessWarn(
                     "Unable to write performance metrics to ${outputFile.absolutePath}"
                 )
             }
         }
+    }
+
+    private fun enforcePerformanceThresholds(report: PerformanceMetricsReport) {
+        val violations = mutableListOf<String>()
+
+        if (report.timeToDocumentOpenMs > MAX_TIME_TO_DOCUMENT_OPEN_MS) {
+            violations +=
+                "time_to_document_open=${report.timeToDocumentOpenMs}ms (threshold=${MAX_TIME_TO_DOCUMENT_OPEN_MS}ms)"
+        }
+        if (report.timeToFirstPageMs > MAX_TIME_TO_FIRST_PAGE_MS) {
+            violations +=
+                "time_to_first_page=${report.timeToFirstPageMs}ms (threshold=${MAX_TIME_TO_FIRST_PAGE_MS}ms)"
+        }
+        report.screenshotDurationMs?.let { duration ->
+            if (duration > MAX_SCREENSHOT_CAPTURE_MS) {
+                violations +=
+                    "screenshot_capture_duration=${duration}ms (threshold=${MAX_SCREENSHOT_CAPTURE_MS}ms)"
+            }
+        } ?: logHarnessInfo(
+            "Screenshot duration metric unavailable; skipping screenshot threshold evaluation"
+        )
+
+        val dropPercent = report.droppedFramePercent
+        if (dropPercent != null) {
+            if (dropPercent > MAX_DROPPED_FRAME_PERCENT) {
+                violations += String.format(
+                    Locale.US,
+                    "dropped_frame_percent=%.2f%% (threshold=%.2f%%)",
+                    dropPercent,
+                    MAX_DROPPED_FRAME_PERCENT,
+                )
+            }
+        } else {
+            logHarnessInfo("Frame metrics unavailable; skipping dropped frame threshold evaluation")
+        }
+
+        val averageFps = report.averageFps
+        if (averageFps != null) {
+            if (averageFps < MIN_AVERAGE_FPS) {
+                violations += String.format(
+                    Locale.US,
+                    "average_fps=%.2f (threshold=%.2f)",
+                    averageFps,
+                    MIN_AVERAGE_FPS,
+                )
+            }
+        } else {
+            logHarnessInfo("Frame metrics unavailable; skipping FPS threshold evaluation")
+        }
+
+        if (violations.isNotEmpty()) {
+            val message =
+                "Screenshot harness performance thresholds violated: ${violations.joinToString(separator = "; ")}"
+            val error = AssertionError(message)
+            publishHarnessFailureFlag("performance_threshold", error, fatal = false)
+            throw error
+        }
+
+        val summary = buildString {
+            append("Performance thresholds satisfied (docOpen=${report.timeToDocumentOpenMs}ms")
+            append(", firstPage=${report.timeToFirstPageMs}ms")
+            report.screenshotDurationMs?.let { duration ->
+                append(", screenshot=${duration}ms")
+            }
+            dropPercent?.let {
+                append(String.format(Locale.US, ", dropped=%.2f%%", it))
+            }
+            averageFps?.let {
+                append(String.format(Locale.US, ", avgFps=%.2f", it))
+            }
+            append(')')
+        }
+        logHarnessInfo(summary)
     }
 
     private fun cleanupFlags(deleteStatusArtifacts: Boolean) {
@@ -1448,6 +1561,7 @@ class ScreenshotHarnessTest {
                 false
             }
             if (!firstPageLogged && (state?.pageCount ?: 0) > 0) {
+                metricsRecorder?.markFirstPageParsed()
                 recordHarnessProgress(
                     HarnessProgressStep.PAGE_OPENED,
                     "page=${(state?.currentPage ?: 0) + 1}/${state?.pageCount}"
@@ -1469,7 +1583,7 @@ class ScreenshotHarnessTest {
                 throw error
             }
             if (documentReady) {
-                metricsRecorder?.markFirstPageRendered()
+                metricsRecorder?.markDocumentOpened()
                 metricsRecorder?.sample()
                 logHarnessInfo(
                     "Thousand-page document finished loading with pageCount=${state?.pageCount}"
@@ -2155,6 +2269,11 @@ class ScreenshotHarnessTest {
         private val MAX_SCREENSHOT_COMPLETION_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(12)
         private const val FLAG_OBSERVER_INITIAL_BACKOFF_MS = 250L
         private const val FLAG_OBSERVER_MAX_BACKOFF_MS = 5_000L
+        private const val MAX_TIME_TO_DOCUMENT_OPEN_MS = 120_000L
+        private const val MAX_TIME_TO_FIRST_PAGE_MS = 45_000L
+        private const val MAX_SCREENSHOT_CAPTURE_MS = 60_000L
+        private const val MAX_DROPPED_FRAME_PERCENT = 15.0
+        private const val MIN_AVERAGE_FPS = 30.0
         // Opening a thousand-page stress document can take a while on CI devices, so give the
         // viewer ample time to finish rendering before failing the harness run.
         private const val DOCUMENT_OPEN_TIMEOUT = 180_000L
