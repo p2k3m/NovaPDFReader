@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.CancellationSignal
 import android.os.Looper
+import android.os.Process
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.os.Trace
@@ -34,6 +35,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.ensureActive
@@ -48,6 +50,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withTimeout
 import android.print.PageRange
 import android.print.PrintAttributes
@@ -69,6 +72,8 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 import java.net.HttpURLConnection
@@ -209,7 +214,8 @@ class PdfDocumentRepository(
     private val appContext: Context = context.applicationContext
     private val contentResolver: ContentResolver = context.contentResolver
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val pdfDispatcher: CoroutineDispatcher = ioDispatcher.limitedParallelism(1)
+    private val pdfDispatcherHandle = createPdfDispatcher(ioDispatcher)
+    private val pdfDispatcher: CoroutineDispatcher = pdfDispatcherHandle.dispatcher
     private val renderScope = CoroutineScope(Job() + pdfDispatcher)
     private val repairedDocumentDir by lazy {
         resolveCacheDirectory(
@@ -1124,6 +1130,7 @@ class PdfDocumentRepository(
         }
         cleanupJob.invokeOnCompletion {
             renderScope.cancel()
+            pdfDispatcherHandle.shutdown?.invoke()
         }
     }
 
@@ -1371,6 +1378,54 @@ class PdfDocumentRepository(
         val cause = cause ?: return false
         return cause.isLikelyMalformedPageError()
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun createPdfDispatcher(base: CoroutineDispatcher): DispatcherHandle {
+        return try {
+            val threadFactory = ThreadFactory { runnable ->
+                Thread({
+                    try {
+                        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                    } catch (error: Throwable) {
+                        NovaLog.w(TAG, "Unable to set PDF thread priority", error)
+                    }
+                    runnable.run()
+                }, "PdfDocumentSerial").apply {
+                    priority = Thread.NORM_PRIORITY
+                }
+            }
+            val executor = Executors.newSingleThreadExecutor(threadFactory).asCoroutineDispatcher()
+            val limited = try {
+                executor.limitedParallelism(1)
+            } catch (unsupported: UnsupportedOperationException) {
+                executor.close()
+                throw unsupported
+            }
+            DispatcherHandle(limited) { executor.close() }
+        } catch (error: Throwable) {
+            NovaLog.w(
+                TAG,
+                "Unable to create dedicated PDF dispatcher; falling back to base dispatcher",
+                error,
+            )
+            val fallback = try {
+                base.limitedParallelism(1)
+            } catch (unsupported: UnsupportedOperationException) {
+                NovaLog.w(
+                    TAG,
+                    "Base dispatcher does not support limitedParallelism; using Dispatchers.IO",
+                    unsupported,
+                )
+                Dispatchers.IO.limitedParallelism(1)
+            }
+            DispatcherHandle(fallback, null)
+        }
+    }
+
+    private data class DispatcherHandle(
+        val dispatcher: CoroutineDispatcher,
+        val shutdown: (() -> Unit)? = null,
+    )
 
     private fun ensureWorkerThread() {
         val mainLooper = Looper.getMainLooper()

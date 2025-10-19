@@ -184,8 +184,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
@@ -200,15 +199,7 @@ private const val ONBOARDING_PREFS = "nova_onboarding_prefs"
 private const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
 private val THUMBNAIL_WIDTH = 96.dp
 private val THUMBNAIL_HEIGHT = 128.dp
-private const val PAGE_RENDER_PARALLELISM = 2
-private const val THUMBNAIL_PARALLELISM = 2
 private const val VIEWPORT_WIDTH_DEBOUNCE_MS = 120L
-
-@OptIn(ExperimentalCoroutinesApi::class)
-private val pageRenderDispatcher = Dispatchers.IO.limitedParallelism(PAGE_RENDER_PARALLELISM)
-
-@OptIn(ExperimentalCoroutinesApi::class)
-private val thumbnailDispatcher = Dispatchers.IO.limitedParallelism(THUMBNAIL_PARALLELISM)
 
 @Suppress("OPT_IN_USAGE", "OPT_IN_USAGE_ERROR")
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -263,6 +254,7 @@ fun PdfViewerRoute(
             onToggleDevDiagnostics = { viewModel.setDevDiagnosticsEnabled(it) },
             onToggleDevCaches = { viewModel.setDevCachesEnabled(it) },
             onToggleDevArtificialDelay = { viewModel.setDevArtificialDelayEnabled(it) },
+            renderDispatcher = viewModel.renderThreadDispatcher,
             dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         )
     }
@@ -302,6 +294,7 @@ fun PdfViewerScreen(
     onToggleDevDiagnostics: (Boolean) -> Unit,
     onToggleDevCaches: (Boolean) -> Unit,
     onToggleDevArtificialDelay: (Boolean) -> Unit,
+    renderDispatcher: CoroutineDispatcher,
     dynamicColorSupported: Boolean
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -509,6 +502,7 @@ fun PdfViewerScreen(
                     onToggleBookmark = onToggleBookmark,
                     renderPage = renderPage,
                     requestPageSize = requestPageSize,
+                    renderDispatcher = renderDispatcher,
                     onViewportWidthChanged = onViewportWidthChanged,
                     onPrefetchPages = onPrefetchPages,
                     onOpenDevOptions = { selectedDestination = MainDestination.DevOptions },
@@ -802,6 +796,7 @@ private fun PdfViewerDestinationContainer(
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
+    renderDispatcher: CoroutineDispatcher,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
     onOpenDevOptions: () -> Unit,
@@ -849,6 +844,7 @@ private fun PdfViewerDestinationContainer(
                 onToggleBookmark = onToggleBookmark,
                 renderPage = renderPage,
                 requestPageSize = requestPageSize,
+                renderDispatcher = renderDispatcher,
                 onViewportWidthChanged = onViewportWidthChanged,
                 onPrefetchPages = onPrefetchPages,
                 layoutAnimationsEnabled = layoutAnimationsEnabled,
@@ -1415,6 +1411,7 @@ private fun ReaderContent(
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
+    renderDispatcher: CoroutineDispatcher,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
     layoutAnimationsEnabled: Boolean,
@@ -1429,6 +1426,7 @@ private fun ReaderContent(
         onToggleBookmark = onToggleBookmark,
         renderPage = renderPage,
         requestPageSize = requestPageSize,
+        renderDispatcher = renderDispatcher,
         onViewportWidthChanged = onViewportWidthChanged,
         onPrefetchPages = onPrefetchPages,
         animationsEnabled = layoutAnimationsEnabled,
@@ -2878,6 +2876,7 @@ private fun PdfPager(
     onToggleBookmark: (Int) -> Unit,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
+    renderDispatcher: CoroutineDispatcher,
     onViewportWidthChanged: (Int) -> Unit,
     onPrefetchPages: (List<Int>, Int) -> Unit,
     animationsEnabled: Boolean,
@@ -3055,6 +3054,7 @@ private fun PdfPager(
                         state = state,
                         renderPage = latestRenderPage,
                         requestPageSize = latestRequestPageSize,
+                        renderDispatcher = renderDispatcher,
                         onStrokeFinished = latestStrokeFinished,
                         animationsEnabled = animationsEnabled
                     )
@@ -3083,6 +3083,7 @@ private fun PdfPager(
                 state = state,
                 lazyListState = lazyListState,
                 renderPage = latestRenderPage,
+                renderDispatcher = renderDispatcher,
                 onToggleBookmark = latestBookmarkToggle,
                 listStartIndexOffset = headerCount,
                 modifier = Modifier
@@ -3113,6 +3114,7 @@ private fun ThumbnailStrip(
     state: PdfViewerUiState,
     lazyListState: LazyListState,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
+    renderDispatcher: CoroutineDispatcher,
     onToggleBookmark: (Int) -> Unit,
     listStartIndexOffset: Int,
     modifier: Modifier = Modifier
@@ -3208,6 +3210,7 @@ private fun ThumbnailStrip(
                             isSelected = pageIndex == selectedPage,
                             isBookmarked = state.bookmarks.contains(pageIndex),
                             renderPage = renderPage,
+                            renderDispatcher = renderDispatcher,
                             onSelect = {
                                 selectedPage = pageIndex
                                 coroutineScope.launch {
@@ -3230,6 +3233,7 @@ private fun ThumbnailItem(
     isSelected: Boolean,
     isBookmarked: Boolean,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
+    renderDispatcher: CoroutineDispatcher,
     onSelect: () -> Unit,
     onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier
@@ -3246,7 +3250,7 @@ private fun ThumbnailItem(
             thumbnail = null
             return@LaunchedEffect
         }
-        val rendered = withContext(thumbnailDispatcher) {
+        val rendered = withContext(renderDispatcher) {
             latestRender(pageIndex, targetWidthPx, RenderWorkQueue.Priority.THUMBNAIL)
         }
         // As with the main page bitmaps we avoid recycling the previous thumbnail here to
@@ -3367,6 +3371,7 @@ private fun PdfPageItem(
     state: PdfViewerUiState,
     renderPage: suspend (Int, Int, RenderWorkQueue.Priority) -> Bitmap?,
     requestPageSize: suspend (Int) -> Size?,
+    renderDispatcher: CoroutineDispatcher,
     onStrokeFinished: (AnnotationCommand) -> Unit,
     animationsEnabled: Boolean
 ) {
@@ -3409,14 +3414,14 @@ private fun PdfPageItem(
             }
             if (widthPx <= 0) return@LaunchedEffect
             if (isMalformed) {
-                val size = withContext(pageRenderDispatcher) { latestRequest(pageIndex) }
+                val size = withContext(renderDispatcher) { latestRequest(pageIndex) }
                 pageSize = size
                 pageBitmap = null
                 isLoading = false
                 return@LaunchedEffect
             }
             isLoading = true
-            val (size, rendered) = withContext(pageRenderDispatcher) {
+            val (size, rendered) = withContext(renderDispatcher) {
                 val requested = latestRequest(pageIndex)
                 val priority = when {
                     pageIndex == state.currentPage -> RenderWorkQueue.Priority.VISIBLE_PAGE

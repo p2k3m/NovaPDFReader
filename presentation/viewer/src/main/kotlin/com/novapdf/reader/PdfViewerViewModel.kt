@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.print.PrintAttributes
 import android.print.PrintManager
@@ -53,11 +54,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -70,7 +74,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.math.min
@@ -366,17 +373,27 @@ open class PdfViewerViewModel @Inject constructor(
     private val preferencesUseCase = useCases.preferences
     private val initialNightMode: Boolean = isNightModeEnabled()
 
-    private val documentParallelism = cachePolicyConfig.documentLoadParallelism.coerceAtLeast(1)
+    private val renderDispatcherHandle = createRenderDispatcher(dispatchers.io)
+    private val renderDispatcher: CoroutineDispatcher = renderDispatcherHandle.dispatcher
+    private val documentDispatcher: CoroutineDispatcher = renderDispatcher
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val documentDispatcher = dispatchers.io.limitedParallelism(documentParallelism)
+    private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, parallelism = 1)
+    internal val renderThreadDispatcher: CoroutineDispatcher
+        get() = renderDispatcher
 
-    private val renderParallelism = cachePolicyConfig.renderParallelism.coerceAtLeast(1)
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val renderDispatcher = dispatchers.io.limitedParallelism(renderParallelism)
-
-    private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, renderParallelism)
+    init {
+        val requestedDocument = cachePolicyConfig.documentLoadParallelism
+        val requestedRender = cachePolicyConfig.renderParallelism
+        if (requestedDocument != 1 || requestedRender != 1) {
+            NovaLog.w(
+                TAG,
+                "Viewer parallelism overrides ignored; enforcing serial render thread",
+                null,
+                field("requestedDocumentParallelism", requestedDocument),
+                field("requestedRenderParallelism", requestedRender),
+            )
+        }
+    }
     private val processLifecycleOwner = runCatching { ProcessLifecycleOwner.get() }.getOrNull()
     @Volatile
     private var appInForeground: Boolean = true
@@ -1897,6 +1914,7 @@ open class PdfViewerViewModel @Inject constructor(
         devArtificialDelayEnabled = false
         artificialDelayHandler.removeCallbacks(artificialDelayRunnable)
         clearRenderCaches()
+        renderDispatcherHandle.shutdown?.invoke()
     }
 
     private fun isNightModeEnabled(): Boolean {
@@ -1970,6 +1988,54 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun createRenderDispatcher(base: CoroutineDispatcher): DispatcherHandle {
+        return try {
+            val threadFactory = ThreadFactory { runnable ->
+                Thread({
+                    try {
+                        Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                    } catch (error: Throwable) {
+                        NovaLog.w(TAG, "Unable to set render thread priority", error)
+                    }
+                    runnable.run()
+                }, "PdfRenderSerial").apply {
+                    priority = Thread.NORM_PRIORITY
+                }
+            }
+            val executor = Executors.newSingleThreadExecutor(threadFactory).asCoroutineDispatcher()
+            val limited = try {
+                executor.limitedParallelism(1)
+            } catch (unsupported: UnsupportedOperationException) {
+                executor.close()
+                throw unsupported
+            }
+            DispatcherHandle(limited) { executor.close() }
+        } catch (error: Throwable) {
+            NovaLog.w(
+                TAG,
+                "Unable to create dedicated render dispatcher; falling back to base dispatcher",
+                error,
+            )
+            val fallback = try {
+                base.limitedParallelism(1)
+            } catch (unsupported: UnsupportedOperationException) {
+                NovaLog.w(
+                    TAG,
+                    "Base dispatcher does not support limitedParallelism; using Dispatchers.IO",
+                    unsupported,
+                )
+                Dispatchers.IO.limitedParallelism(1)
+            }
+            DispatcherHandle(fallback, null)
+        }
+    }
+
+    private data class DispatcherHandle(
+        val dispatcher: CoroutineDispatcher,
+        val shutdown: (() -> Unit)? = null,
+    )
+
     @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
     fun dumpRuntimeDiagnostics() {
         viewModelScope.launch(dispatchers.io) {
@@ -1994,7 +2060,7 @@ open class PdfViewerViewModel @Inject constructor(
             NovaLog.i(
                 TAG,
                 "Render queue snapshot",
-                field("parallelism", renderParallelism),
+                field("parallelism", 1),
                 field("active", renderStats.active),
                 field("visibleQueued", renderStats.visible),
                 field("nearbyQueued", renderStats.nearby),
