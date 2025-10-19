@@ -12,10 +12,15 @@ import java.lang.ref.WeakReference
 import kotlin.math.max
 
 internal data class PerformanceMetricsReport(
+    val timeToDocumentOpenMs: Long,
     val timeToFirstPageMs: Long,
+    val screenshotDurationMs: Long?,
     val peakTotalPssKb: Int,
     val totalFrames: Int,
     val droppedFrames: Int,
+    val elapsedMs: Long,
+    val averageFps: Double?,
+    val droppedFramePercent: Double?,
 )
 
 internal class PerformanceMetricsRecorder(
@@ -35,18 +40,24 @@ internal class PerformanceMetricsRecorder(
     private var trackedActivityRef: WeakReference<Activity>? = null
     private var monitoring: Boolean = false
     private var startTimeMs: Long = 0L
+    private var timeToDocumentOpenMs: Long? = null
     private var timeToFirstPageMs: Long? = null
     private var peakPssKb: Int = 0
     private var totalFrames: Int = 0
     private var droppedFrames: Int = 0
+    private var screenshotStartMs: Long? = null
+    private var screenshotDurationMs: Long? = null
 
     fun start(scenario: ActivityScenario<out Activity>) {
         monitoring = true
         startTimeMs = clock()
         timeToFirstPageMs = null
+        timeToDocumentOpenMs = null
         peakPssKb = sampleProcessPss()
         totalFrames = 0
         droppedFrames = 0
+        screenshotStartMs = null
+        screenshotDurationMs = null
         frameMetricsAggregator?.reset()
         scenario.onActivity { activity ->
             trackedActivityRef = WeakReference(activity)
@@ -61,11 +72,33 @@ internal class PerformanceMetricsRecorder(
         peakPssKb = max(peakPssKb, sampleProcessPss())
     }
 
-    fun markFirstPageRendered() {
+    fun markFirstPageParsed() {
         if (!monitoring || timeToFirstPageMs != null) {
             return
         }
         timeToFirstPageMs = clock() - startTimeMs
+    }
+
+    fun markDocumentOpened() {
+        if (!monitoring || timeToDocumentOpenMs != null) {
+            return
+        }
+        timeToDocumentOpenMs = clock() - startTimeMs
+    }
+
+    fun markScreenshotCaptureStarted() {
+        if (!monitoring) {
+            return
+        }
+        screenshotStartMs = clock()
+    }
+
+    fun markScreenshotCaptureFinished() {
+        if (!monitoring) {
+            return
+        }
+        val start = screenshotStartMs ?: return
+        screenshotDurationMs = clock() - start
     }
 
     fun finish(): PerformanceMetricsReport? {
@@ -77,11 +110,28 @@ internal class PerformanceMetricsRecorder(
         collectFrameMetrics()
         val elapsed = clock() - startTimeMs
         val resolvedTimeToFirstPage = timeToFirstPageMs ?: elapsed
+        val resolvedTimeToDocumentOpen = timeToDocumentOpenMs ?: elapsed
+        val screenshotElapsed = screenshotDurationMs
+        val averageFps = if (elapsed > 0 && totalFrames > 0) {
+            totalFrames.toDouble() / (elapsed.toDouble() / 1000.0)
+        } else {
+            null
+        }
+        val droppedPercent = if (totalFrames > 0) {
+            (droppedFrames.toDouble() / totalFrames.toDouble()) * 100.0
+        } else {
+            null
+        }
         return PerformanceMetricsReport(
+            timeToDocumentOpenMs = resolvedTimeToDocumentOpen,
             timeToFirstPageMs = resolvedTimeToFirstPage,
+            screenshotDurationMs = screenshotElapsed,
             peakTotalPssKb = peakPssKb,
             totalFrames = totalFrames,
             droppedFrames = droppedFrames,
+            elapsedMs = elapsed,
+            averageFps = averageFps,
+            droppedFramePercent = droppedPercent,
         )
     }
 
