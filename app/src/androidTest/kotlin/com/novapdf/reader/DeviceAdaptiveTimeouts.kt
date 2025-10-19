@@ -3,6 +3,8 @@ package com.novapdf.reader
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import com.novapdf.reader.logging.LogField
+import com.novapdf.reader.logging.field
 import kotlin.math.max
 import kotlin.math.min
 
@@ -16,6 +18,16 @@ class DeviceAdaptiveTimeouts private constructor(
     private val lowRamDevice: Boolean,
     private val emulator: Boolean,
 ) {
+
+    fun toLogFields(): List<LogField> {
+        return listOf(
+            field("deviceTotalMemBytes", totalMemBytes),
+            field("deviceAvailMemBytes", availMemBytes),
+            field("deviceLowMemory", lowMemory),
+            field("deviceLowRam", lowRamDevice),
+            field("deviceEmulator", emulator),
+        )
+    }
 
     fun scaleTimeout(
         base: Long,

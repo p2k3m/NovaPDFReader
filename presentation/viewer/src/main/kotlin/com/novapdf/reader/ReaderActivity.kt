@@ -1,8 +1,10 @@
 package com.novapdf.reader
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -32,6 +34,8 @@ import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.FallbackMode
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
+import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -196,13 +200,57 @@ open class ReaderActivity : ComponentActivity() {
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun observeDocumentStateForTest(listener: (PdfViewerUiState) -> Unit): Closeable {
-        listener(viewModel.uiState.value)
+        var lastLoggedHarnessState: PdfViewerUiState? = null
+
+        fun logHarnessState(event: String, state: PdfViewerUiState) {
+            val previous = lastLoggedHarnessState
+            if (previous != null && previous == state) {
+                return
+            }
+            lastLoggedHarnessState = state
+            val fields = arrayOf(
+                field("module", "app"),
+                field("timestampMs", System.currentTimeMillis()),
+                field("source", event),
+                field("documentIdHash", state.documentId?.hashCode()),
+                field("pageIndex", state.currentPage),
+                field("pageNumber", state.currentPage + 1),
+                field("pageCount", state.pageCount),
+                field("documentStatus", state.documentStatus.javaClass.simpleName),
+                field("renderProgress", state.renderProgress.javaClass.simpleName),
+                field("uiUnderLoad", state.uiUnderLoad),
+                field("renderActive", state.renderQueueStats.active),
+                field("renderQueued", state.renderQueueStats.totalQueued),
+                field("bitmapBytes", state.bitmapMemory.currentBytes),
+                field("bitmapLevel", state.bitmapMemory.level.name),
+                field("searchIndexing", state.searchIndexing.javaClass.simpleName),
+                field("deviceApi", Build.VERSION.SDK_INT),
+                field("deviceModel", Build.MODEL ?: "unknown"),
+                field("deviceManufacturer", Build.MANUFACTURER ?: "unknown"),
+                field("testHarness", isRunningInTestHarness()),
+            )
+            NovaLog.i(HARNESS_LOG_TAG, "Viewer state emission", fields)
+        }
+
+        val initial = viewModel.uiState.value
+        logHarnessState("initial", initial)
+        listener(initial)
         val job = lifecycleScope.launch {
             viewModel.uiState.collect { state ->
+                logHarnessState("update", state)
                 listener(state)
             }
         }
         return Closeable { job.cancel() }
+    }
+
+    private fun isRunningInTestHarness(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityManager.isRunningInUserTestHarness()
+        } else {
+            @Suppress("DEPRECATION")
+            ActivityManager.isRunningInTestHarness()
+        }
     }
 
     private fun setupLegacyUi() {
@@ -372,5 +420,8 @@ open class ReaderActivity : ComponentActivity() {
             )
             installMethod.invoke(null, this)
         }
+    }
+    private companion object {
+        private const val HARNESS_LOG_TAG = "HarnessViewerState"
     }
 }
