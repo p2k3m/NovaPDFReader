@@ -160,7 +160,7 @@ private class HarnessPhaseMetricsSession(
     }.getOrNull()
 }
 
-internal inline fun <T> runHarnessEntry(
+internal fun <T> runHarnessEntry(
     component: String,
     operation: String,
     block: () -> T,
