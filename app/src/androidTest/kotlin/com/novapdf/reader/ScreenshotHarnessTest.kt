@@ -21,7 +21,9 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.novapdf.reader.CacheFileNames
+import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
+import com.novapdf.reader.logging.field
 import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.util.sanitizeCacheFileName
@@ -81,6 +83,20 @@ class ScreenshotHarnessTest {
         onFailure = { message, error ->
             logHarnessError(message, error)
             publishHarnessFailureFlag(message, error)
+        },
+        onLifecycleChange = { event, description ->
+            when (event) {
+                HarnessTestWatcher.LifecycleEvent.STARTED -> {
+                    currentTestDescription = description.displayName
+                    lastProgressStep = null
+                    lastLoggedUiState = null
+                }
+                HarnessTestWatcher.LifecycleEvent.FINISHED -> {
+                    currentTestDescription = null
+                    lastProgressStep = null
+                    lastLoggedUiState = null
+                }
+            }
         }
     )
 
@@ -113,9 +129,22 @@ class ScreenshotHarnessTest {
     private var failureFlagPublished: Boolean = false
     private var crashFlagPublished: Boolean = false
     private var screenshotCompletionTimeoutMs: Long = DEFAULT_SCREENSHOT_COMPLETION_TIMEOUT_MS
+    private var currentTestDescription: String? = null
+    private var lastProgressStep: HarnessProgressStep? = null
+    private var lastLoggedUiState: PdfViewerUiState? = null
+    private val staticDeviceFields: List<LogField> by lazy {
+        listOf(
+            field("deviceApi", Build.VERSION.SDK_INT),
+            field("deviceModel", Build.MODEL ?: "unknown"),
+            field("deviceManufacturer", Build.MANUFACTURER ?: "unknown"),
+            field("deviceProduct", Build.PRODUCT ?: "unknown"),
+        )
+    }
 
     @Before
     fun setUp() = runBlocking {
+        lastLoggedUiState = null
+        lastProgressStep = null
         try {
             hiltRule.inject()
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
@@ -400,6 +429,7 @@ class ScreenshotHarnessTest {
         var registration: Closeable? = null
         activityRule.scenario.onActivity { activity ->
             registration = activity.observeDocumentStateForTest { state ->
+                logHarnessStateChange("activity_observer", state)
                 trySend(state).isSuccess
             }
         }
@@ -416,7 +446,64 @@ class ScreenshotHarnessTest {
         activityRule.scenario.onActivity { activity ->
             snapshot = activity.currentDocumentStateForTest()
         }
+        snapshot?.let { logHarnessStateChange("snapshot", it) }
         return snapshot
+    }
+
+    private fun logHarnessStateChange(source: String, state: PdfViewerUiState) {
+        val previous = lastLoggedUiState
+        if (previous != null && previous == state) {
+            return
+        }
+        lastLoggedUiState = state
+
+        val deltas = mutableListOf<String>()
+        if (previous?.currentPage != state.currentPage) deltas += "page"
+        if (previous?.pageCount != state.pageCount) deltas += "pageCount"
+        if (previous?.documentStatus != state.documentStatus) deltas += "documentStatus"
+        if (previous?.renderProgress != state.renderProgress) deltas += "renderProgress"
+        if (previous?.uiUnderLoad != state.uiUnderLoad) deltas += "uiUnderLoad"
+        if (previous?.renderQueueStats != state.renderQueueStats) deltas += "renderQueue"
+        if (previous?.bitmapMemory != state.bitmapMemory) deltas += "bitmap"
+        if (previous?.malformedPages != state.malformedPages) deltas += "malformedPages"
+        if (previous?.searchIndexing != state.searchIndexing) deltas += "searchIndexing"
+
+        val rawDocumentId = state.documentId ?: if (::documentUri.isInitialized) {
+            documentUri.toString()
+        } else {
+            null
+        }
+        val sanitizedDocumentId = rawDocumentId?.let { value ->
+            sanitizeCacheFileName(
+                raw = value,
+                fallback = value,
+                label = "state_log_document",
+            ).ifEmpty { value }
+        }
+
+        val fields = mutableListOf<LogField>()
+        fields += field("source", source)
+        fields += field("documentId", sanitizedDocumentId)
+        fields += field("pageIndex", state.currentPage)
+        fields += field("pageNumber", state.currentPage + 1)
+        fields += field("pageCount", state.pageCount)
+        fields += field("documentStatus", state.documentStatus.javaClass.simpleName)
+        fields += field("renderProgress", state.renderProgress.javaClass.simpleName)
+        fields += field("uiUnderLoad", state.uiUnderLoad)
+        fields += field("delta", if (deltas.isEmpty()) "none" else deltas.joinToString(","))
+        fields += field("renderActive", state.renderQueueStats.active)
+        fields += field("renderQueued", state.renderQueueStats.totalQueued)
+        fields += field("bitmapBytes", state.bitmapMemory.currentBytes)
+        fields += field("bitmapLevel", state.bitmapMemory.level.name)
+        fields += field("malformedPages", state.malformedPages.size)
+        fields += field("annotations", state.activeAnnotations.size)
+        fields += field("bookmarks", state.bookmarks.size)
+        fields += field("searchResults", state.searchResults.size)
+        fields += field("searchIndexing", state.searchIndexing.javaClass.simpleName)
+        fields += field("devDiagnostics", state.devDiagnosticsEnabled)
+        fields += field("fallbackMode", state.fallbackMode.name)
+
+        logHarnessInfo("Harness viewer state change", *fields.toTypedArray())
     }
 
     private suspend fun confirmInteractiveUiState(
@@ -1654,7 +1741,13 @@ class ScreenshotHarnessTest {
                 append(sanitizedDetail)
             }
         }
-        logHarnessInfo(message)
+        lastProgressStep = step
+        val fields = mutableListOf<LogField>()
+        fields += field("progressStep", step.label)
+        if (!sanitizedDetail.isNullOrBlank()) {
+            fields += field("progressDetail", sanitizedDetail)
+        }
+        logHarnessInfo(message, *fields.toTypedArray())
         val directories = resolveStatusDirectories()
         if (directories.isEmpty()) {
             return
@@ -1926,6 +2019,91 @@ class ScreenshotHarnessTest {
         FAILURE("failure"),
     }
 
+    private fun harnessFields(vararg extra: LogField): Array<LogField> {
+        val fields = mutableListOf<LogField>()
+        fields += field("module", "harness")
+        fields += field("timestampMs", System.currentTimeMillis())
+        currentTestDescription?.let { testName -> fields += field("test", testName) }
+        lastProgressStep?.let { step -> fields += field("harnessStep", step.label) }
+        fields.addAll(staticDeviceFields)
+        if (::deviceTimeouts.isInitialized) {
+            fields.addAll(deviceTimeouts.toLogFields())
+        }
+        if (::device.isInitialized) {
+            fields += field("deviceOrientation", device.displayRotation)
+        }
+        fields += field("programmaticScreenshots", programmaticScreenshotsEnabled)
+        extra.forEach { field -> fields += field }
+        return fields.toTypedArray()
+    }
+
+    private fun renderHarnessConsoleMessage(message: String, fields: Array<LogField>): String {
+        if (fields.isEmpty()) {
+            return message
+        }
+        return buildString(message.length + fields.size * 16) {
+            append(message)
+            fields.forEach { field ->
+                append(" | ")
+                append(field.render())
+            }
+        }
+    }
+
+    private fun printHarnessConsole(message: String, fields: Array<LogField>, error: Throwable?) {
+        val formatted = renderHarnessConsoleMessage(message, fields)
+        if (error != null) {
+            println("$TAG: $formatted\n${android.util.Log.getStackTraceString(error)}")
+        } else {
+            println("$TAG: $formatted")
+        }
+    }
+
+    private fun logHarnessInfo(message: String, vararg fields: LogField) {
+        val enriched = harnessFields(*fields)
+        NovaLog.i(tag = TAG, message = message, fields = enriched)
+        printHarnessConsole(message, enriched, null)
+    }
+
+    private fun logHarnessWarn(message: String, error: Throwable? = null, vararg fields: LogField) {
+        val enriched = harnessFields(*fields)
+        NovaLog.w(tag = TAG, message = message, throwable = error, fields = enriched)
+        printHarnessConsole(message, enriched, error)
+    }
+
+    private fun logHarnessError(message: String, error: Throwable, vararg fields: LogField) {
+        val enriched = harnessFields(*fields)
+        NovaLog.e(tag = TAG, message = message, throwable = error, fields = enriched)
+        printHarnessConsole(message, enriched, error)
+    }
+
+    class HarnessTestWatcher(
+        private val onEvent: (String) -> Unit,
+        private val onFailure: (String, Throwable) -> Unit,
+        private val onLifecycleChange: (LifecycleEvent, Description) -> Unit = { _, _ -> },
+    ) : TestWatcher() {
+
+        enum class LifecycleEvent { STARTED, FINISHED }
+
+        override fun starting(description: Description) {
+            onLifecycleChange(LifecycleEvent.STARTED, description)
+            onEvent("Starting ${description.displayName}")
+        }
+
+        override fun succeeded(description: Description) {
+            onEvent("Completed ${description.displayName}")
+        }
+
+        override fun failed(e: Throwable, description: Description) {
+            onFailure("Failed ${description.displayName}", e)
+        }
+
+        override fun finished(description: Description) {
+            onEvent("Finished ${description.displayName}")
+            onLifecycleChange(LifecycleEvent.FINISHED, description)
+        }
+    }
+
     private companion object {
         private const val HARNESS_ARGUMENT = "runScreenshotHarness"
         private const val PROGRAMMATIC_SCREENSHOTS_ARGUMENT = "captureProgrammaticScreenshots"
@@ -1946,46 +2124,5 @@ class ScreenshotHarnessTest {
         private const val PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT = 80f
         private const val TAG = "ScreenshotHarness"
         private val PACKAGE_NAME_PATTERN = Regex("^[A-Za-z0-9._]+$")
-    }
-
-    private fun logHarnessInfo(message: String) {
-        NovaLog.i(TAG, message)
-        println("$TAG: $message")
-    }
-
-    private fun logHarnessWarn(message: String, error: Throwable? = null) {
-        if (error != null) {
-            NovaLog.w(tag = TAG, message = message, throwable = error)
-            println("$TAG: $message\n${android.util.Log.getStackTraceString(error)}")
-        } else {
-            NovaLog.w(tag = TAG, message = message)
-            println("$TAG: $message")
-        }
-    }
-
-    private fun logHarnessError(message: String, error: Throwable) {
-        NovaLog.e(tag = TAG, message = message, throwable = error)
-        println("$TAG: $message\n${android.util.Log.getStackTraceString(error)}")
-    }
-
-    class HarnessTestWatcher(
-        private val onEvent: (String) -> Unit,
-        private val onFailure: (String, Throwable) -> Unit,
-    ) : TestWatcher() {
-        override fun starting(description: Description) {
-            onEvent("Starting ${description.displayName}")
-        }
-
-        override fun succeeded(description: Description) {
-            onEvent("Completed ${description.displayName}")
-        }
-
-        override fun failed(e: Throwable, description: Description) {
-            onFailure("Failed ${description.displayName}", e)
-        }
-
-        override fun finished(description: Description) {
-            onEvent("Finished ${description.displayName}")
-        }
     }
 }
