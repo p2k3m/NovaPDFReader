@@ -1,10 +1,10 @@
 package com.novapdf.reader.di
 
 import android.content.Context
+import com.novapdf.reader.HarnessBlackholeHttpStorageClient
 import com.novapdf.reader.HarnessOverrideRegistry
 import com.novapdf.reader.data.remote.DelegatingStorageClient
 import com.novapdf.reader.data.remote.FileStorageClient
-import com.novapdf.reader.data.remote.HttpStorageClient
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.data.remote.di.StorageModule
 import dagger.Module
@@ -32,7 +32,9 @@ object HarnessStorageModule {
     @Provides
     @Singleton
     @IntoSet
-    fun provideHttpStorageClient(httpStorageClient: HttpStorageClient): StorageClient = httpStorageClient
+    fun provideHttpStorageClient(
+        blackholeHttpStorageClient: HarnessBlackholeHttpStorageClient,
+    ): StorageClient = blackholeHttpStorageClient
 
     @Provides
     @Singleton
