@@ -2955,11 +2955,11 @@ jobs:
           HARNESS_RUNNER="dagger.hilt.android.testing.HiltTestRunner"
           HARNESS_COMPONENT=""
 
-  resolve_instrumentation_component() {
-    local package_name="$1"
-    local runner_name="$2"
+          resolve_instrumentation_component() {
+            local package_name="$1"
+            local runner_name="$2"
 
-    local listing
+            local listing
             if ! listing=$(adb shell pm list instrumentation 2>/dev/null | tr -d '\r'); then
               return 1
             fi
@@ -2975,20 +2975,20 @@ jobs:
             fi
 
             return 1
-  }
+          }
 
-  wait_for_instrumentation_component() {
-    local package_name="$1"
-    local runner_name="$2"
-    local attempts="${3:-20}"
-    local delay_seconds="${4:-3}"
-    local sanitized_package="${package_name//\*/}"
+          wait_for_instrumentation_component() {
+            local package_name="$1"
+            local runner_name="$2"
+            local attempts="${3:-20}"
+            local delay_seconds="${4:-3}"
+            local sanitized_package="${package_name//\*/}"
 
-    while [ "$attempts" -gt 0 ]; do
-      local listing
-      if listing=$(adb shell pm list instrumentation 2>/dev/null | tr -d '\r'); then
-        local resolved
-        resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$sanitized_package" "$runner_name" <<'PY'
+            while [ "$attempts" -gt 0 ]; do
+              local listing
+              if listing=$(adb shell pm list instrumentation 2>/dev/null | tr -d '\r'); then
+                local resolved
+                resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$sanitized_package" "$runner_name" <<'PY'
 import sys
 
 requested = sys.argv[1]
@@ -3033,22 +3033,22 @@ for component, target in components:
 sys.exit(1)
 PY
 )
-        resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
-        if [ -n "$resolved" ]; then
-          echo "Confirmed availability of instrumentation component $resolved"
-          return 0
-        fi
-      fi
+                resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
+                if [ -n "$resolved" ]; then
+                  echo "Confirmed availability of instrumentation component $resolved"
+                  return 0
+                fi
+              fi
 
-      attempts=$((attempts - 1))
-      if [ "$attempts" -le 0 ]; then
-        break
-      fi
-      sleep "$delay_seconds"
-    done
+              attempts=$((attempts - 1))
+              if [ "$attempts" -le 0 ]; then
+                break
+              fi
+              sleep "$delay_seconds"
+            done
 
-    return 1
-  }
+            return 1
+          }
 
           cleanup_flags() {
             adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
