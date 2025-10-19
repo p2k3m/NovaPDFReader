@@ -3,7 +3,10 @@ package com.novapdf.reader
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
+import com.novapdf.reader.PageCacheKey
+import com.novapdf.reader.RenderWorkQueue
 import com.novapdf.reader.ViewerBitmapCache
+import com.novapdf.reader.ViewerBitmapCacheFactory
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.asTestMainDispatcher
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
@@ -38,6 +41,8 @@ import com.novapdf.reader.model.PdfOutlineNode
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.model.SearchIndexingState
 import com.novapdf.reader.model.DocumentSource
+import com.novapdf.reader.PdfViewerUiState
+import com.novapdf.reader.TileCacheKey
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -54,10 +59,12 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
@@ -70,6 +77,7 @@ class PdfViewerViewModelCacheAndErrorTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val mainDispatcher = dispatcher.asTestMainDispatcher()
+    private lateinit var pdfRepository: PdfDocumentRepository
 
     @Before
     fun setUp() {
@@ -288,12 +296,133 @@ class PdfViewerViewModelCacheAndErrorTest {
         job.cancel()
     }
 
+    @Test
+    fun `renderPage retries after cache oom before escalating`() = runTest {
+        val pageCache = RecordingCache<PageCacheKey>()
+        val tileCache = RecordingCache<TileCacheKey>()
+        val viewModel = createViewModel(
+            pageCacheFactory = ViewerBitmapCacheFactory { _, _ -> pageCache },
+            tileCacheFactory = ViewerBitmapCacheFactory { _, _ -> tileCache },
+        )
+        advanceUntilIdle()
+
+        viewModel.setDocument("doc")
+
+        var attempts = 0
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        whenever(
+            pdfRepository.renderPage(any(), any(), any<PageRenderProfile>(), anyOrNull())
+        ).thenAnswer {
+            attempts += 1
+            if (attempts == 1) {
+                throw OutOfMemoryError("boom")
+            }
+            bitmap
+        }
+
+        val result = viewModel.renderPage(0, 600, RenderWorkQueue.Priority.VISIBLE_PAGE)
+
+        assertSame(bitmap, result)
+        assertEquals(2, attempts)
+        assertTrue(pageCache.trimFractions.contains(0.75f))
+        assertTrue(tileCache.trimFractions.contains(0.75f))
+
+        val cacheFaultField = PdfViewerViewModel::class.java.getDeclaredField("cacheFaultCount").apply {
+            isAccessible = true
+        }
+        assertEquals(0, cacheFaultField.getInt(viewModel))
+
+        bitmap.recycle()
+    }
+
+    @Test
+    fun `renderPage escalates after repeated cache oom`() = runTest {
+        val pageCache = RecordingCache<PageCacheKey>()
+        val tileCache = RecordingCache<TileCacheKey>()
+        val viewModel = createViewModel(
+            pageCacheFactory = ViewerBitmapCacheFactory { _, _ -> pageCache },
+            tileCacheFactory = ViewerBitmapCacheFactory { _, _ -> tileCache },
+        )
+        advanceUntilIdle()
+
+        viewModel.setDocument("doc")
+
+        whenever(
+            pdfRepository.renderPage(any(), any(), any<PageRenderProfile>(), anyOrNull())
+        ).thenAnswer {
+            throw DomainException(DomainErrorCode.RENDER_OOM)
+        }
+
+        val result = viewModel.renderPage(0, 600, RenderWorkQueue.Priority.VISIBLE_PAGE)
+
+        assertEquals(null, result)
+        assertTrue(pageCache.trimFractions.contains(0.75f))
+        assertTrue(pageCache.trimFractions.contains(0.5f))
+        assertTrue(tileCache.trimFractions.contains(0.75f))
+        assertTrue(tileCache.trimFractions.contains(0.5f))
+        assertTrue(viewModel.uiState.value.renderCircuitBreakerActive)
+
+        val cacheFaultField = PdfViewerViewModel::class.java.getDeclaredField("cacheFaultCount").apply {
+            isAccessible = true
+        }
+        assertTrue(cacheFaultField.getInt(viewModel) >= 3)
+    }
+
+    private class RecordingCache<K : Any> : ViewerBitmapCache<K> {
+        private val entries = mutableMapOf<K, Bitmap>()
+        val trimFractions = mutableListOf<Float>()
+
+        override fun get(key: K): Bitmap? = entries[key]
+
+        override fun put(key: K, value: Bitmap): Bitmap? = entries.put(key, value)
+
+        override fun remove(key: K): Bitmap? = entries.remove(key)
+
+        override fun evictAll() {
+            entries.clear()
+        }
+
+        override fun trimToFraction(fraction: Float) {
+            trimFractions += fraction
+            if (fraction <= 0f) {
+                evictAll()
+            }
+        }
+
+        override fun size(): Int = entries.size
+
+        override fun maxSize(): Int = Int.MAX_VALUE
+
+        override fun hitCount(): Int = 0
+
+        override fun missCount(): Int = 0
+
+        override fun putCount(): Int = 0
+
+        override fun evictionCount(): Int = 0
+    }
+
+    private fun PdfViewerViewModel.setDocument(documentId: String) {
+        val activeField = PdfViewerViewModel::class.java.getDeclaredField("activeDocumentId").apply {
+            isAccessible = true
+        }
+        activeField.set(this, documentId)
+        val stateField = PdfViewerViewModel::class.java.getDeclaredField("_uiState").apply {
+            isAccessible = true
+        }
+        @Suppress("UNCHECKED_CAST")
+        val state = stateField.get(this) as MutableStateFlow<PdfViewerUiState>
+        state.value = state.value.copy(documentId = documentId)
+    }
+
     private fun createViewModel(
         cacheFallback: MutableStateFlow<Boolean> = MutableStateFlow(false),
+        pageCacheFactory: ViewerBitmapCacheFactory<PageCacheKey> = PdfViewerViewModel.defaultPageBitmapCacheFactory(),
+        tileCacheFactory: ViewerBitmapCacheFactory<TileCacheKey> = PdfViewerViewModel.defaultTileBitmapCacheFactory(),
     ): PdfViewerViewModel {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val annotationRepository = mock<AnnotationRepository>()
-        val pdfRepository = mock<PdfDocumentRepository>()
+        pdfRepository = mock()
         val adaptiveFlowManager = mock<AdaptiveFlowManager>()
         val bookmarkManager = mock<BookmarkManager>()
         val maintenanceScheduler = mock<DocumentMaintenanceScheduler>()
@@ -370,8 +499,8 @@ class PdfViewerViewModelCacheAndErrorTest {
             context,
             useCases,
             dispatchers,
-            PdfViewerViewModel.defaultPageBitmapCacheFactory(),
-            PdfViewerViewModel.defaultTileBitmapCacheFactory(),
+            pageCacheFactory,
+            tileCacheFactory,
         )
     }
 }

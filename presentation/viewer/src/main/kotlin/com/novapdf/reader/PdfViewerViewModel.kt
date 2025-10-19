@@ -90,6 +90,7 @@ private const val RENDER_FAULT_THRESHOLD = 3
 private const val RENDER_CIRCUIT_PERSIST_THRESHOLD = 2
 private const val SIMPLE_RENDERER_MAX_WIDTH = 1280
 private const val SIMPLE_RENDERER_MAX_SCALE = 2.0f
+private val CACHE_TRIM_SEQUENCE = floatArrayOf(0.75f, 0.5f)
 
 fun interface ViewerBitmapCacheFactory<K : Any> {
     fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): ViewerBitmapCache<K>
@@ -329,6 +330,17 @@ private data class CacheStats(
     val evictionCount: Int,
 )
 
+private enum class CacheStressOutcome {
+    NONE,
+    RETRY,
+    ESCALATED,
+}
+
+private data class CacheAwareResult<T>(
+    val value: T?,
+    val throwable: Throwable?,
+)
+
 @HiltViewModel
 open class PdfViewerViewModel @Inject constructor(
     application: Application,
@@ -517,6 +529,8 @@ open class PdfViewerViewModel @Inject constructor(
     private var prefetchEnabled: Boolean = true
     private val pageTooLargeNotified = AtomicBoolean(false)
     private var renderFaultStreak: Int = 0
+    private var cacheFaultCount: Int = 0
+    private var cacheCircuitForced: Boolean = false
     private var renderCircuitTrips: Int = 0
     private var renderCircuitSoftActive: Boolean = false
     private var activeFallbackMode: FallbackMode = FallbackMode.NONE
@@ -971,17 +985,15 @@ open class PdfViewerViewModel @Inject constructor(
         )
         val targetWidth = viewportWidthPx.coerceAtLeast(480)
         withContext(renderDispatcher) {
-            val signal = CancellationSignal()
-            val result = renderPageUseCase(
-                RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
-                signal,
-            )
-            result.getOrNull()?.bitmap?.let { recordRenderSuccess() }
-            val throwable = result.exceptionOrNull()
-            if (throwable is CancellationException) throw throwable
-            if (throwable != null) {
-                recordRenderFault(throwable, stage = "initialRender", pageIndex = 0)
+            val initialResult = executeWithCacheRecovery("initialRender", pageIndex = 0) {
+                val signal = CancellationSignal()
+                renderPageUseCase(
+                    RenderPageRequest(pageIndex = 0, targetWidth = targetWidth),
+                    signal,
+                )
             }
+            initialResult.value?.bitmap?.let { recordRenderSuccess() }
+            val throwable = initialResult.throwable
             if (throwable is DomainException && throwable.code == DomainErrorCode.IO_TIMEOUT) {
                 notifyOperationTimeout()
             }
@@ -989,18 +1001,17 @@ open class PdfViewerViewModel @Inject constructor(
                 notifyPageTooLarge()
                 val fallbackWidth = throwable.suggestedWidth?.takeIf { it > 0 }
                 if (fallbackWidth != null) {
-                    val fallbackSignal = CancellationSignal()
-                    val fallbackResult = renderPageUseCase(
-                        RenderPageRequest(pageIndex = 0, targetWidth = fallbackWidth),
-                        fallbackSignal,
-                    )
-                    fallbackResult.getOrNull()?.bitmap?.let { recordRenderSuccess() }
-                    fallbackResult.exceptionOrNull()?.let { error ->
-                        if (error is CancellationException) throw error
-                        recordRenderFault(error, stage = "initialRenderFallback", pageIndex = 0)
-                        if (error is DomainException && error.code == DomainErrorCode.IO_TIMEOUT) {
-                            notifyOperationTimeout()
-                        }
+                    val fallbackResult = executeWithCacheRecovery("initialRenderFallback", pageIndex = 0) {
+                        val fallbackSignal = CancellationSignal()
+                        renderPageUseCase(
+                            RenderPageRequest(pageIndex = 0, targetWidth = fallbackWidth),
+                            fallbackSignal,
+                        )
+                    }
+                    fallbackResult.value?.bitmap?.let { recordRenderSuccess() }
+                    val fallbackError = fallbackResult.throwable
+                    if (fallbackError is DomainException && fallbackError.code == DomainErrorCode.IO_TIMEOUT) {
+                        notifyOperationTimeout()
                     }
                 }
             }
@@ -1190,16 +1201,16 @@ open class PdfViewerViewModel @Inject constructor(
             if (isPageMalformed(index)) {
                 return@submit null
             }
-            val signal = CancellationSignal()
-            val result = renderPageUseCase(RenderPageRequest(index, effectiveWidth, profile), signal)
-            result.getOrNull()?.bitmap?.let { bitmap ->
+            val result = executeWithCacheRecovery("renderPage", pageIndex = index) {
+                val signal = CancellationSignal()
+                renderPageUseCase(RenderPageRequest(index, effectiveWidth, profile), signal)
+            }
+            result.value?.bitmap?.let { bitmap ->
                 cachePageBitmap(documentId, cacheKey, bitmap)
                 recordRenderSuccess()
                 return@submit bitmap
             }
-            val throwable = result.exceptionOrNull()
-            if (throwable is CancellationException) throw throwable
-            recordRenderFault(throwable, stage = "renderPage", pageIndex = index)
+            val throwable = result.throwable ?: return@submit null
             if (throwable is PdfRenderException) {
                 when (throwable.reason) {
                     PdfRenderException.Reason.PAGE_TOO_LARGE -> {
@@ -1210,18 +1221,22 @@ open class PdfViewerViewModel @Inject constructor(
                         if (fallbackWidth != null) {
                             val fallbackKey = cacheKey.copy(widthPx = fallbackWidth)
                             getCachedPage(fallbackKey)?.let { return@submit it }
-                            val fallbackSignal = CancellationSignal()
-                            val fallbackResult = renderPageUseCase(
-                                RenderPageRequest(index, fallbackWidth, profile),
-                                fallbackSignal
-                            )
-                            fallbackResult.exceptionOrNull()?.let { error ->
-                                if (error is CancellationException) throw error
+                            val fallbackResult = executeWithCacheRecovery("renderPageFallback", pageIndex = index) {
+                                val fallbackSignal = CancellationSignal()
+                                renderPageUseCase(
+                                    RenderPageRequest(index, fallbackWidth, profile),
+                                    fallbackSignal
+                                )
                             }
-                            val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
+                            val fallbackBitmap = fallbackResult.value?.bitmap
                             if (fallbackBitmap != null) {
                                 cachePageBitmap(documentId, fallbackKey, fallbackBitmap)
                                 recordRenderSuccess()
+                                return@submit fallbackBitmap
+                            }
+                            val fallbackError = fallbackResult.throwable
+                            if (fallbackError is DomainException && fallbackError.code == DomainErrorCode.IO_TIMEOUT) {
+                                notifyOperationTimeout()
                             }
                             return@submit fallbackBitmap
                         }
@@ -1243,6 +1258,97 @@ open class PdfViewerViewModel @Inject constructor(
         RenderWorkQueue.Priority.THUMBNAIL -> thumbnailRenderProfile
         RenderWorkQueue.Priority.NEARBY_PAGE,
         RenderWorkQueue.Priority.VISIBLE_PAGE -> PageRenderProfile.HIGH_DETAIL
+    }
+
+    private fun handleCacheStress(stage: String, throwable: Throwable, pageIndex: Int?): CacheStressOutcome {
+        if (!throwable.isCacheStressTrigger()) {
+            return CacheStressOutcome.NONE
+        }
+        cacheFaultCount += 1
+        crashReportingUseCase.logBreadcrumb("render_cache_stress:$stage")
+        val attempt = cacheFaultCount
+        val trimFraction = CACHE_TRIM_SEQUENCE.getOrNull(attempt - 1)
+        return if (trimFraction != null) {
+            NovaLog.w(
+                tag = TAG,
+                message = "Render cache fault detected; trimming caches",
+                fields = arrayOf(
+                    field("stage", stage),
+                    field("attempt", attempt),
+                    field("trimFraction", trimFraction),
+                ),
+            )
+            trimRenderCaches(trimFraction)
+            CacheStressOutcome.RETRY
+        } else {
+            cacheCircuitForced = true
+            NovaLog.e(
+                tag = TAG,
+                message = "Render cache fault persisted; clearing caches",
+                throwable = throwable,
+                fields = arrayOf(
+                    field("stage", stage),
+                    field("attempt", attempt),
+                    field("action", "circuitOpen"),
+                ),
+            )
+            clearRenderCaches()
+            openRenderCircuit("$stage:oom", throwable, pageIndex, persist = true)
+            CacheStressOutcome.ESCALATED
+        }
+    }
+
+    private suspend fun <T> executeWithCacheRecovery(
+        stage: String,
+        pageIndex: Int?,
+        action: suspend () -> Result<T>,
+    ): CacheAwareResult<T> {
+        var lastThrowable: Throwable? = null
+        while (true) {
+            val result = action()
+            val value = result.getOrNull()
+            if (value != null) {
+                return CacheAwareResult(value, null)
+            }
+            if (result.isSuccess) {
+                return CacheAwareResult(null, null)
+            }
+            val throwable = result.exceptionOrNull()
+            if (throwable is CancellationException) throw throwable
+            if (throwable == null) {
+                return CacheAwareResult(null, null)
+            }
+            lastThrowable = throwable
+            when (handleCacheStress(stage, throwable, pageIndex)) {
+                CacheStressOutcome.RETRY -> continue
+                CacheStressOutcome.ESCALATED -> {
+                    recordRenderFault(throwable, stage, pageIndex, bypassCacheCircuit = true)
+                    return CacheAwareResult(null, lastThrowable)
+                }
+                CacheStressOutcome.NONE -> {
+                    recordRenderFault(throwable, stage, pageIndex)
+                    return CacheAwareResult(null, lastThrowable)
+                }
+            }
+        }
+    }
+
+    private fun Throwable?.isCacheStressTrigger(): Boolean {
+        this ?: return false
+        if (this is CancellationException) return false
+        return when (this) {
+            is OutOfMemoryError -> true
+            is DomainException -> this.code == DomainErrorCode.RENDER_OOM || this.cause.isCacheStressTrigger()
+            is IllegalStateException -> {
+                val message = message?.lowercase(Locale.US).orEmpty()
+                if (message.contains("evict") || message.contains("cache")) {
+                    true
+                } else {
+                    this.cause.isCacheStressTrigger()
+                }
+            }
+            else -> this.cause.isCacheStressTrigger()
+        }
     }
 
     private fun adjustTargetWidth(width: Int): Int {
@@ -1282,16 +1388,16 @@ open class PdfViewerViewModel @Inject constructor(
             if (isPageMalformed(index)) {
                 return@withContext null
             }
-            val signal = CancellationSignal()
-            val result = renderTileUseCase(RenderTileRequest(index, rect, effectiveScale), signal)
-            result.getOrNull()?.bitmap?.let { bitmap ->
+            val result = executeWithCacheRecovery("renderTile", pageIndex = index) {
+                val signal = CancellationSignal()
+                renderTileUseCase(RenderTileRequest(index, rect, effectiveScale), signal)
+            }
+            result.value?.bitmap?.let { bitmap ->
                 cacheTileBitmap(documentId, cacheKey, bitmap)
                 recordRenderSuccess()
                 return@withContext bitmap
             }
-            val throwable = result.exceptionOrNull()
-            if (throwable is CancellationException) throw throwable
-            recordRenderFault(throwable, stage = "renderTile", pageIndex = index)
+            val throwable = result.throwable ?: return@withContext null
             if (throwable is PdfRenderException) {
                 when (throwable.reason) {
                     PdfRenderException.Reason.PAGE_TOO_LARGE -> {
@@ -1302,18 +1408,22 @@ open class PdfViewerViewModel @Inject constructor(
                         if (fallbackScale != null) {
                             val fallbackKey = cacheKey.copy(scaleBits = fallbackScale.toBits())
                             getCachedTile(fallbackKey)?.let { return@withContext it }
-                            val fallbackSignal = CancellationSignal()
-                            val fallbackResult = renderTileUseCase(
-                                RenderTileRequest(index, rect, fallbackScale),
-                                fallbackSignal
-                            )
-                            fallbackResult.exceptionOrNull()?.let { error ->
-                                if (error is CancellationException) throw error
+                            val fallbackResult = executeWithCacheRecovery("renderTileFallback", pageIndex = index) {
+                                val fallbackSignal = CancellationSignal()
+                                renderTileUseCase(
+                                    RenderTileRequest(index, rect, fallbackScale),
+                                    fallbackSignal
+                                )
                             }
-                            val fallbackBitmap = fallbackResult.getOrNull()?.bitmap
+                            val fallbackBitmap = fallbackResult.value?.bitmap
                             if (fallbackBitmap != null) {
                                 cacheTileBitmap(documentId, fallbackKey, fallbackBitmap)
                                 recordRenderSuccess()
+                                return@withContext fallbackBitmap
+                            }
+                            val fallbackError = fallbackResult.throwable
+                            if (fallbackError is DomainException && fallbackError.code == DomainErrorCode.IO_TIMEOUT) {
+                                notifyOperationTimeout()
                             }
                             return@withContext fallbackBitmap
                         }
@@ -1538,12 +1648,17 @@ open class PdfViewerViewModel @Inject constructor(
         if (renderFaultStreak != 0) {
             renderFaultStreak = 0
         }
+        if (cacheFaultCount != 0 || cacheCircuitForced) {
+            cacheFaultCount = 0
+            cacheCircuitForced = false
+        }
     }
 
     private fun recordRenderFault(
         throwable: Throwable?,
         stage: String,
         pageIndex: Int? = null,
+        bypassCacheCircuit: Boolean = false,
     ) {
         if (throwable is CancellationException) return
         if (throwable is PdfRenderException && throwable.reason == PdfRenderException.Reason.MALFORMED_PAGE) {
@@ -1551,13 +1666,11 @@ open class PdfViewerViewModel @Inject constructor(
         }
         if (throwable == null) return
         renderFaultStreak += 1
-        val renderOom = when {
-            throwable is OutOfMemoryError -> true
-            throwable.findCause<OutOfMemoryError>() != null -> true
-            throwable.findCause<DomainException>()?.code == DomainErrorCode.RENDER_OOM -> true
-            else -> false
-        }
+        val renderOom = throwable.isCacheStressTrigger()
         if (renderOom) {
+            if (bypassCacheCircuit || cacheCircuitForced) {
+                return
+            }
             clearRenderCaches()
             openRenderCircuit("$stage:oom", throwable, pageIndex, persist = true)
             return
