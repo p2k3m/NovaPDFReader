@@ -8,7 +8,7 @@ import com.novapdf.reader.data.AnnotationRepository
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.data.PdfDocumentRepository
-import com.novapdf.reader.data.remote.StorageClient
+import com.novapdf.reader.data.remote.StorageEngine
 import com.novapdf.reader.data.UserPreferencesRepository
 import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
@@ -37,7 +37,7 @@ object RepositoryModule {
         @ApplicationContext context: Context,
         crashReporter: CrashReporter,
         dispatchers: CoroutineDispatchers,
-        storageClient: StorageClient,
+        storageEngine: StorageEngine,
         cacheDirectories: CacheDirectories,
         bitmapCacheFactory: PdfDocumentRepository.BitmapCacheFactory,
         bitmapPoolFactory: PdfDocumentRepository.BitmapPoolFactory,
@@ -46,7 +46,7 @@ object RepositoryModule {
             context,
             ioDispatcher = dispatchers.io,
             crashReporter = crashReporter,
-            storageClient = storageClient,
+            storageEngine = storageEngine,
             cacheDirectories = cacheDirectories,
             bitmapCacheFactory = bitmapCacheFactory,
             bitmapPoolFactory = bitmapPoolFactory,
