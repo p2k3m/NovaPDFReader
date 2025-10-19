@@ -152,6 +152,7 @@ class ScreenshotHarnessTest {
                 println(readinessMarker)
                 logHarnessInfo("Harness readiness marker emitted: $readinessMarker")
             }
+            HarnessTestPoints.emit(HarnessTestPoint.PRE_INITIALIZATION)
             val harnessRequested = shouldRunHarness()
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
@@ -171,6 +172,10 @@ class ScreenshotHarnessTest {
                     "for package $handshakePackageName"
             )
             withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = true) }
+            HarnessTestPoints.emit(
+                HarnessTestPoint.CACHE_READY,
+                "directories=${handshakeCacheDirs.joinToString { it.absolutePath }}"
+            )
             recordHarnessProgress(
                 HarnessProgressStep.TEST_INITIALISED,
                 "handshakeDirectories=${handshakeCacheDirs.size}"
@@ -733,6 +738,10 @@ class ScreenshotHarnessTest {
                 "status=${readinessState.documentStatus.javaClass.simpleName} " +
                 "renderProgress=${readinessState.renderProgress}"
         )
+        HarnessTestPoints.emit(
+            HarnessTestPoint.UI_LOADED,
+            "page=${readinessState.currentPage + 1}/${readinessState.pageCount}"
+        )
         return readinessState
     }
 
@@ -781,6 +790,7 @@ class ScreenshotHarnessTest {
             HarnessProgressStep.READY_PUBLISHED,
             detail
         )
+        HarnessTestPoints.emit(HarnessTestPoint.READY_FOR_SCREENSHOT, detail)
 
         if (readyFlags.isEmpty() || (readySuccessCount == 0 && readyFlags.none(::flagExists))) {
             val error = IllegalStateException(
@@ -1817,6 +1827,7 @@ class ScreenshotHarnessTest {
     ) {
         val detail = buildHarnessStatusDetail(reason, error)
         recordHarnessProgress(HarnessProgressStep.FAILURE, detail)
+        HarnessTestPoints.emit(HarnessTestPoint.ERROR_SIGNALED, detail ?: reason)
         val directories = resolveStatusDirectories()
         if (directories.isNotEmpty()) {
             val payload = buildHarnessStatusPayload(
