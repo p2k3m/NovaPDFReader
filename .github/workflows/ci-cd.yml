@@ -2858,12 +2858,93 @@ jobs:
 
           HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
           APP_RUN_AS_PACKAGE="${PACKAGE_NAME}"
+          HARNESS_RUNNER="dagger.hilt.android.testing.HiltTestRunner"
+          HARNESS_COMPONENT=""
+
+          resolve_instrumentation_component() {
+            local package_name="$1"
+            local runner_name="$2"
+
+            local listing
+            if ! listing=$(adb shell pm list instrumentation 2>/dev/null | tr -d '\r'); then
+              return 1
+            fi
+
+            local resolved
+            resolved=$(printf '%s\n' "$listing" | python3 - "$package_name" "$runner_name" <<'PY') || return 1
+import re
+import sys
+
+package_name = sys.argv[1]
+runner_name = sys.argv[2]
+lines = sys.stdin.read().splitlines()
+
+default_component = ""
+if package_name:
+    default_component = f"{package_name}.test/{runner_name}"
+
+candidates = []
+for line in lines:
+    stripped = line.strip()
+    if not stripped.startswith("instrumentation:"):
+        continue
+    component = stripped[len("instrumentation:"):].split(" ", 1)[0].strip()
+    target = ""
+    if "(target=" in stripped:
+        start = stripped.find("(target=") + len("(target=")
+        end = stripped.find(")", start)
+        if end == -1:
+            end = len(stripped)
+        target = stripped[start:end]
+    candidates.append((component, target))
+
+if default_component:
+    for component, _target in candidates:
+        if component == default_component:
+            print(component)
+            sys.exit(0)
+
+for component, target in candidates:
+    if package_name and target == package_name and component.endswith(f"/{runner_name}"):
+        print(component)
+        sys.exit(0)
+
+if package_name:
+    sanitized = re.sub(r"\*+", "", package_name)
+    if sanitized and sanitized != package_name:
+        sanitized_default = f"{sanitized}.test/{runner_name}"
+        for component, _target in candidates:
+            if component == sanitized_default:
+                print(component)
+                sys.exit(0)
+        for component, target in candidates:
+            if target == sanitized and component.endswith(f"/{runner_name}"):
+                print(component)
+                sys.exit(0)
+
+for component, _target in candidates:
+    if component.endswith(f"/{runner_name}"):
+        print(component)
+        sys.exit(0)
+
+if candidates:
+    print(candidates[0][0])
+PY
+            )
+
+            resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
+            if [ -n "$resolved" ]; then
+              HARNESS_COMPONENT="$resolved"
+              HARNESS_RUN_AS_PACKAGE="${resolved%%/*}"
+              return 0
+            fi
+
+            return 1
+          }
 
           cleanup_flags() {
             adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
           }
-
-          cleanup_flags
 
           harness_pid=""
           rm -f "$HARNESS_LOGCAT"
@@ -3036,12 +3117,21 @@ jobs:
 
           wait_for_activity_manager
 
+          if resolve_instrumentation_component "$PACKAGE_NAME" "$HARNESS_RUNNER"; then
+            echo "Resolved screenshot harness instrumentation component to $HARNESS_COMPONENT" >&2
+          else
+            HARNESS_COMPONENT="${HARNESS_RUN_AS_PACKAGE}/${HARNESS_RUNNER}"
+            echo "Unable to resolve screenshot harness instrumentation component; defaulting to $HARNESS_COMPONENT" >&2
+          fi
+
+          cleanup_flags
+
           echo "Launching screenshot harness instrumentation to load thousand-page PDF"
           adb logcat -c >/dev/null 2>&1 || true
           adb shell am instrument -w -r \
             -e runScreenshotHarness true \
             -e class "$HARNESS_CLASS" \
-            ${PACKAGE_NAME}.test/dagger.hilt.android.testing.HiltTestRunner \
+            "$HARNESS_COMPONENT" \
             >"$HARNESS_LOG" 2>&1 &
           harness_pid=$!
 
