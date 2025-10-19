@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.BitmapFactory
+import android.graphics.Bitmap.CompressFormat
 import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
@@ -61,10 +63,13 @@ import java.io.FileOutputStream
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 import java.net.HttpURLConnection
 import java.net.URL
@@ -102,6 +107,9 @@ private const val MAX_RENDER_FAILURES = 2
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
 private const val REMOTE_CONNECT_TIMEOUT_MS = 15_000
 private const val REMOTE_READ_TIMEOUT_MS = 30_000
+private const val MIN_DISK_CACHE_BYTES = 16L * 1024L * 1024L
+private const val MAX_DISK_CACHE_BYTES = 256L * 1024L * 1024L
+private const val FALLBACK_MEMORY_FRACTION = 4
 private const val PDF_MAGIC_SCAN_LIMIT = 16
 private const val LONG_OPERATION_THRESHOLD_MS = 16L
 private const val TRACE_SECTION_PREFIX = "PdfRepo#"
@@ -214,6 +222,12 @@ class PdfDocumentRepository(
             stage = "remote",
             label = "remote PDF cache",
         ) { File(cacheDirectories.documents(), "remote") }
+    }
+    private val renderBitmapCacheDir by lazy {
+        resolveCacheDirectory(
+            stage = "render_bitmaps",
+            label = "render bitmap disk cache",
+        ) { File(cacheDirectories.tiles(), "render-bitmaps") }
     }
     private val cacheLock = Mutex()
     private val maxCacheBytes = calculateCacheBudget()
@@ -404,6 +418,7 @@ class PdfDocumentRepository(
         @Suppress("OVERRIDE_DEPRECATION")
         override fun onLowMemory() {
             scheduleCacheClear()
+            bitmapCacheOrNull()?.onLowMemory()
         }
 
         @Suppress("DEPRECATION")
@@ -413,6 +428,7 @@ class PdfDocumentRepository(
                 level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> scheduleCacheClear()
                 level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> scheduleCacheTrim(0.5f)
             }
+            bitmapCacheOrNull()?.onTrimMemory(level)
         }
     }
 
@@ -797,6 +813,7 @@ class PdfDocumentRepository(
                         } ?: 1
                         val isMalformed = throwable.isLikelyMalformedPageError()
                         val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
+                        bitmapCacheOrNull()?.onCacheError("renderTile", throwable)
                         reportNonFatal(
                             throwable,
                             mapOf(
@@ -1265,6 +1282,7 @@ class PdfDocumentRepository(
                     } ?: 1
                     val isMalformed = throwable.isLikelyMalformedPageError()
                     val shouldMarkMalformed = isMalformed || failureCount >= MAX_RENDER_FAILURES
+                    cache.onCacheError("renderPage", throwable)
                     reportNonFatal(
                         throwable,
                         mapOf(
@@ -2032,7 +2050,13 @@ class PdfDocumentRepository(
         if (pooled != null) {
             return pooled
         }
-        return Bitmap.createBitmap(width, height, config).also(::recordBitmapAllocation)
+        val created = try {
+            Bitmap.createBitmap(width, height, config)
+        } catch (error: OutOfMemoryError) {
+            bitmapCacheOrNull()?.onCacheError("bitmapAllocation", error)
+            throw error
+        }
+        return created.also(::recordBitmapAllocation)
     }
 
     private fun recycleBitmap(bitmap: Bitmap) {
@@ -2060,7 +2084,14 @@ class PdfDocumentRepository(
     }
 
     private fun instantiateBitmapCache(): BitmapCache {
-        return runCatching { LruBitmapCache(maxCacheBytes) }
+        return runCatching {
+            val diskBudgetBytes = if (maxCacheBytes <= 0L) {
+                MIN_DISK_CACHE_BYTES
+            } else {
+                (maxCacheBytes * 2L).coerceIn(MIN_DISK_CACHE_BYTES, MAX_DISK_CACHE_BYTES)
+            }
+            LruBitmapCache(maxCacheBytes, renderBitmapCacheDir, diskBudgetBytes)
+        }
             .getOrElse { throwable ->
                 reportCacheInitializationFailure("bitmap_cache", throwable)
                 NoOpBitmapCache()
@@ -2400,6 +2431,14 @@ class PdfDocumentRepository(
         protected abstract fun cleanUpInternal()
         protected abstract fun trimInternal(fraction: Float)
         protected abstract fun removeInternal(key: PageBitmapKey)
+
+        open fun onLowMemory() {}
+
+        open fun onTrimMemory(level: Int) {}
+
+        open fun onMemoryLevel(level: BitmapMemoryLevel) {}
+
+        open fun onCacheError(stage: String, throwable: Throwable) {}
     }
 
     private inner class NoOpBitmapCache : BitmapCache() {
@@ -2420,6 +2459,219 @@ class PdfDocumentRepository(
 
         override fun removeInternal(key: PageBitmapKey) = Unit
     }
+
+    private inner class DiskBitmapStore(
+        private val directory: File,
+        maxBytes: Long,
+        private val onBitmapLoaded: (Bitmap) -> Unit,
+    ) {
+        private val budgetBytes = maxBytes.coerceAtLeast(0L)
+        private val lock = Any()
+        private val entries = mutableMapOf<String, DiskCacheEntry>()
+        private var totalBytes: Long = 0L
+        private var prepared: Boolean = false
+
+        fun isEnabled(): Boolean = budgetBytes > 0L && (prepared || directory.exists())
+
+        fun prepare() {
+            if (budgetBytes <= 0L) return
+            synchronized(lock) {
+                if (prepared) return
+                if (!directory.exists() && !directory.mkdirs()) {
+                    NovaLog.w(TAG, "Unable to create disk cache directory at ${directory.absolutePath}")
+                    return
+                }
+                rebuildLocked()
+                prepared = true
+            }
+        }
+
+        fun get(key: PageBitmapKey): Bitmap? {
+            if (!isEnabled()) return null
+            val hash = key.toDiskHash()
+            val entry = synchronized(lock) { entries[hash] } ?: return null
+            val options = BitmapFactory.Options().apply { inPreferredConfig = entry.config }
+            val bitmap = try {
+                BitmapFactory.decodeFile(entry.file.absolutePath, options)
+            } catch (error: Throwable) {
+                NovaLog.w(TAG, "Unable to decode disk cache entry at ${entry.file.absolutePath}", error)
+                null
+            }
+            if (bitmap == null) {
+                removeInternal(hash)
+                return null
+            }
+            onBitmapLoaded(bitmap)
+            entry.file.setLastModified(System.currentTimeMillis())
+            return bitmap
+        }
+
+        fun put(key: PageBitmapKey, bitmap: Bitmap) {
+            if (budgetBytes <= 0L) return
+            prepare()
+            if (!isEnabled()) return
+            val hash = key.toDiskHash()
+            val config = bitmap.config ?: Bitmap.Config.ARGB_8888
+            val target = File(directory, buildFileName(hash, config))
+            val temp = File(directory, "${target.name}.tmp")
+            try {
+                BufferedOutputStream(FileOutputStream(temp)).use { stream ->
+                    if (!bitmap.compress(CompressFormat.PNG, 100, stream)) {
+                        return
+                    }
+                }
+                synchronized(lock) {
+                    val previous = entries.remove(hash)
+                    val previousFile = previous?.file
+                    val previousBytes = previousFile?.length() ?: 0L
+                    if (previousFile != null && previousFile.exists() && !previousFile.delete()) {
+                        NovaLog.w(TAG, "Unable to delete stale disk cache entry at ${previousFile.absolutePath}")
+                    }
+                    if (!temp.renameTo(target)) {
+                        try {
+                            temp.copyTo(target, overwrite = true)
+                        } catch (error: IOException) {
+                            NovaLog.w(TAG, "Unable to copy bitmap cache entry to disk", error)
+                            return
+                        } finally {
+                            if (temp.exists() && !temp.delete()) {
+                                NovaLog.w(TAG, "Unable to delete temporary disk cache file at ${temp.absolutePath}")
+                            }
+                        }
+                    }
+                    entries[hash] = DiskCacheEntry(hash, target, config)
+                    totalBytes = (totalBytes - previousBytes + target.length()).coerceAtLeast(0L)
+                    enforceBudgetLocked()
+                }
+            } catch (error: IOException) {
+                NovaLog.w(TAG, "Unable to persist bitmap cache entry to disk", error)
+            } finally {
+                if (temp.exists() && !temp.delete()) {
+                    NovaLog.w(TAG, "Unable to delete temporary disk cache file at ${temp.absolutePath}")
+                }
+            }
+        }
+
+        fun remove(key: PageBitmapKey) {
+            removeInternal(key.toDiskHash())
+        }
+
+        fun clear() {
+            synchronized(lock) {
+                if (entries.isEmpty()) {
+                    totalBytes = 0L
+                    return
+                }
+                entries.values.forEach { entry ->
+                    if (entry.file.exists() && !entry.file.delete()) {
+                        NovaLog.w(TAG, "Unable to delete disk cache entry at ${entry.file.absolutePath}")
+                    }
+                }
+                entries.clear()
+                totalBytes = 0L
+            }
+        }
+
+        fun trimToFraction(fraction: Float) {
+            if (fraction >= 1f) return
+            if (fraction <= 0f) {
+                clear()
+                return
+            }
+            synchronized(lock) {
+                val targetBytes = (totalBytes.toDouble() * fraction.toDouble()).toLong().coerceAtLeast(0L)
+                if (targetBytes >= totalBytes) {
+                    return
+                }
+                val sorted = entries.values.sortedBy { it.file.lastModified() }
+                var bytes = totalBytes
+                for (entry in sorted) {
+                    if (bytes <= targetBytes) break
+                    val length = entry.file.length()
+                    if (entry.file.delete()) {
+                        entries.remove(entry.hash)
+                        bytes = (bytes - length).coerceAtLeast(0L)
+                    }
+                }
+                totalBytes = bytes
+            }
+        }
+
+        private fun removeInternal(hash: String) {
+            synchronized(lock) {
+                val entry = entries.remove(hash) ?: return
+                val length = entry.file.length()
+                if (entry.file.exists() && !entry.file.delete()) {
+                    NovaLog.w(TAG, "Unable to delete disk cache entry at ${entry.file.absolutePath}")
+                }
+                totalBytes = (totalBytes - length).coerceAtLeast(0L)
+            }
+        }
+
+        private fun enforceBudgetLocked() {
+            if (budgetBytes <= 0L) return
+            if (totalBytes <= budgetBytes) return
+            val sorted = entries.values.sortedBy { it.file.lastModified() }
+            var bytes = totalBytes
+            for (entry in sorted) {
+                if (bytes <= budgetBytes) break
+                val length = entry.file.length()
+                if (entry.file.delete()) {
+                    entries.remove(entry.hash)
+                    bytes = (bytes - length).coerceAtLeast(0L)
+                }
+            }
+            totalBytes = bytes
+        }
+
+        private fun rebuildLocked() {
+            if (budgetBytes <= 0L) return
+            val files = directory.listFiles()?.filter { it.isFile } ?: emptyList()
+            entries.clear()
+            totalBytes = 0L
+            for (file in files) {
+                val entry = parseEntry(file) ?: continue
+                entries[entry.hash] = entry
+                totalBytes += file.length()
+            }
+            enforceBudgetLocked()
+        }
+
+        private fun parseEntry(file: File): DiskCacheEntry? {
+            val name = file.name
+            val separatorIndex = name.lastIndexOf('-')
+            if (separatorIndex <= 0) {
+                return null
+            }
+            val hash = name.substring(0, separatorIndex)
+            val configToken = name.substring(separatorIndex + 1).substringBeforeLast('.', missingDelimiterValue = "")
+            val config = configFromToken(configToken) ?: return null
+            return DiskCacheEntry(hash, file, config)
+        }
+
+        private fun configFromToken(token: String): Bitmap.Config? = when (token.uppercase(Locale.US)) {
+            Bitmap.Config.ALPHA_8.name -> Bitmap.Config.ALPHA_8
+            Bitmap.Config.RGB_565.name -> Bitmap.Config.RGB_565
+            Bitmap.Config.ARGB_4444.name -> Bitmap.Config.ARGB_8888
+            Bitmap.Config.ARGB_8888.name -> Bitmap.Config.ARGB_8888
+            Bitmap.Config.RGBA_F16.name -> Bitmap.Config.RGBA_F16
+            Bitmap.Config.HARDWARE.name -> Bitmap.Config.ARGB_8888
+            else -> Bitmap.Config.ARGB_8888
+        }
+
+        private fun PageBitmapKey.toDiskHash(): String =
+            sha256Hex("${pageIndex}:${width}:${profile.name}")
+
+        private fun buildFileName(hash: String, config: Bitmap.Config): String =
+            "$hash-${config.name.lowercase(Locale.US)}.png"
+
+    }
+
+    private data class DiskCacheEntry(
+        val hash: String,
+        val file: File,
+        val config: Bitmap.Config,
+    )
 
     private inner class BitmapMemoryTracker(
         private val warnThresholdBytes: Long,
@@ -2460,6 +2712,7 @@ class PdfDocumentRepository(
                 stats to previous
             }
             _bitmapMemoryStats.value = stats
+            bitmapCacheOrNull()?.onMemoryLevel(stats.level)
             if (
                 stats.level != BitmapMemoryLevel.NORMAL &&
                 severity(stats.level) > severity(previousLevel)
@@ -2758,11 +3011,20 @@ class PdfDocumentRepository(
             get() = if (requests <= 0L) 0.0 else hits.toDouble() / requests.toDouble()
     }
 
-    private inner class LruBitmapCache(maxCacheBytes: Long) : BitmapCache() {
-        override val metricsLabel: String = "repository_lru_bitmap_cache"
+    private inner class LruBitmapCache(
+        maxCacheBytes: Long,
+        diskDirectory: File,
+        diskMaxBytes: Long,
+    ) : BitmapCache() {
+        override val metricsLabel: String = "repository_fallback_bitmap_cache"
         private val cacheSize = maxCacheBytes.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+        private val fallbackMemorySize = max(cacheSize / FALLBACK_MEMORY_FRACTION, 1)
         private val mutex = Mutex()
         private val staleRemovalKeys = mutableSetOf<PageBitmapKey>()
+        private val diskCache = DiskBitmapStore(diskDirectory, diskMaxBytes, ::recordBitmapAllocation)
+        private val fallbackReasons = mutableSetOf<String>()
+        private val fallbackLock = Any()
+        private val fallbackActive = AtomicBoolean(false)
         private val delegate = object : LruCache<PageBitmapKey, Bitmap>(cacheSize) {
             override fun sizeOf(key: PageBitmapKey, value: Bitmap): Int = safeByteCount(value)
 
@@ -2785,8 +3047,20 @@ class PdfDocumentRepository(
             }
         }
 
-        override fun getInternal(key: PageBitmapKey): Bitmap? = mutex.withLockBlocking(this) {
-            delegate.get(key)
+        override fun getInternal(key: PageBitmapKey): Bitmap? {
+            val cached = mutex.withLockBlocking(this) { delegate.get(key) }
+            if (cached != null) {
+                return cached
+            }
+            if (!fallbackActive.get()) {
+                return null
+            }
+            val disk = diskCache.get(key) ?: return null
+            val previous = mutex.withLockBlocking(this) { delegate.put(key, disk) }
+            if (previous != null && previous !== disk) {
+                recycleBitmap(previous)
+            }
+            return disk
         }
 
         override fun putInternal(key: PageBitmapKey, bitmap: Bitmap) {
@@ -2795,6 +3069,11 @@ class PdfDocumentRepository(
             }
             if (previous != null && previous !== bitmap) {
                 recycleBitmap(previous)
+            }
+            if (fallbackActive.get()) {
+                diskCache.put(key, bitmap)
+            } else {
+                diskCache.remove(key)
             }
         }
 
@@ -2806,6 +3085,7 @@ class PdfDocumentRepository(
             mutex.withLockBlocking(this) {
                 delegate.evictAll()
             }
+            diskCache.clear()
         }
 
         override fun cleanUpInternal() {
@@ -2815,12 +3095,12 @@ class PdfDocumentRepository(
         override fun trimInternal(fraction: Float) {
             mutex.withLockBlocking(this) {
                 val currentSize = delegate.size()
-                if (currentSize <= 0) {
-                    return@withLockBlocking
+                if (currentSize > 0) {
+                    val target = (currentSize.toDouble() * fraction.toDouble()).toInt().coerceAtLeast(0)
+                    delegate.trimToSize(target)
                 }
-                val target = (currentSize.toDouble() * fraction.toDouble()).toInt().coerceAtLeast(0)
-                delegate.trimToSize(target)
             }
+            diskCache.trimToFraction(fraction)
         }
 
         override fun removeInternal(key: PageBitmapKey) {
@@ -2832,6 +3112,116 @@ class PdfDocumentRepository(
                     staleRemovalKeys.remove(key)
                 }
             }
+            diskCache.remove(key)
+        }
+
+        override fun onLowMemory() {
+            activateFallback("low_memory")
+        }
+
+        override fun onTrimMemory(level: Int) {
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                activateFallback("trim:$level")
+            }
+        }
+
+        override fun onMemoryLevel(level: BitmapMemoryLevel) {
+            when (level) {
+                BitmapMemoryLevel.CRITICAL -> activateFallback("memory:critical")
+                BitmapMemoryLevel.WARNING -> activateFallback("memory:warning")
+                BitmapMemoryLevel.NORMAL -> clearFallback()
+            }
+        }
+
+        override fun onCacheError(stage: String, throwable: Throwable) {
+            if (throwable is OutOfMemoryError) {
+                activateFallback("error:$stage")
+            }
+        }
+
+        private fun activateFallback(reason: String) {
+            updateFallbackState(reason, add = true)
+        }
+
+        private fun clearFallback() {
+            val shouldDisable: Boolean
+            synchronized(fallbackLock) {
+                shouldDisable = fallbackReasons.isNotEmpty()
+                fallbackReasons.clear()
+                fallbackActive.set(false)
+            }
+            if (shouldDisable) {
+                onFallbackDisabled()
+            }
+        }
+
+        private fun updateFallbackState(reason: String, add: Boolean) {
+            if (reason.isEmpty()) return
+            val changed: Boolean
+            synchronized(fallbackLock) {
+                val wasActive = fallbackReasons.isNotEmpty()
+                if (add) {
+                    fallbackReasons += reason
+                } else {
+                    fallbackReasons -= reason
+                }
+                val isActive = fallbackReasons.isNotEmpty()
+                changed = wasActive != isActive
+                fallbackActive.set(isActive)
+            }
+            if (changed) {
+                if (fallbackActive.get()) {
+                    onFallbackEnabled(reason)
+                } else {
+                    onFallbackDisabled()
+                }
+            } else if (add && fallbackActive.get()) {
+                diskCache.prepare()
+            }
+        }
+
+        private fun onFallbackEnabled(reason: String) {
+            diskCache.prepare()
+            val snapshot = mutex.withLockBlocking(this) {
+                delegate.snapshot().filterValues { !it.isRecycled }
+            }
+            if (snapshot.isNotEmpty() && diskCache.isEnabled()) {
+                snapshot.forEach { (key, bitmap) -> diskCache.put(key, bitmap) }
+            }
+            mutex.withLockBlocking(this) {
+                delegate.resize(fallbackMemorySize)
+            }
+            NovaLog.w(
+                TAG,
+                "Bitmap cache fallback enabled",
+                fields = logFields(
+                    operation = "bitmapCacheFallback",
+                    documentId = null,
+                    pageIndex = null,
+                    sizeBytes = null,
+                    durationMs = null,
+                    field("reason", reason),
+                    field("diskEnabled", diskCache.isEnabled()),
+                ),
+            )
+        }
+
+        private fun onFallbackDisabled() {
+            mutex.withLockBlocking(this) {
+                delegate.resize(cacheSize)
+            }
+            NovaLog.i(
+                TAG,
+                "Bitmap cache fallback disabled",
+                fields = logFields(
+                    operation = "bitmapCacheFallback",
+                    documentId = null,
+                    pageIndex = null,
+                    sizeBytes = null,
+                    durationMs = null,
+                    field("disabled", true),
+                ),
+            )
         }
     }
 
