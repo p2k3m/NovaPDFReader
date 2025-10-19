@@ -24,7 +24,14 @@ private val FallbackLightColorScheme = lightColorScheme(
     onBackground = ColorPalette.Black,
     surface = SurfaceLight,
     onSurface = ColorPalette.Black,
-    tertiary = SecondaryTeal
+    tertiary = SecondaryTeal,
+    error = ErrorLight,
+    onError = OnErrorLight,
+    errorContainer = ErrorContainerLight,
+    onErrorContainer = OnErrorContainerLight,
+    surfaceVariant = SurfaceVariantLight,
+    onSurfaceVariant = OnSurfaceVariantLight,
+    outline = OutlineLight
 )
 
 private val FallbackDarkColorScheme = darkColorScheme(
@@ -36,7 +43,14 @@ private val FallbackDarkColorScheme = darkColorScheme(
     onBackground = ColorPalette.White,
     surface = SurfaceDark,
     onSurface = ColorPalette.White,
-    tertiary = AnnotationPink
+    tertiary = AnnotationPink,
+    error = ErrorDark,
+    onError = OnErrorDark,
+    errorContainer = ErrorContainerDark,
+    onErrorContainer = OnErrorContainerDark,
+    surfaceVariant = SurfaceVariantDark,
+    onSurfaceVariant = OnSurfaceVariantDark,
+    outline = OutlineDark
 )
 
 @Composable
