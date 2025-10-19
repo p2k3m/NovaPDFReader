@@ -1285,6 +1285,11 @@ jobs:
             fi
           fi
 
+          if [ ${#disk_partition_args[@]} -eq 0 ]; then
+            echo "Enforcing minimum userdata partition size via launch arguments (${min_partition_mb} MB)"
+            disk_partition_args=("-partition-size" "$min_partition_mb")
+          fi
+
           ensure_config_value() {
             local key="$1"
             local value="$2"
