@@ -534,6 +534,8 @@ open class PdfViewerViewModel @Inject constructor(
     private var renderCircuitTrips: Int = 0
     private var renderCircuitSoftActive: Boolean = false
     private var activeFallbackMode: FallbackMode = FallbackMode.NONE
+    private var renderSafetyLockActive: Boolean = false
+    private var renderSafetyErrorShown: Boolean = false
 
     private val isRenderCircuitActive: Boolean
         get() = renderCircuitSoftActive || activeFallbackMode == FallbackMode.LEGACY_SIMPLE_RENDERER
@@ -658,7 +660,10 @@ open class PdfViewerViewModel @Inject constructor(
                     renderFaultStreak = 0
                     renderCircuitSoftActive = false
                     renderCircuitTrips = 0
+                    renderSafetyLockActive = false
+                    renderSafetyErrorShown = false
                     updateRenderCircuitState()
+                    recomputePrefetchEnabled(session)
                 }
                 val shouldResetMalformed = previous.documentId != documentId
                 _uiState.value = previous.copy(
@@ -726,13 +731,15 @@ open class PdfViewerViewModel @Inject constructor(
 
     private fun shouldThrottlePrefetch(): Boolean {
         if (!prefetchEnabled) return true
+        if (renderSafetyLockActive) return true
         if (!appInForeground) return true
         if (isRenderCircuitActive) return true
         return uiUnderLoad
     }
 
     private fun recomputePrefetchEnabled(session: PdfDocumentSession?) {
-        val enabled = renderCachesEnabled.get() &&
+        val enabled = !renderSafetyLockActive &&
+            renderCachesEnabled.get() &&
             (session?.pageCount?.let { it <= LARGE_DOCUMENT_PAGE_THRESHOLD } ?: true)
         if (prefetchEnabled != enabled) {
             prefetchEnabled = enabled
@@ -746,7 +753,11 @@ open class PdfViewerViewModel @Inject constructor(
     }
 
     private fun updateBackgroundWorkState() {
-        val shouldEnable = appInForeground && prefetchEnabled && !uiUnderLoad && !isRenderCircuitActive
+        val shouldEnable = appInForeground &&
+            prefetchEnabled &&
+            !uiUnderLoad &&
+            !isRenderCircuitActive &&
+            !renderSafetyLockActive
         if (backgroundWorkEnabled != shouldEnable) {
             backgroundWorkEnabled = shouldEnable
             renderQueue.setBackgroundWorkEnabled(shouldEnable)
@@ -1676,14 +1687,35 @@ open class PdfViewerViewModel @Inject constructor(
             return
         }
         if (!renderCircuitSoftActive && renderFaultStreak >= RENDER_FAULT_THRESHOLD) {
+            activateRenderSafetyLock()
             openRenderCircuit("$stage:streak", throwable, pageIndex)
         } else if (renderCircuitSoftActive) {
+            activateRenderSafetyLock()
             openRenderCircuit("$stage:repeat", throwable, pageIndex)
         }
     }
 
     private fun activateCacheCircuitBreaker() {
         openRenderCircuit("cacheFallback", throwable = null, pageIndex = null)
+    }
+
+    private fun activateRenderSafetyLock() {
+        if (renderSafetyLockActive) {
+            if (!renderSafetyErrorShown) {
+                renderSafetyErrorShown = true
+                showError(app.getString(R.string.error_render_session_disabled))
+            }
+            return
+        }
+        renderSafetyLockActive = true
+        if (prefetchEnabled) {
+            prefetchEnabled = false
+        }
+        updateBackgroundWorkState()
+        if (!renderSafetyErrorShown) {
+            renderSafetyErrorShown = true
+            showError(app.getString(R.string.error_render_session_disabled))
+        }
     }
 
     private fun openRenderCircuit(
