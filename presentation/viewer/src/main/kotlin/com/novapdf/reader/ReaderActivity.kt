@@ -3,6 +3,7 @@ package com.novapdf.reader
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +17,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,6 +28,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
@@ -356,6 +359,7 @@ open class ReaderActivity : ComponentActivity() {
         when (val status = state.documentStatus) {
             is DocumentStatus.Loading -> {
                 statusContainer.isVisible = true
+                applyLegacyStatusColors(isError = false)
                 statusText?.text = status.messageRes?.let(::getString)
                     ?: getString(R.string.loading_document)
                 retry?.isVisible = false
@@ -363,11 +367,13 @@ open class ReaderActivity : ComponentActivity() {
 
             is DocumentStatus.Error -> {
                 statusContainer.isVisible = true
+                applyLegacyStatusColors(isError = true)
                 statusText?.text = status.message
                 retry?.isVisible = true
             }
 
             DocumentStatus.Idle -> {
+                applyLegacyStatusColors(isError = false)
                 when {
                     hasDocument && state.pageCount == 0 -> {
                         statusContainer.isVisible = true
@@ -388,6 +394,24 @@ open class ReaderActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun applyLegacyStatusColors(isError: Boolean) {
+        val container = legacyStatusContainer ?: return
+        val backgroundAttr = if (isError) {
+            com.google.android.material.R.attr.colorErrorContainer
+        } else {
+            com.google.android.material.R.attr.colorSurfaceVariant
+        }
+        val contentAttr = if (isError) {
+            com.google.android.material.R.attr.colorOnErrorContainer
+        } else {
+            com.google.android.material.R.attr.colorOnSurfaceVariant
+        }
+        val backgroundColor = MaterialColors.getColor(container, backgroundAttr)
+        val contentColor = MaterialColors.getColor(container, contentAttr)
+        ViewCompat.setBackgroundTintList(container, ColorStateList.valueOf(backgroundColor))
+        legacyStatusText?.setTextColor(contentColor)
     }
 
     private fun maybeScrollToPage(state: PdfViewerUiState) {

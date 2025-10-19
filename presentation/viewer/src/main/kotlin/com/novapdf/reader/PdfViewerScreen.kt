@@ -93,6 +93,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -473,7 +474,7 @@ fun PdfViewerScreen(
                     onDestinationSelected = { selectedDestination = it }
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHost) }
+            snackbarHost = { NovaSnackbarHost(snackbarHost) }
         ) { paddingValues ->
             Box(
                 modifier = Modifier
@@ -1105,6 +1106,44 @@ private fun DocumentStatusHost(
 
     if (status is DocumentStatus.Loading) {
         LoadingOverlay(status, animationsEnabled)
+    }
+}
+
+@Composable
+private fun NovaSnackbarHost(hostState: SnackbarHostState) {
+    SnackbarHost(hostState = hostState) { data ->
+        val visuals = data.visuals
+        val isError = visuals.duration == SnackbarDuration.Indefinite && visuals.withDismissAction
+        val containerColor = if (isError) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.inverseSurface
+        }
+        val contentColor = if (isError) {
+            MaterialTheme.colorScheme.onErrorContainer
+        } else {
+            MaterialTheme.colorScheme.inverseOnSurface
+        }
+        val actionContentColor = if (isError) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.inversePrimary
+        }
+        val dismissColor = if (isError) {
+            MaterialTheme.colorScheme.onErrorContainer
+        } else {
+            MaterialTheme.colorScheme.inverseOnSurface
+        }
+        Snackbar(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            snackbarData = data,
+            shape = MaterialTheme.shapes.large,
+            containerColor = containerColor,
+            contentColor = contentColor,
+            actionColor = actionContentColor,
+            actionContentColor = actionContentColor,
+            dismissActionContentColor = dismissColor
+        )
     }
 }
 
