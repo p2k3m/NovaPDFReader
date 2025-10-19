@@ -15,7 +15,6 @@ import android.print.PrintAttributes
 import android.print.PrintManager
 import androidx.annotation.StringRes
 import android.content.res.Configuration
-import androidx.collection.LruCache
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
@@ -78,11 +77,8 @@ import kotlin.math.min
 private const val TAG = "PdfViewerViewModel"
 private const val DEFAULT_THEME_SEED_COLOR = 0xFFD32F2FL
 const val LARGE_DOCUMENT_PAGE_THRESHOLD = 400
-private const val DOCUMENT_LOAD_PARALLELISM = 1
-private const val RENDER_POOL_PARALLELISM = 2
-private const val INDEX_POOL_PARALLELISM = 1
-private const val MAX_PAGE_CACHE_BYTES = 32 * 1024 * 1024
-private const val MAX_TILE_CACHE_BYTES = 24 * 1024 * 1024
+private const val MAX_PAGE_CACHE_BYTES = DEFAULT_MAX_PAGE_CACHE_BYTES
+private const val MAX_TILE_CACHE_BYTES = DEFAULT_MAX_TILE_CACHE_BYTES
 private const val MIN_CACHE_BYTES = 1 * 1024 * 1024
 private const val REMOTE_PDF_SAFE_SIZE_BYTES = 256L * 1024L * 1024L
 private const val VIEWPORT_PERSIST_THROTTLE_MS = 750L
@@ -95,16 +91,30 @@ private const val SIMPLE_RENDERER_MAX_WIDTH = 1280
 private const val SIMPLE_RENDERER_MAX_SCALE = 2.0f
 
 fun interface ViewerBitmapCacheFactory<K : Any> {
-    fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): FractionalBitmapLruCache<K>
+    fun create(maxBytes: Int, sizeCalculator: (Bitmap) -> Int): ViewerBitmapCache<K>
+}
+
+interface ViewerBitmapCache<K : Any> {
+    fun get(key: K): Bitmap?
+    fun put(key: K, value: Bitmap): Bitmap?
+    fun remove(key: K): Bitmap?
+    fun evictAll()
+    fun trimToFraction(fraction: Float)
+    fun size(): Int
+    fun maxSize(): Int
+    fun hitCount(): Int
+    fun missCount(): Int
+    fun putCount(): Int
+    fun evictionCount(): Int
 }
 
 class FractionalBitmapLruCache<K : Any>(
     maxSizeBytes: Int,
     private val sizeCalculator: (Bitmap) -> Int,
-) : LruCache<K, Bitmap>(maxSizeBytes) {
+) : androidx.collection.LruCache<K, Bitmap>(maxSizeBytes), ViewerBitmapCache<K> {
     override fun sizeOf(key: K, value: Bitmap): Int = sizeCalculator(value)
 
-    fun trimToFraction(fraction: Float) {
+    override fun trimToFraction(fraction: Float) {
         val clamped = fraction.coerceIn(0f, 1f)
         when {
             clamped <= 0f -> evictAll()
@@ -118,6 +128,42 @@ class FractionalBitmapLruCache<K : Any>(
             }
         }
     }
+}
+
+class NonCachingBitmapCache<K : Any>(
+    @Suppress("UNUSED_PARAMETER")
+    private val sizeCalculator: (Bitmap) -> Int,
+) : ViewerBitmapCache<K> {
+    private var missCount = 0
+    private var putCount = 0
+
+    override fun get(key: K): Bitmap? {
+        missCount++
+        return null
+    }
+
+    override fun put(key: K, value: Bitmap): Bitmap? {
+        putCount++
+        return null
+    }
+
+    override fun remove(key: K): Bitmap? = null
+
+    override fun evictAll() = Unit
+
+    override fun trimToFraction(fraction: Float) = Unit
+
+    override fun size(): Int = 0
+
+    override fun maxSize(): Int = 0
+
+    override fun hitCount(): Int = 0
+
+    override fun missCount(): Int = missCount
+
+    override fun putCount(): Int = putCount
+
+    override fun evictionCount(): Int = 0
 }
 sealed interface DocumentStatus {
     object Idle : DocumentStatus
@@ -231,6 +277,7 @@ open class PdfViewerViewModel @Inject constructor(
     private val dispatchers: CoroutineDispatchers,
     private val pageBitmapCacheFactory: ViewerBitmapCacheFactory<PageCacheKey>,
     private val tileBitmapCacheFactory: ViewerBitmapCacheFactory<TileCacheKey>,
+    private val cachePolicyConfig: ViewerCachePolicyConfig = ViewerCachePolicyConfig(),
 ) : AndroidViewModel(application) {
     private val app: Application = application
     private val documentUseCase = useCases.document
@@ -248,13 +295,17 @@ open class PdfViewerViewModel @Inject constructor(
     private val preferencesUseCase = useCases.preferences
     private val initialNightMode: Boolean = isNightModeEnabled()
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val documentDispatcher = dispatchers.io.limitedParallelism(DOCUMENT_LOAD_PARALLELISM)
+    private val documentParallelism = cachePolicyConfig.documentLoadParallelism.coerceAtLeast(1)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val renderDispatcher = dispatchers.io.limitedParallelism(RENDER_POOL_PARALLELISM)
+    private val documentDispatcher = dispatchers.io.limitedParallelism(documentParallelism)
 
-    private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, RENDER_POOL_PARALLELISM)
+    private val renderParallelism = cachePolicyConfig.renderParallelism.coerceAtLeast(1)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val renderDispatcher = dispatchers.io.limitedParallelism(renderParallelism)
+
+    private val renderQueue = RenderWorkQueue(viewModelScope, renderDispatcher, renderParallelism)
     private val processLifecycleOwner = runCatching { ProcessLifecycleOwner.get() }.getOrNull()
     @Volatile
     private var appInForeground: Boolean = true
@@ -274,8 +325,10 @@ open class PdfViewerViewModel @Inject constructor(
 
     private val thumbnailRenderProfile = resolveThumbnailRenderProfile()
 
+    private val indexParallelism = cachePolicyConfig.indexParallelism.coerceAtLeast(1)
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val indexDispatcher = dispatchers.io.limitedParallelism(INDEX_POOL_PARALLELISM)
+    private val indexDispatcher = dispatchers.io.limitedParallelism(indexParallelism)
 
     private val _uiState = MutableStateFlow(PdfViewerUiState())
     val uiState: StateFlow<PdfViewerUiState> = _uiState.asStateFlow()
@@ -299,16 +352,20 @@ open class PdfViewerViewModel @Inject constructor(
     private val tileCacheLock = Any()
     private val renderCachesEnabled = AtomicBoolean(true)
     private val cacheFallbackNotified = AtomicBoolean(false)
-    private val pageCacheMaxBytes = computeCacheBudget(MAX_PAGE_CACHE_BYTES)
-    private val tileCacheMaxBytes = computeCacheBudget(MAX_TILE_CACHE_BYTES)
+    private val pageCacheMaxBytes = computeCacheBudget(
+        cachePolicyConfig.pageBitmap.resolveMaxBytes(MAX_PAGE_CACHE_BYTES)
+    )
+    private val tileCacheMaxBytes = computeCacheBudget(
+        cachePolicyConfig.tileBitmap.resolveMaxBytes(MAX_TILE_CACHE_BYTES)
+    )
     @Volatile
-    private var pageBitmapCacheRef: FractionalBitmapLruCache<PageCacheKey>? = null
+    private var pageBitmapCacheRef: ViewerBitmapCache<PageCacheKey>? = null
     private val pageBitmapCacheLock = Any()
     @Volatile
-    private var tileBitmapCacheRef: FractionalBitmapLruCache<TileCacheKey>? = null
+    private var tileBitmapCacheRef: ViewerBitmapCache<TileCacheKey>? = null
     private val tileBitmapCacheLock = Any()
-    private fun pageBitmapCacheOrNull(): FractionalBitmapLruCache<PageCacheKey>? = pageBitmapCacheRef
-    private fun requirePageBitmapCache(): FractionalBitmapLruCache<PageCacheKey> {
+    private fun pageBitmapCacheOrNull(): ViewerBitmapCache<PageCacheKey>? = pageBitmapCacheRef
+    private fun requirePageBitmapCache(): ViewerBitmapCache<PageCacheKey> {
         val existing = pageBitmapCacheRef
         if (existing != null) {
             return existing
@@ -327,8 +384,8 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    private fun tileBitmapCacheOrNull(): FractionalBitmapLruCache<TileCacheKey>? = tileBitmapCacheRef
-    private fun requireTileBitmapCache(): FractionalBitmapLruCache<TileCacheKey> {
+    private fun tileBitmapCacheOrNull(): ViewerBitmapCache<TileCacheKey>? = tileBitmapCacheRef
+    private fun requireTileBitmapCache(): ViewerBitmapCache<TileCacheKey> {
         val existing = tileBitmapCacheRef
         if (existing != null) {
             return existing
@@ -1718,7 +1775,7 @@ open class PdfViewerViewModel @Inject constructor(
             NovaLog.i(
                 TAG,
                 "Render queue snapshot",
-                field("parallelism", RENDER_POOL_PARALLELISM),
+                field("parallelism", renderParallelism),
                 field("active", renderStats.active),
                 field("visibleQueued", renderStats.visible),
                 field("nearbyQueued", renderStats.nearby),
@@ -1847,7 +1904,7 @@ open class PdfViewerViewModel @Inject constructor(
         }
     }
 
-    private fun <K : Any, V : Any> captureCacheStats(lock: Any, cache: LruCache<K, V>?): CacheStats {
+    private fun <K : Any> captureCacheStats(lock: Any, cache: ViewerBitmapCache<K>?): CacheStats {
         if (cache == null) {
             return CacheStats(0, 0, 0, 0, 0, 0)
         }
@@ -1880,6 +1937,15 @@ open class PdfViewerViewModel @Inject constructor(
         val runtimeBudget = Runtime.getRuntime().maxMemory() / 8L
         val capped = minOf(limitBytes.toLong(), runtimeBudget)
         return capped.coerceAtLeast(MIN_CACHE_BYTES.toLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    private fun ViewerCachePolicyConfig.BitmapCachePolicy.resolveMaxBytes(defaultMax: Int): Int {
+        val override = maxSizeBytesOverride
+        return if (override != null && override > 0) {
+            override
+        } else {
+            defaultMax
+        }
     }
 
     companion object {

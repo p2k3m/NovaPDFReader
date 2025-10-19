@@ -3,7 +3,7 @@ package com.novapdf.reader
 import android.app.Application
 import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
-import androidx.collection.LruCache
+import com.novapdf.reader.ViewerBitmapCache
 import androidx.test.core.app.ApplicationProvider
 import com.novapdf.reader.asTestMainDispatcher
 import com.novapdf.reader.coroutines.TestCoroutineDispatchers
@@ -93,9 +93,9 @@ class PdfViewerViewModelCacheAndErrorTest {
             isAccessible = true
         }
         @Suppress("UNCHECKED_CAST")
-        val pageCache = requirePageCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val pageCache = requirePageCache.invoke(viewModel) as ViewerBitmapCache<Any>
         @Suppress("UNCHECKED_CAST")
-        val tileCache = requireTileCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val tileCache = requireTileCache.invoke(viewModel) as ViewerBitmapCache<Any>
 
         val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
         val pageKey = pageKeyClass.getDeclaredConstructors().single().apply { isAccessible = true }
@@ -141,9 +141,9 @@ class PdfViewerViewModelCacheAndErrorTest {
         }
 
         @Suppress("UNCHECKED_CAST")
-        val pageCache = requirePageCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val pageCache = requirePageCache.invoke(viewModel) as ViewerBitmapCache<Any>
         @Suppress("UNCHECKED_CAST")
-        val tileCache = requireTileCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val tileCache = requireTileCache.invoke(viewModel) as ViewerBitmapCache<Any>
         val callbacks = callbacksField.get(viewModel) as ComponentCallbacks2
 
         val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
@@ -184,9 +184,9 @@ class PdfViewerViewModelCacheAndErrorTest {
         }
 
         @Suppress("UNCHECKED_CAST")
-        val pageCache = requirePageCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val pageCache = requirePageCache.invoke(viewModel) as ViewerBitmapCache<Any>
         @Suppress("UNCHECKED_CAST")
-        val tileCache = requireTileCache.invoke(viewModel) as LruCache<Any, Bitmap>
+        val tileCache = requireTileCache.invoke(viewModel) as ViewerBitmapCache<Any>
         val callbacks = callbacksField.get(viewModel) as ComponentCallbacks2
 
         val pageKeyClass = Class.forName("com.novapdf.reader.PdfViewerViewModel\$PageCacheKey")
