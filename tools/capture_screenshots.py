@@ -102,6 +102,20 @@ def parse_args() -> argparse.Namespace:
         help="Directory where screenshots will be written (default: %(default)s)",
     )
     parser.add_argument(
+        "--document-factory",
+        help=(
+            "Fully qualified class implementing HarnessDocumentFactory to override the document "
+            "opened by the harness"
+        ),
+    )
+    parser.add_argument(
+        "--storage-client-factory",
+        help=(
+            "Fully qualified class implementing HarnessStorageClientFactory to override the "
+            "storage client used by the harness"
+        ),
+    )
+    parser.add_argument(
         "--extra-arg",
         action="append",
         default=[],
@@ -1176,6 +1190,11 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1, HarnessContext(args=args)
+
+    if args.document_factory:
+        parsed_extra_args.append(("harnessDocumentFactory", args.document_factory))
+    if args.storage_client_factory:
+        parsed_extra_args.append(("harnessStorageClientFactory", args.storage_client_factory))
 
     augmented_extra_args = ensure_test_package_argument(
         args, parsed_extra_args, None

@@ -7,6 +7,10 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.util.Log
+import androidx.test.platform.app.InstrumentationRegistry
+import com.novapdf.reader.HarnessDocument
+import com.novapdf.reader.HarnessOverrideLoader
 import com.novapdf.reader.util.sanitizeCacheFileName
 import java.io.File
 import java.io.IOException
@@ -22,13 +26,24 @@ internal object StressDocumentFixtures {
     )
     private const val PAGE_COUNT = 32
 
-    fun ensureStressDocument(context: Context): Uri {
+    fun ensureStressDocument(context: Context): HarnessDocument {
+        val arguments = runCatching { InstrumentationRegistry.getArguments() }.getOrNull()
+        val override = HarnessOverrideLoader.loadDocumentFactory(context, arguments)
+            ?.runCatching { create(context) }
+            ?.onFailure { error ->
+                Log.w(TAG, "Harness document factory failed; falling back to local stress PDF", error)
+            }
+            ?.getOrNull()
+        if (override != null) {
+            return override
+        }
+
         val cacheFile = File(context.cacheDir, LARGE_CACHE_FILE_NAME)
         cacheFile.parentFile?.mkdirs()
         if (!cacheFile.exists() || cacheFile.length() == 0L) {
             generateStressDocument(cacheFile)
         }
-        return Uri.fromFile(cacheFile)
+        return HarnessDocument.Local(Uri.fromFile(cacheFile))
     }
 
     private fun generateStressDocument(destination: File) {
@@ -171,4 +186,6 @@ internal object StressDocumentFixtures {
             textY -= paint.textSize * 1.4f
         }
     }
+
+    private const val TAG = "StressDocument"
 }
