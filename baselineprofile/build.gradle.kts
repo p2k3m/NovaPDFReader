@@ -22,12 +22,20 @@ val configuredAndroidSdk = listOfNotNull(
     providers.environmentVariable("ANDROID_HOME").orNull
 ).firstOrNull { it.isNotBlank() }
 
+fun readAdditionalSdkCandidates(): List<String> {
+    val raw = System.getenv("NOVAPDF_ANDROID_SDK_CANDIDATES")?.trim()
+    if (raw.isNullOrEmpty()) return emptyList()
+    return raw
+        .split(File.pathSeparatorChar)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
 if (!rootLocalProperties.exists() && configuredAndroidSdk == null) {
-    val fallbackSdkDir = listOfNotNull(
+    val fallbackSdkDir = (listOfNotNull(
         System.getenv("ANDROID_SDK_ROOT"),
         System.getenv("ANDROID_HOME"),
-        "/usr/local/lib/android/sdk"
-    )
+    ) + readAdditionalSdkCandidates())
         .map { it.trim() }
         .firstOrNull { it.isNotEmpty() && File(it).exists() }
 

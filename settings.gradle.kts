@@ -110,6 +110,15 @@ fun ensureManagedSdkLicenses(managedSdkDirectory: File) {
     )
 }
 
+fun readAdditionalSdkCandidates(): List<String> {
+    val raw = System.getenv("NOVAPDF_ANDROID_SDK_CANDIDATES")?.trim()
+    if (raw.isNullOrEmpty()) return emptyList()
+    return raw
+        .split(File.pathSeparatorChar)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
 fun discoverAndroidSdk(rootDir: File): File? {
     val localPropertiesFile = File(rootDir, "local.properties")
     val localPropertiesSdk = if (localPropertiesFile.exists()) {
@@ -122,12 +131,11 @@ fun discoverAndroidSdk(rootDir: File): File? {
         null
     }
 
-    val candidates = listOfNotNull(
+    val candidates = (listOfNotNull(
         System.getenv("ANDROID_SDK_ROOT"),
         System.getenv("ANDROID_HOME"),
         localPropertiesSdk,
-        "/usr/local/lib/android/sdk"
-    )
+    ) + readAdditionalSdkCandidates())
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .map { File(it) }
