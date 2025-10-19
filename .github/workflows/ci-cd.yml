@@ -2425,6 +2425,7 @@ jobs:
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            bash tools/capture_heap_dump.sh "$PACKAGE_NAME" "$logs_dir" "connected-tests"
             exit 1
           fi
       - name: Run macrobenchmark regression suite
@@ -2476,6 +2477,7 @@ jobs:
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            bash tools/capture_heap_dump.sh "$PACKAGE_NAME" "$logs_dir" "macrobenchmark"
             exit 1
           fi
       - name: Generate release baseline profile
@@ -2522,6 +2524,7 @@ jobs:
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            bash tools/capture_heap_dump.sh "$PACKAGE_NAME" "$logs_dir" "baseline-profile"
             exit 1
           fi
       - name: Verify committed baseline profile is current
@@ -3336,6 +3339,7 @@ jobs:
             echo "Device logs cleared crash and ANR checks" >&2
           else
             echo "::error::Crash signatures detected in device logs; collecting native diagnostics" >&2
+            bash tools/capture_heap_dump.sh "$PACKAGE_NAME" "$logs_dir" "screenshot-harness"
             exit 1
           fi
       - name: Verify instrumentation log tails
