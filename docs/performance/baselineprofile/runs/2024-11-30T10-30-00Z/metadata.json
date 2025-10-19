@@ -1,0 +1,15 @@
+{
+  "recorded_at": "2024-11-30T10:30:00Z",
+  "android_sdk": 35,
+  "device": "Pixel 8 Pro (api35-production)",
+  "build_variant": "benchmarkRelease",
+  "commit": "c47de19",
+  "notes": [
+    "First run after migrating infra module wiring",
+    "Docs refreshed with 2024 Q4 renderer assets"
+  ],
+  "artifacts": {
+    "baseline_profile": "baseline-prof.txt",
+    "benchmarks": "benchmarks.json"
+  }
+}

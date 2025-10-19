@@ -1,0 +1,15 @@
+{
+  "recorded_at": "2024-09-20T14:21:00Z",
+  "android_sdk": 34,
+  "device": "Pixel 7 Pro (emu-x86_64)",
+  "build_variant": "benchmarkRelease",
+  "commit": "9f3b1c2",
+  "notes": [
+    "CI macrobenchmark matrix device",
+    "Docs rebuilt against November 2024 renderer"
+  ],
+  "artifacts": {
+    "baseline_profile": "baseline-prof.txt",
+    "benchmarks": "benchmarks.json"
+  }
+}
