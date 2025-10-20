@@ -3020,6 +3020,8 @@ jobs:
           }
 
           harness_pid=""
+          HARNESS_EXIT_REASON=""
+          MAX_SYSTEM_CRASH_RETRIES=1
           rm -f "$HARNESS_LOGCAT"
           collect_harness_logcat() {
             rm -f "$HARNESS_LOGCAT"
@@ -3203,30 +3205,34 @@ jobs:
             echo "Unable to resolve screenshot harness instrumentation component; defaulting to $HARNESS_COMPONENT" >&2
           fi
 
-          cleanup_flags
-
-          echo "Launching screenshot harness instrumentation to load thousand-page PDF"
-          adb logcat -c >/dev/null 2>&1 || true
-          adb shell am instrument -w -r \
-            -e runScreenshotHarness true \
-            -e class "$HARNESS_CLASS" \
-            "$HARNESS_COMPONENT" \
-            >"$HARNESS_LOG" 2>&1 &
-          harness_pid=$!
-
-          resolve_harness_run_as_package || true
+          launch_screenshot_harness() {
+            echo "Launching screenshot harness instrumentation to load thousand-page PDF"
+            adb logcat -c >/dev/null 2>&1 || true
+            adb shell am instrument -w -r \
+              -e runScreenshotHarness true \
+              -e class "$HARNESS_CLASS" \
+              "$HARNESS_COMPONENT" \
+              >"$HARNESS_LOG" 2>&1 &
+            harness_pid=$!
+            HARNESS_EXIT_REASON=""
+            resolve_harness_run_as_package || true
+          }
 
           wait_for_harness() {
             local elapsed=0
             local timeout=${HARNESS_READY_TIMEOUT:-360}
+            HARNESS_EXIT_REASON=""
             while true; do
               if ! kill -0 "$harness_pid" >/dev/null 2>&1; then
                 echo "::error::Screenshot harness instrumentation exited before reporting readiness" >&2
                 cat "$HARNESS_LOG" >&2 || true
-                wait "$harness_pid" || true
+                HARNESS_EXIT_REASON="unexpected_exit"
+                if [ -f "$HARNESS_LOG" ] && grep -q "System has crashed" "$HARNESS_LOG"; then
+                  HARNESS_EXIT_REASON="system_crash"
+                fi
                 collect_harness_logcat
                 collect_app_crash_logs
-                exit 1
+                return 1
               fi
 
               if adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
@@ -3236,17 +3242,39 @@ jobs:
               if [ $elapsed -ge $timeout ]; then
                 echo "::error::Timed out waiting for screenshot harness readiness flag (timeout ${timeout}s)" >&2
                 cat "$HARNESS_LOG" >&2 || true
+                HARNESS_EXIT_REASON="readiness_timeout"
                 collect_harness_logcat
                 collect_app_crash_logs
-                exit 1
+                return 1
               fi
 
               sleep 2
               elapsed=$((elapsed + 2))
             done
+            HARNESS_EXIT_REASON=""
+            return 0
           }
 
-          wait_for_harness
+          system_crash_attempts=0
+          while true; do
+            cleanup_flags
+            launch_screenshot_harness
+            if wait_for_harness; then
+              break
+            fi
+
+            wait "$harness_pid" >/dev/null 2>&1 || true
+            harness_pid=""
+
+            if [ "$HARNESS_EXIT_REASON" = "system_crash" ] && [ $system_crash_attempts -lt $MAX_SYSTEM_CRASH_RETRIES ]; then
+              system_crash_attempts=$((system_crash_attempts + 1))
+              echo "Detected Android system crash during screenshot harness; waiting for recovery before retrying" >&2
+              wait_for_activity_manager
+              continue
+            fi
+
+            exit 1
+          done
 
           adb shell settings put system accelerometer_rotation 0 || true
           adb shell settings put system user_rotation 0 || true
