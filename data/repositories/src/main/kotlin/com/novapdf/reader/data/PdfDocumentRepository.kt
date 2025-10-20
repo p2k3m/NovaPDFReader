@@ -1610,16 +1610,14 @@ class PdfDocumentRepository(
             cancellationSignal.throwIfCanceled()
             val countValue = pageTreeMatcher.group(1)?.toIntOrNull() ?: continue
             if (countValue >= PRE_REPAIR_MIN_PAGE_COUNT) {
-                if (containsHarnessMarker) {
-                    NovaLog.i(
-                        TAG,
-                        "Skipping pre-emptive repair for harness fixture at $uri with /Count=$countValue"
-                    )
-                    continue
-                }
                 NovaLog.i(
                     TAG,
-                    "Detected large page tree with /Count=$countValue for $uri; preparing repair"
+                    buildString {
+                        append("Detected large page tree with /Count=$countValue for $uri; preparing repair")
+                        if (containsHarnessMarker) {
+                            append(" (harness fixture detected)")
+                        }
+                    }
                 )
                 return true
             }

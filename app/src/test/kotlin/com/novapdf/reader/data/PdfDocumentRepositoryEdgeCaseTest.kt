@@ -179,7 +179,7 @@ class PdfDocumentRepositoryEdgeCaseTest {
     }
 
     @Test
-    fun harnessFixtureBypassesPreemptiveRepair() = runTest {
+    fun harnessFixtureTriggersPreemptiveRepair() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val repository = PdfDocumentRepository(
             context,
@@ -230,8 +230,8 @@ class PdfDocumentRepositoryEdgeCaseTest {
             null,
         ) as Boolean
 
-        assertFalse(
-            "Harness fixture should bypass pre-emptive repair",
+        assertTrue(
+            "Harness fixture should trigger pre-emptive repair",
             shouldRepair
         )
 
