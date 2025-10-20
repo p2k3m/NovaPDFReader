@@ -626,6 +626,58 @@ def _gradle_wrapper_path() -> Optional[Path]:
     return None
 
 
+def _parse_optional_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _virtualization_unavailable() -> bool:
+    require_connected_device = _parse_optional_bool(
+        os.getenv("NOVAPDF_REQUIRE_CONNECTED_DEVICE")
+    )
+    if require_connected_device is True:
+        return False
+
+    nested_virtualization_disabled = _parse_optional_bool(
+        os.getenv("ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION")
+    )
+    if nested_virtualization_disabled is True:
+        return True
+
+    acceleration_preference = os.getenv("ACTIONS_RUNNER_ACCELERATION_PREFERENCE", "").strip()
+    if acceleration_preference.lower() in {"software", "none"}:
+        return True
+
+    return False
+
+
+def _emit_missing_instrumentation_error(after_auto_install: bool) -> None:
+    suffix = " after Gradle installation" if after_auto_install else ""
+    message = (
+        "Failed to detect screenshot harness instrumentation component"
+        f"{suffix}."
+    )
+    print(message, file=sys.stderr)
+    print(f"::error::{message}", file=sys.stderr)
+
+    if _virtualization_unavailable():
+        guidance = (
+            "Android emulator virtualization is unavailable in this environment. "
+            "Connect a physical device or enable virtualization to install the "
+            "screenshot harness."
+        )
+        print(guidance, file=sys.stderr)
+        print(f"::warning::{guidance}", file=sys.stderr)
+
+
 def auto_install_debug_apks(args: argparse.Namespace) -> bool:
     if getattr(args, "skip_auto_install", False):
         return False
@@ -686,7 +738,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
     if getattr(args, "skip_auto_install", False):
         return None
 
-    auto_install_debug_apks(args)
+    auto_install_result = auto_install_debug_apks(args)
     component = _resolve_instrumentation_component_once(
         args,
         requested,
@@ -699,6 +751,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         normalized = _normalize_instrumentation_component(args, component)
         return _prefer_requested_instrumentation_component(args, requested, normalized)
 
+    _emit_missing_instrumentation_error(after_auto_install=auto_install_result)
     return None
 
 

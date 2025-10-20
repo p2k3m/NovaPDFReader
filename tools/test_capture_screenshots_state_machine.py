@@ -4,6 +4,8 @@ from typing import List, Tuple
 
 import pytest
 
+import tools.capture_screenshots as capture_screenshots
+
 from tools.capture_screenshots import (
     HARNESS_PHASE_PREFIX,
     HarnessContext,
@@ -207,3 +209,59 @@ def test_phase_guidance_summarizes_attempts(capsys: pytest.CaptureFixture[str]) 
 
     ctx.maybe_emit_phase_guidance()
     assert capsys.readouterr().err == ""
+
+
+def test_resolve_instrumentation_component_emits_error(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    args = argparse.Namespace(instrumentation="com.example/.Runner", skip_auto_install=False)
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_resolve_instrumentation_component_once",
+        lambda *unused_args, **unused_kwargs: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_normalize_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_prefer_requested_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "auto_install_debug_apks",
+        lambda *_: False,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_virtualization_unavailable",
+        lambda: False,
+    )
+
+    assert capture_screenshots.resolve_instrumentation_component(args) is None
+
+    error_output = capsys.readouterr().err
+    expected = "Failed to detect screenshot harness instrumentation component."
+    assert expected in error_output
+    assert f"::error::{expected}" in error_output
+
+
+def test_emit_missing_instrumentation_error_warns_on_virtualization(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: True)
+
+    capture_screenshots._emit_missing_instrumentation_error(after_auto_install=True)
+
+    output = capsys.readouterr().err
+    assert (
+        "Failed to detect screenshot harness instrumentation component after Gradle installation."
+        in output
+    )
+    warning = (
+        "Android emulator virtualization is unavailable in this environment. Connect a physical device or enable virtualization to install the screenshot harness."
+    )
+    assert warning in output
+    assert f"::warning::{warning}" in output
