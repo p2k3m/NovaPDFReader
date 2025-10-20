@@ -142,12 +142,13 @@ class ScreenshotHarnessTest {
     }
 
     @Before
-    fun setUp() = runBlocking {
-        lastLoggedUiState = null
-        lastProgressStep = null
-        try {
-            hiltRule.inject()
-            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+    fun setUp() {
+        runBlocking {
+            lastLoggedUiState = null
+            lastProgressStep = null
+            try {
+                hiltRule.inject()
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
             HarnessReadiness.emit { readinessMarker ->
                 println(readinessMarker)
                 logHarnessInfo("Harness readiness marker emitted: $readinessMarker")
@@ -218,6 +219,7 @@ class ScreenshotHarnessTest {
             logHarnessError(message, error)
             publishHarnessFailureFlag("setup_failed", error)
             throw error
+        }
         }
     }
 
@@ -575,23 +577,25 @@ class ScreenshotHarnessTest {
     }
 
     @After
-    fun tearDown() = runBlocking {
-        if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
-            return@runBlocking
-        }
-        var thresholdError: Throwable? = null
-        metricsRecorder?.finish()?.let { report ->
-            publishPerformanceMetrics(report)
-            try {
-                enforcePerformanceThresholds(report)
-            } catch (error: Throwable) {
-                thresholdError = error
+    fun tearDown() {
+        runBlocking {
+            if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
+                return@runBlocking
             }
+            var thresholdError: Throwable? = null
+            metricsRecorder?.finish()?.let { report ->
+                publishPerformanceMetrics(report)
+                try {
+                    enforcePerformanceThresholds(report)
+                } catch (error: Throwable) {
+                    thresholdError = error
+                }
+            }
+            metricsRecorder = null
+            cancelWorkManagerJobs()
+            withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = false) }
+            thresholdError?.let { throw it }
         }
-        metricsRecorder = null
-        cancelWorkManagerJobs()
-        withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = false) }
-        thresholdError?.let { throw it }
     }
 
     @Test
