@@ -242,29 +242,38 @@ class ScreenshotHarnessTest {
             "Preflight CPU sample: total=$totalText, process=$processText, other=$otherText",
         )
 
-        val otherPercent = sample.otherPercent
-        if (sample.totalPercent >= PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT &&
-            otherPercent != null &&
-            otherPercent >= PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT
-        ) {
-            val detail = String.format(
-                Locale.US,
-                "reason=preflight_system_cpu total=%s process=%s other=%.1f%% thresholds=%.0f/%.0f sampleIntervalMs=%d",
-                totalText,
-                processText,
-                otherPercent,
-                PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT.toDouble(),
-                PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT.toDouble(),
-                PREFLIGHT_CPU_SAMPLE_INTERVAL_MS,
-            )
-            logHarnessWarn("Skipping screenshot harness due to elevated system CPU load. $detail")
-            publishHarnessSkipFlag(
-                reason = "preflight_system_cpu",
-                detail = detail,
-                blacklistRunner = true,
-            )
-            assumeTrue("System CPU load too high for screenshot harness preflight", false)
+        if (!sample.isCpuElevated()) {
+            return
         }
+
+        logHarnessWarn(
+            "Preflight CPU sample exceeded thresholds; capturing confirmation sample before skipping",
+        )
+
+        val confirmation = capturePreflightCpuSample()
+        if (confirmation == null || !confirmation.isCpuElevated()) {
+            val confirmationDetail = confirmation?.let { confirmSample ->
+                buildPreflightDetail(confirmSample)
+            } ?: "confirmation_sample=unavailable"
+            logHarnessInfo(
+                "System CPU load normalized after additional sampling; continuing with screenshot harness setup ($confirmationDetail)",
+            )
+            return
+        }
+
+        val detail = buildString {
+            append(buildPreflightDetail(sample))
+            append(' ')
+            append("confirmation=")
+            append(buildPreflightDetail(confirmation))
+        }
+        logHarnessWarn("Skipping screenshot harness due to elevated system CPU load. $detail")
+        publishHarnessSkipFlag(
+            reason = "preflight_system_cpu",
+            detail = detail,
+            blacklistRunner = true,
+        )
+        assumeTrue("System CPU load too high for screenshot harness preflight", false)
     }
 
     private fun capturePreflightCpuSample(): CpuPreflightSample? {
@@ -368,6 +377,32 @@ class ScreenshotHarnessTest {
         val processPercent: Float?,
         val otherPercent: Float?,
     )
+
+    private fun CpuPreflightSample.isCpuElevated(): Boolean {
+        val otherPercent = otherPercent ?: return false
+        return totalPercent >= PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT &&
+            otherPercent >= PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT
+    }
+
+    private fun buildPreflightDetail(sample: CpuPreflightSample): String {
+        val totalText = String.format(Locale.US, "%.1f%%", sample.totalPercent)
+        val processText = sample.processPercent?.let { percent ->
+            String.format(Locale.US, "%.1f%%", percent)
+        } ?: "n/a"
+        val otherText = sample.otherPercent?.let { percent ->
+            String.format(Locale.US, "%.1f%%", percent)
+        } ?: "n/a"
+        return String.format(
+            Locale.US,
+            "total=%s process=%s other=%s thresholds=%.0f/%.0f sampleIntervalMs=%d",
+            totalText,
+            processText,
+            otherText,
+            PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT.toDouble(),
+            PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT.toDouble(),
+            PREFLIGHT_CPU_SAMPLE_INTERVAL_MS,
+        )
+    }
 
     private data class CpuPreflightSnapshot(
         val idle: Long,
@@ -1929,6 +1964,9 @@ class ScreenshotHarnessTest {
         )
         directories.forEach { directory ->
             val flag = File(directory, CacheFileNames.SCREENSHOT_SKIPPED_FLAG)
+            logHarnessInfo(
+                "Writing screenshot skip flag to ${flag.absolutePath} with payload $payload",
+            )
             val success = writeHandshakeFlag(flag, payload)
             if (!success) {
                 logHarnessWarn(
