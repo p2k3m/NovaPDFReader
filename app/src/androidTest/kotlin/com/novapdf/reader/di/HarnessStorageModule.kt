@@ -4,8 +4,11 @@ import android.content.Context
 import com.novapdf.reader.HarnessBlackholeHttpStorageClient
 import com.novapdf.reader.HarnessOverrideRegistry
 import com.novapdf.reader.data.remote.DelegatingStorageClient
+import com.novapdf.reader.data.remote.DelegatingStorageEngine
 import com.novapdf.reader.data.remote.FileStorageClient
 import com.novapdf.reader.data.remote.StorageClient
+import com.novapdf.reader.data.remote.StorageClientEngine
+import com.novapdf.reader.data.remote.StorageEngine
 import com.novapdf.reader.data.remote.di.StorageModule
 import dagger.Module
 import dagger.Provides
@@ -48,5 +51,14 @@ object HarnessStorageModule {
             return override
         }
         return DelegatingStorageClient(delegates)
+    }
+
+    @Provides
+    @Singleton
+    fun provideStorageEngine(
+        clients: Set<@JvmSuppressWildcards StorageClient>,
+    ): StorageEngine {
+        val engines = clients.map { StorageClientEngine(it) }
+        return DelegatingStorageEngine(engines)
     }
 }
