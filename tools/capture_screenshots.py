@@ -660,6 +660,15 @@ def _virtualization_unavailable() -> bool:
     return False
 
 
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi_sequences(value: str) -> str:
+    if not value:
+        return value
+    return _ANSI_ESCAPE_PATTERN.sub("", value)
+
+
 @dataclass
 class AutoInstallResult:
     attempted: bool
@@ -731,7 +740,16 @@ def _maybe_note_virtualization_unavailable(
     if not parts:
         return
 
-    normalized = " ".join(parts).lower()
+    sanitized_parts = []
+    for part in parts:
+        sanitized = _strip_ansi_sequences(part)
+        if sanitized:
+            sanitized_parts.append(sanitized)
+
+    if not sanitized_parts:
+        return
+
+    normalized = " ".join(sanitized_parts).lower()
     for fragment in _ADB_VIRTUALIZATION_ERROR_FRAGMENTS:
         if fragment in normalized:
             setattr(args, "_novapdf_virtualization_unavailable", True)
@@ -784,7 +802,10 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
         return AutoInstallResult(attempted=True, succeeded=False)
 
     _maybe_note_virtualization_unavailable(args, output=output)
-    virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in output.lower()
+    sanitized_output = _strip_ansi_sequences(output)
+    virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in sanitized_output.lower()
+    if virtualization_unavailable:
+        setattr(args, "_novapdf_virtualization_unavailable", True)
     return AutoInstallResult(
         attempted=True,
         succeeded=succeeded,
