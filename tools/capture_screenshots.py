@@ -260,6 +260,10 @@ class HarnessStartTimeout(RuntimeError):
     """Raised when the instrumentation fails to emit output within the startup deadline."""
 
 
+class HarnessSystemCrash(RuntimeError):
+    """Raised when the instrumentation run reports an Android system crash."""
+
+
 def adb_command(args: argparse.Namespace, *cmd: str, text: bool = True, **kwargs):
     base_cmd: List[str] = [args.adb]
     if args.serial:
@@ -1226,6 +1230,7 @@ def stream_instrumentation_output(
     ctx: HarnessContext,
     *,
     start_timeout: int = HARNESS_START_TIMEOUT_SECONDS,
+    abort_on_system_crash: bool = False,
 ) -> Iterable[str]:
     assert process.stdout is not None
 
@@ -1278,6 +1283,10 @@ def stream_instrumentation_output(
         sys.stdout.write(line)
         sys.stdout.flush()
         ctx.observe_line(line)
+        if abort_on_system_crash and ctx.system_crash_detected:
+            raise HarnessSystemCrash(
+                "Android system_server crash detected while streaming harness output"
+            )
         yield line
 
 
@@ -1797,7 +1806,10 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
     try:
         try:
             for line in stream_instrumentation_output(
-                process, ctx, start_timeout=HARNESS_START_TIMEOUT_SECONDS
+                process,
+                ctx,
+                start_timeout=HARNESS_START_TIMEOUT_SECONDS,
+                abort_on_system_crash=True,
             ):
                 ctx.maybe_collect_package(line)
                 ctx.maybe_collect_ready_flag(line)
@@ -1830,6 +1842,23 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
             collect_native_crash_artifacts(args, ctx, component, reason)
             run_harness_healthcheck(args, augmented_extra_args, component)
             ctx.maybe_emit_missing_instrumentation_guidance()
+            ctx.maybe_emit_system_crash_guidance()
+            ctx.maybe_emit_phase_guidance()
+            return 1, ctx
+        except HarnessSystemCrash:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            print(
+                "Detected Android system_server crash while running the screenshot harness; "
+                "aborting early.",
+                file=sys.stderr,
+            )
+            collect_native_crash_artifacts(
+                args, ctx, component, "system-server-crash"
+            )
             ctx.maybe_emit_system_crash_guidance()
             ctx.maybe_emit_phase_guidance()
             return 1, ctx

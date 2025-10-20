@@ -11,7 +11,9 @@ import tools.capture_screenshots as capture_screenshots
 from tools.capture_screenshots import (
     HARNESS_PHASE_PREFIX,
     HarnessContext,
+    HarnessSystemCrash,
     HarnessTestPoint,
+    stream_instrumentation_output,
 )
 
 
@@ -96,6 +98,49 @@ def test_guidance_emitted_once(capsys: pytest.CaptureFixture[str]) -> None:
     output = capsys.readouterr().err
     assert output.count("system_server crashed") == 1
     assert output.count("Screenshot harness instrumentation is not installed") == 1
+
+
+def test_stream_instrumentation_output_aborts_on_system_crash(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ctx = HarnessContext(args=argparse.Namespace())
+
+    class FakeStdout:
+        def __init__(self, lines: List[str]):
+            self._iterator = iter(lines)
+
+        def __iter__(self) -> "FakeStdout":
+            return self
+
+        def __next__(self) -> str:
+            return next(self._iterator)
+
+        def close(self) -> None:  # pragma: no cover - interface compatibility
+            pass
+
+    class FakeProcess:
+        def __init__(self, lines: List[str]):
+            self.stdout = FakeStdout(lines)
+
+    lines = [
+        "HARNESS TESTPOINT: cache_ready: directories=/tmp/harness\n",
+        "INSTRUMENTATION_ABORTED: System has crashed\n",
+    ]
+    process = FakeProcess(lines)
+
+    with pytest.raises(HarnessSystemCrash):
+        list(
+            stream_instrumentation_output(
+                process,
+                ctx,
+                start_timeout=None,
+                abort_on_system_crash=True,
+            )
+        )
+
+    assert ctx.system_crash_detected
+    captured = capsys.readouterr()
+    assert "System has crashed" in captured.out
 
 
 def test_observe_line_emits_phase_alerts(capsys: pytest.CaptureFixture[str]) -> None:
