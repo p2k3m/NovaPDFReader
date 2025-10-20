@@ -700,6 +700,8 @@ def _emit_missing_instrumentation_error(
 _VIRTUALIZATION_WARNING_FRAGMENT = "does not support android emulator virtualization"
 _ADB_VIRTUALIZATION_ERROR_FRAGMENTS = (
     "can't find service: package",
+    "packagemanagerinternal.freestorage",
+    "session dir already exists",
 )
 
 

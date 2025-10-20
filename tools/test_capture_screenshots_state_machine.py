@@ -296,6 +296,61 @@ def test_resolve_instrumentation_component_warns_when_adb_lacks_package_service(
     assert f"::warning::{warning}" in output
 
 
+@pytest.mark.parametrize(
+    "error_output",
+    [
+        (
+            "java.lang.NullPointerException: Attempt to invoke virtual method 'void "
+            "android.content.pm.PackageManagerInternal.freeStorage' on a null object"
+        ),
+        "android.os.ParcelableException: java.io.IOException: Session dir already exists: /data/app/vmdl123.tmp",
+    ],
+)
+def test_resolve_instrumentation_component_warns_when_installation_fails_with_virtualization_signatures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error_output: str,
+) -> None:
+    args = argparse.Namespace(instrumentation="com.example/.Runner", skip_auto_install=False)
+
+    def fake_adb_command_output(*_unused_args, **_unused_kwargs) -> str:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["adb", "shell", "pm", "list", "instrumentation"],
+            output=error_output,
+        )
+
+    monkeypatch.setattr(capture_screenshots, "adb_command_output", fake_adb_command_output)
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_normalize_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_prefer_requested_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "auto_install_debug_apks",
+        lambda *_: capture_screenshots.AutoInstallResult(attempted=False, succeeded=False),
+    )
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
+
+    assert capture_screenshots.resolve_instrumentation_component(args) is None
+
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
+
+    output = capsys.readouterr().err
+    warning = (
+        "Android emulator virtualization is unavailable in this environment. "
+        "Connect a physical device or enable virtualization to install the screenshot harness."
+    )
+    assert warning in output
+    assert f"::warning::{warning}" in output
+
+
 def test_emit_missing_instrumentation_error_warns_on_virtualization(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
