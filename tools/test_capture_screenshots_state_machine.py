@@ -1,6 +1,7 @@
 import argparse
 import json
 import subprocess
+from pathlib import Path
 from typing import List, Tuple
 
 import pytest
@@ -395,6 +396,32 @@ def test_emit_missing_instrumentation_error_uses_result_virtualization_flag(
     )
     assert warning in output
     assert f"::warning::{warning}" in output
+
+
+def test_auto_install_debug_apks_detects_virtualization_with_ansi(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = argparse.Namespace(skip_auto_install=False)
+
+    gradle_wrapper = tmp_path / "gradlew"
+    gradle_wrapper.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(capture_screenshots, "_gradle_wrapper_path", lambda: gradle_wrapper)
+
+    ansi_output = (
+        "\x1b[33mSkipping task installDebugAndroidTest because the current environment "
+        "does not support Android emulator virtualization.\x1b[0m"
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_run_gradle_install",
+        lambda command, cwd: (True, ansi_output),
+    )
+
+    result = capture_screenshots.auto_install_debug_apks(args)
+
+    assert result.virtualization_unavailable
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
 
 
 def test_run_instrumentation_once_skips_when_virtualization_unavailable(
