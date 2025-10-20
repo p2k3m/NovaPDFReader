@@ -232,7 +232,9 @@ def test_resolve_instrumentation_component_emits_error(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         capture_screenshots,
         "auto_install_debug_apks",
-        lambda *_: False,
+        lambda *_: capture_screenshots.AutoInstallResult(
+            attempted=False, succeeded=False
+        ),
     )
     monkeypatch.setattr(
         capture_screenshots,
@@ -253,7 +255,9 @@ def test_emit_missing_instrumentation_error_warns_on_virtualization(
 ) -> None:
     monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: True)
 
-    capture_screenshots._emit_missing_instrumentation_error(after_auto_install=True)
+    capture_screenshots._emit_missing_instrumentation_error(
+        capture_screenshots.AutoInstallResult(attempted=True, succeeded=False)
+    )
 
     output = capsys.readouterr().err
     assert (
@@ -261,7 +265,32 @@ def test_emit_missing_instrumentation_error_warns_on_virtualization(
         in output
     )
     warning = (
-        "Android emulator virtualization is unavailable in this environment. Connect a physical device or enable virtualization to install the screenshot harness."
+        "Android emulator virtualization is unavailable in this environment. "
+        "Connect a physical device or enable virtualization to install the screenshot harness."
+    )
+    assert warning in output
+    assert f"::warning::{warning}" in output
+
+
+def test_emit_missing_instrumentation_error_uses_result_virtualization_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
+
+    capture_screenshots._emit_missing_instrumentation_error(
+        capture_screenshots.AutoInstallResult(
+            attempted=True, succeeded=True, virtualization_unavailable=True
+        )
+    )
+
+    output = capsys.readouterr().err
+    assert (
+        "Failed to detect screenshot harness instrumentation component after Gradle installation."
+        in output
+    )
+    warning = (
+        "Android emulator virtualization is unavailable in this environment. "
+        "Connect a physical device or enable virtualization to install the screenshot harness."
     )
     assert warning in output
     assert f"::warning::{warning}" in output
