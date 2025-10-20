@@ -294,3 +294,51 @@ def test_emit_missing_instrumentation_error_uses_result_virtualization_flag(
     )
     assert warning in output
     assert f"::warning::{warning}" in output
+
+
+def test_run_instrumentation_once_skips_when_virtualization_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = argparse.Namespace(
+        extra_arg=[],
+        document_factory=None,
+        storage_client_factory=None,
+        instrumentation="com.example/.Runner",
+        skip_auto_install=False,
+        timeout=5,
+    )
+
+    monkeypatch.setattr(capture_screenshots, "parse_extra_args", lambda _: [])
+    monkeypatch.setattr(
+        capture_screenshots,
+        "ensure_test_package_argument",
+        lambda _args, extras, _component: extras,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "derive_fallback_package",
+        lambda *_unused_args, **_unused_kwargs: None,
+    )
+
+    def fake_resolve(resolve_args: argparse.Namespace) -> None:
+        setattr(
+            resolve_args,
+            "_novapdf_last_auto_install_result",
+            capture_screenshots.AutoInstallResult(
+                attempted=True, succeeded=False, virtualization_unavailable=True
+            ),
+        )
+        return None
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "resolve_instrumentation_component",
+        fake_resolve,
+    )
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
+
+    exit_code, ctx = capture_screenshots.run_instrumentation_once(args)
+
+    assert exit_code == 0
+    assert ctx.virtualization_unavailable
+    assert ctx.capture_completed

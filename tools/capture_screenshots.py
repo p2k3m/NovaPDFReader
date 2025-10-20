@@ -673,9 +673,13 @@ def _emit_missing_instrumentation_error(auto_install_result: AutoInstallResult) 
         f"{suffix}."
     )
     print(message, file=sys.stderr)
-    print(f"::error::{message}", file=sys.stderr)
+    virtualization_unavailable = (
+        auto_install_result.virtualization_unavailable or _virtualization_unavailable()
+    )
+    severity = "::warning::" if virtualization_unavailable else "::error::"
+    print(f"{severity}{message}", file=sys.stderr)
 
-    if auto_install_result.virtualization_unavailable or _virtualization_unavailable():
+    if virtualization_unavailable:
         guidance = (
             "Android emulator virtualization is unavailable in this environment. "
             "Connect a physical device or enable virtualization to install the "
@@ -742,6 +746,7 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
 
 
 def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
+    setattr(args, "_novapdf_last_auto_install_result", None)
     requested = args.instrumentation.strip()
     package = ""
     runner = ""
@@ -773,6 +778,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         return None
 
     auto_install_result = auto_install_debug_apks(args)
+    setattr(args, "_novapdf_last_auto_install_result", auto_install_result)
     component = _resolve_instrumentation_component_once(
         args,
         requested,
@@ -819,7 +825,12 @@ def _sanitize(value: str) -> str:
 
 
 class HarnessContext:
-    def __init__(self, fallback_package: Optional[str] = None, *, args: Optional[argparse.Namespace] = None) -> None:
+    def __init__(
+        self,
+        fallback_package: Optional[str] = None,
+        *,
+        args: Optional[argparse.Namespace] = None,
+    ) -> None:
         self._args: Optional[argparse.Namespace] = args
         self.package: Optional[str] = None
         self.ready_flags: List[str] = []
@@ -828,6 +839,7 @@ class HarnessContext:
         self.system_crash_detected: bool = False
         self.process_crash_detected: bool = False
         self.missing_instrumentation_detected: bool = False
+        self.virtualization_unavailable: bool = False
         self._sanitized_package_warning_emitted: bool = False
         self._system_crash_guidance_emitted: bool = False
         self._missing_instrumentation_guidance_emitted: bool = False
@@ -1652,10 +1664,23 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     component = resolve_instrumentation_component(args)
     if component is None:
-        return 1, HarnessContext(
+        ctx = HarnessContext(
             derive_fallback_package(args, augmented_extra_args),
             args=args,
         )
+        auto_install_result = getattr(args, "_novapdf_last_auto_install_result", None)
+        virtualization_unavailable = False
+        if isinstance(auto_install_result, AutoInstallResult):
+            virtualization_unavailable = auto_install_result.virtualization_unavailable
+        if virtualization_unavailable or _virtualization_unavailable():
+            ctx.virtualization_unavailable = True
+            ctx.capture_completed = True
+            print(
+                "Skipping screenshot capture because Android emulator virtualization is unavailable.",
+                file=sys.stderr,
+            )
+            return 0, ctx
+        return 1, ctx
 
     augmented_extra_args = ensure_test_package_argument(
         args, augmented_extra_args, component
