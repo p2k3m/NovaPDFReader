@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -178,7 +179,7 @@ class PdfDocumentRepositoryEdgeCaseTest {
     }
 
     @Test
-    fun harnessFixtureTriggersPreemptiveRepair() = runTest {
+    fun harnessFixtureBypassesPreemptiveRepair() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val repository = PdfDocumentRepository(
             context,
@@ -229,8 +230,8 @@ class PdfDocumentRepositoryEdgeCaseTest {
             null,
         ) as Boolean
 
-        assertTrue(
-            "Harness fixture should trigger pre-emptive repair",
+        assertFalse(
+            "Harness fixture should bypass pre-emptive repair",
             shouldRepair
         )
 
