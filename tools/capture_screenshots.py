@@ -659,8 +659,15 @@ def _virtualization_unavailable() -> bool:
     return False
 
 
-def _emit_missing_instrumentation_error(after_auto_install: bool) -> None:
-    suffix = " after Gradle installation" if after_auto_install else ""
+@dataclass
+class AutoInstallResult:
+    attempted: bool
+    succeeded: bool
+    virtualization_unavailable: bool = False
+
+
+def _emit_missing_instrumentation_error(auto_install_result: AutoInstallResult) -> None:
+    suffix = " after Gradle installation" if auto_install_result.attempted else ""
     message = (
         "Failed to detect screenshot harness instrumentation component"
         f"{suffix}."
@@ -668,7 +675,7 @@ def _emit_missing_instrumentation_error(after_auto_install: bool) -> None:
     print(message, file=sys.stderr)
     print(f"::error::{message}", file=sys.stderr)
 
-    if _virtualization_unavailable():
+    if auto_install_result.virtualization_unavailable or _virtualization_unavailable():
         guidance = (
             "Android emulator virtualization is unavailable in this environment. "
             "Connect a physical device or enable virtualization to install the "
@@ -678,9 +685,27 @@ def _emit_missing_instrumentation_error(after_auto_install: bool) -> None:
         print(f"::warning::{guidance}", file=sys.stderr)
 
 
-def auto_install_debug_apks(args: argparse.Namespace) -> bool:
+_VIRTUALIZATION_WARNING_FRAGMENT = "does not support android emulator virtualization"
+
+
+def _run_gradle_install(command: List[str], cwd: str) -> Tuple[bool, str]:
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    output = completed.stdout or ""
+    if output:
+        sys.stderr.write(output)
+    return True, output
+
+
+def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
     if getattr(args, "skip_auto_install", False):
-        return False
+        return AutoInstallResult(attempted=False, succeeded=False)
 
     gradlew = _gradle_wrapper_path()
     if not gradlew:
@@ -688,7 +713,7 @@ def auto_install_debug_apks(args: argparse.Namespace) -> bool:
             "Unable to locate the Gradle wrapper; skipping automatic debug APK installation.",
             file=sys.stderr,
         )
-        return False
+        return AutoInstallResult(attempted=False, succeeded=False)
 
     command = [str(gradlew), ":app:installDebug", ":app:installDebugAndroidTest"]
     try:
@@ -696,15 +721,24 @@ def auto_install_debug_apks(args: argparse.Namespace) -> bool:
             "Installing debug APKs via Gradle to satisfy screenshot harness dependencies...",
             file=sys.stderr,
         )
-        subprocess.run(command, cwd=str(gradlew.parent), check=True)
-        return True
+        succeeded, output = _run_gradle_install(command, str(gradlew.parent))
     except subprocess.CalledProcessError as error:
+        output = error.stdout or ""
+        if output:
+            sys.stderr.write(output)
         print(
             "Gradle installation of debug APKs failed; instrumentation may remain unavailable.",
             file=sys.stderr,
         )
         print(f"Gradle exited with code {error.returncode}", file=sys.stderr)
-        return False
+        return AutoInstallResult(attempted=True, succeeded=False)
+
+    virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in output.lower()
+    return AutoInstallResult(
+        attempted=True,
+        succeeded=succeeded,
+        virtualization_unavailable=virtualization_unavailable,
+    )
 
 
 def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
@@ -751,7 +785,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         normalized = _normalize_instrumentation_component(args, component)
         return _prefer_requested_instrumentation_component(args, requested, normalized)
 
-    _emit_missing_instrumentation_error(after_auto_install=auto_install_result)
+    _emit_missing_instrumentation_error(auto_install_result)
     return None
 
 
@@ -1799,7 +1833,7 @@ def main() -> int:
             and not auto_install_attempted
         ):
             auto_install_attempted = True
-            if auto_install_debug_apks(args):
+            if auto_install_debug_apks(args).succeeded:
                 continue
 
         if (
