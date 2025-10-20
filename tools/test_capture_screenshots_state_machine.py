@@ -1,5 +1,6 @@
 import argparse
 import json
+import subprocess
 from typing import List, Tuple
 
 import pytest
@@ -250,6 +251,51 @@ def test_resolve_instrumentation_component_emits_error(monkeypatch: pytest.Monke
     assert f"::error::{expected}" in error_output
 
 
+def test_resolve_instrumentation_component_warns_when_adb_lacks_package_service(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args = argparse.Namespace(instrumentation="com.example/.Runner", skip_auto_install=False)
+
+    def fake_adb_command_output(*_unused_args, **_unused_kwargs) -> str:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["adb", "shell", "pm", "list", "instrumentation"],
+            output="cmd: Can't find service: package\n",
+        )
+
+    monkeypatch.setattr(capture_screenshots, "adb_command_output", fake_adb_command_output)
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_normalize_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_prefer_requested_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "auto_install_debug_apks",
+        lambda *_: capture_screenshots.AutoInstallResult(
+            attempted=False, succeeded=False
+        ),
+    )
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
+
+    assert capture_screenshots.resolve_instrumentation_component(args) is None
+
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
+
+    output = capsys.readouterr().err
+    warning = (
+        "Android emulator virtualization is unavailable in this environment. "
+        "Connect a physical device or enable virtualization to install the screenshot harness."
+    )
+    assert warning in output
+    assert f"::warning::{warning}" in output
+
+
 def test_emit_missing_instrumentation_error_warns_on_virtualization(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -328,6 +374,55 @@ def test_run_instrumentation_once_skips_when_virtualization_unavailable(
                 attempted=True, succeeded=False, virtualization_unavailable=True
             ),
         )
+        return None
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "resolve_instrumentation_component",
+        fake_resolve,
+    )
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
+
+    exit_code, ctx = capture_screenshots.run_instrumentation_once(args)
+
+    assert exit_code == 0
+    assert ctx.virtualization_unavailable
+    assert ctx.capture_completed
+
+
+def test_run_instrumentation_once_skips_when_args_marked_virtualization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = argparse.Namespace(
+        extra_arg=[],
+        document_factory=None,
+        storage_client_factory=None,
+        instrumentation="com.example/.Runner",
+        skip_auto_install=False,
+        timeout=5,
+    )
+
+    monkeypatch.setattr(capture_screenshots, "parse_extra_args", lambda *_: [])
+    monkeypatch.setattr(
+        capture_screenshots,
+        "ensure_test_package_argument",
+        lambda _args, extras, _component: extras,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "derive_fallback_package",
+        lambda *_unused_args, **_unused_kwargs: None,
+    )
+
+    def fake_resolve(resolve_args: argparse.Namespace) -> None:
+        setattr(
+            resolve_args,
+            "_novapdf_last_auto_install_result",
+            capture_screenshots.AutoInstallResult(
+                attempted=True, succeeded=False, virtualization_unavailable=False
+            ),
+        )
+        setattr(resolve_args, "_novapdf_virtualization_unavailable", True)
         return None
 
     monkeypatch.setattr(
