@@ -561,7 +561,8 @@ def _resolve_instrumentation_component_once(
                 )
             else:
                 output = adb_command_output(args, "shell", "pm", "list", "instrumentation")
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as error:
+            _maybe_note_virtualization_unavailable(args, error=error)
             continue
 
         components = _extract_instrumentation_components(output)
@@ -666,7 +667,10 @@ class AutoInstallResult:
     virtualization_unavailable: bool = False
 
 
-def _emit_missing_instrumentation_error(auto_install_result: AutoInstallResult) -> None:
+def _emit_missing_instrumentation_error(
+    auto_install_result: AutoInstallResult,
+    args: Optional[argparse.Namespace] = None,
+) -> None:
     suffix = " after Gradle installation" if auto_install_result.attempted else ""
     message = (
         "Failed to detect screenshot harness instrumentation component"
@@ -676,6 +680,10 @@ def _emit_missing_instrumentation_error(auto_install_result: AutoInstallResult) 
     virtualization_unavailable = (
         auto_install_result.virtualization_unavailable or _virtualization_unavailable()
     )
+    if args is not None:
+        virtualization_unavailable = virtualization_unavailable or getattr(
+            args, "_novapdf_virtualization_unavailable", False
+        )
     severity = "::warning::" if virtualization_unavailable else "::error::"
     print(f"{severity}{message}", file=sys.stderr)
 
@@ -690,6 +698,42 @@ def _emit_missing_instrumentation_error(auto_install_result: AutoInstallResult) 
 
 
 _VIRTUALIZATION_WARNING_FRAGMENT = "does not support android emulator virtualization"
+_ADB_VIRTUALIZATION_ERROR_FRAGMENTS = (
+    "can't find service: package",
+)
+
+
+def _maybe_note_virtualization_unavailable(
+    args: argparse.Namespace,
+    *,
+    error: Optional[subprocess.CalledProcessError] = None,
+    output: Optional[str] = None,
+) -> None:
+    if getattr(args, "_novapdf_virtualization_unavailable", False):
+        return
+
+    parts: List[str] = []
+    if output:
+        parts.append(output)
+    if error:
+        stdout = getattr(error, "stdout", None)
+        if stdout:
+            parts.append(stdout)
+        stderr = getattr(error, "stderr", None)
+        if stderr:
+            parts.append(stderr)
+        output_stream = getattr(error, "output", None)
+        if output_stream:
+            parts.append(output_stream)
+
+    if not parts:
+        return
+
+    normalized = " ".join(parts).lower()
+    for fragment in _ADB_VIRTUALIZATION_ERROR_FRAGMENTS:
+        if fragment in normalized:
+            setattr(args, "_novapdf_virtualization_unavailable", True)
+            break
 
 
 def _run_gradle_install(command: List[str], cwd: str) -> Tuple[bool, str]:
@@ -737,6 +781,7 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
         print(f"Gradle exited with code {error.returncode}", file=sys.stderr)
         return AutoInstallResult(attempted=True, succeeded=False)
 
+    _maybe_note_virtualization_unavailable(args, output=output)
     virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in output.lower()
     return AutoInstallResult(
         attempted=True,
@@ -747,6 +792,7 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
 
 def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
     setattr(args, "_novapdf_last_auto_install_result", None)
+    setattr(args, "_novapdf_virtualization_unavailable", False)
     requested = args.instrumentation.strip()
     package = ""
     runner = ""
@@ -791,7 +837,7 @@ def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]
         normalized = _normalize_instrumentation_component(args, component)
         return _prefer_requested_instrumentation_component(args, requested, normalized)
 
-    _emit_missing_instrumentation_error(auto_install_result)
+    _emit_missing_instrumentation_error(auto_install_result, args)
     return None
 
 
@@ -1672,6 +1718,9 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
         virtualization_unavailable = False
         if isinstance(auto_install_result, AutoInstallResult):
             virtualization_unavailable = auto_install_result.virtualization_unavailable
+        virtualization_unavailable = virtualization_unavailable or getattr(
+            args, "_novapdf_virtualization_unavailable", False
+        )
         if virtualization_unavailable or _virtualization_unavailable():
             ctx.virtualization_unavailable = True
             ctx.capture_completed = True
