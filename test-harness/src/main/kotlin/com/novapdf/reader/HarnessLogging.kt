@@ -209,7 +209,21 @@ internal object HarnessPhaseLifecycleLogging {
         val payload = fields.joinToString(prefix = "{", postfix = "}")
         val message = "$PREFIX$payload"
         println(message)
-        Log.i(TAG, message)
+        logcat(message)
+    }
+
+    private fun logcat(message: String) {
+        try {
+            Log.i(TAG, message)
+        } catch (error: RuntimeException) {
+            val messageText = error.message.orEmpty()
+            if (!messageText.contains("not mocked", ignoreCase = true)) {
+                throw error
+            }
+            // Ignore the "android.util.Log not mocked" error thrown in JVM unit tests so
+            // that logging does not fail the test execution. Instrumented runs still reach
+            // the real Log implementation and will not trigger this fallback.
+        }
     }
 }
 
