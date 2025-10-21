@@ -2738,17 +2738,46 @@ jobs:
             printf '%s' "$fallback"
           }
 
+          adb_install_capture_output() {
+            local apk_path="$1"
+            shift || true
+
+            local tmp_output
+            tmp_output=$(mktemp)
+
+            if adb install "$@" "$apk_path" >"$tmp_output" 2>&1; then
+              cat "$tmp_output"
+              if grep -q '^Success$' "$tmp_output"; then
+                rm -f "$tmp_output"
+                return 0
+              fi
+
+              if grep -qiE "(^|[^[:alpha:]])failure|install_failed|can't find service: package" "$tmp_output"; then
+                rm -f "$tmp_output"
+                return 70
+              fi
+
+              rm -f "$tmp_output"
+              return 70
+            else
+              local status=$?
+              cat "$tmp_output"
+              rm -f "$tmp_output"
+              return $status
+            fi
+          }
+
           adb_install_with_fallback_android_test() {
             local apk_path="$1"
 
-            if adb install -r -t "$apk_path"; then
+            if adb_install_capture_output "$apk_path" -r -t; then
               return 0
             fi
 
             local exit_code=$?
             echo "Streaming adb install failed with exit code $exit_code; retrying with --no-streaming" >&2
 
-            if adb install --no-streaming -r -t "$apk_path"; then
+            if adb_install_capture_output "$apk_path" --no-streaming -r -t; then
               return 0
             fi
 
