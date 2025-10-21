@@ -2718,6 +2718,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          virtualization_unavailable=0
+
+          note_virtualization_unavailable() {
+            virtualization_unavailable=1
+          }
+
+          record_virtualization_unavailable() {
+            if [ "${virtualization_unavailable:-0}" -eq 1 ] && [ -n "${GITHUB_ENV:-}" ]; then
+              echo "NOVAPDF_VIRTUALIZATION_UNAVAILABLE=true" >>"$GITHUB_ENV"
+            fi
+          }
+
           resolve_apk_path() {
             local variant_dir="$1"
             local fallback="$2"
@@ -2747,12 +2759,16 @@ jobs:
 
             if adb install "$@" "$apk_path" >"$tmp_output" 2>&1; then
               cat "$tmp_output"
+              if grep -qiE "packagemanagerinternal\.freestorage|can't find service: package" "$tmp_output"; then
+                note_virtualization_unavailable
+              fi
               if grep -q '^Success$' "$tmp_output"; then
                 rm -f "$tmp_output"
                 return 0
               fi
 
               if grep -qiE "(^|[^[:alpha:]])failure|install_failed|can't find service: package" "$tmp_output"; then
+                note_virtualization_unavailable
                 rm -f "$tmp_output"
                 return 70
               fi
@@ -2762,6 +2778,9 @@ jobs:
             else
               local status=$?
               cat "$tmp_output"
+              if grep -qiE "packagemanagerinternal\.freestorage|can't find service: package" "$tmp_output"; then
+                note_virtualization_unavailable
+              fi
               rm -f "$tmp_output"
               return $status
             fi
@@ -2891,6 +2910,11 @@ jobs:
             fi
 
             if [ $install_attempt -ge $install_attempts_max ]; then
+              if [ "${virtualization_unavailable:-0}" -eq 1 ]; then
+                echo "::warning::Skipping screenshot harness installation because Android emulator virtualization is unavailable" >&2
+                record_virtualization_unavailable
+                exit 0
+              fi
               echo "Failed to install $android_test_apk after $install_attempts_max attempts" >&2
               exit 1
             fi
@@ -2935,8 +2959,24 @@ jobs:
           harness_runner="dagger.hilt.android.testing.HiltTestRunner"
           if ! verify_instrumentation_component "$harness_package" "$harness_runner" 10 3; then
             echo "Screenshot harness instrumentation ${harness_package}/${harness_runner} not detected; installing via Gradle" >&2
-            ./gradlew :app:installDebugAndroidTest --stacktrace
+            gradle_output_log=$(mktemp)
+            set +e
+            ./gradlew :app:installDebugAndroidTest --stacktrace | tee "$gradle_output_log"
+            gradle_status=${PIPESTATUS[0]}
+            set -e
+            if grep -qi "does not support android emulator virtualization" "$gradle_output_log"; then
+              note_virtualization_unavailable
+            fi
+            rm -f "$gradle_output_log"
+            if [ "$gradle_status" -ne 0 ]; then
+              exit "$gradle_status"
+            fi
             if ! verify_instrumentation_component "$harness_package" "$harness_runner" 10 3; then
+              if [ "${virtualization_unavailable:-0}" -eq 1 ]; then
+                echo "::warning::Skipping screenshot harness installation because Android emulator virtualization is unavailable" >&2
+                record_virtualization_unavailable
+                exit 0
+              fi
               echo "::error::Failed to detect screenshot harness instrumentation component after Gradle installation" >&2
               adb shell pm list instrumentation 2>/dev/null || true
               exit 1
@@ -2948,6 +2988,11 @@ jobs:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
           set -euo pipefail
+
+          if [ "${NOVAPDF_VIRTUALIZATION_UNAVAILABLE:-}" = "true" ]; then
+            echo "::warning::Skipping screenshot capture because Android emulator virtualization is unavailable" >&2
+            exit 0
+          fi
 
           resource_dir="${ARTIFACTS_DIR}/resources/api${{ matrix.api }}/${{ matrix.device_label }}"
           mkdir -p "$resource_dir"
