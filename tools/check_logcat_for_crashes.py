@@ -250,6 +250,31 @@ def _scan_logs_for_issues(
     return issues
 
 
+def _parse_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _virtualization_unavailable_from_env() -> Optional[bool]:
+    """Infer virtualization availability from CI environment variables."""
+
+    for key in (
+        "NOVAPDF_VIRTUALIZATION_UNAVAILABLE",
+        "NOVAPDF_TEST_VIRTUALIZATION_UNAVAILABLE",
+        "ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION",
+    ):
+        parsed = _parse_bool(os.environ.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -263,11 +288,35 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("PACKAGE_NAME", "com.novapdf.reader"),
         help="Android application package name to scan for (defaults to $PACKAGE_NAME or com.novapdf.reader)",
     )
+    parser.add_argument(
+        "--virtualization-unavailable",
+        dest="virtualization_unavailable",
+        action="store_true",
+        help="Skip crash detection when Android emulator virtualization is unavailable.",
+    )
+    parser.add_argument(
+        "--virtualization-available",
+        dest="virtualization_unavailable",
+        action="store_false",
+        help="Force crash detection even if virtualization-related environment markers are present.",
+    )
+    parser.set_defaults(virtualization_unavailable=None)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    virtualization_unavailable = args.virtualization_unavailable
+    if virtualization_unavailable is None:
+        virtualization_unavailable = _virtualization_unavailable_from_env()
+
+    if virtualization_unavailable:
+        print(
+            "Skipping crash scan because Android emulator virtualization is unavailable.",
+            file=sys.stderr,
+        )
+        return 0
 
     paths = args.logs or [pathlib.Path("logcat-after-tests.txt")]
     issues = _scan_logs_for_issues(paths, _build_crash_signatures(args.package))
