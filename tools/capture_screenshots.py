@@ -1963,6 +1963,8 @@ def main() -> int:
     while True:
         exit_code, ctx = run_instrumentation_once(args)
         last_exit_code = exit_code
+        if ctx.virtualization_unavailable:
+            return 0
         if exit_code == 0:
             return 0
 
