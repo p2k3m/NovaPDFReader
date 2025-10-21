@@ -469,6 +469,28 @@ def test_auto_install_debug_apks_detects_virtualization_with_ansi(
     assert getattr(args, "_novapdf_virtualization_unavailable", False)
 
 
+def test_auto_install_debug_apks_detects_package_service_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    args = argparse.Namespace(skip_auto_install=False)
+
+    gradle_wrapper = tmp_path / "gradlew"
+    gradle_wrapper.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(capture_screenshots, "_gradle_wrapper_path", lambda: gradle_wrapper)
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_run_gradle_install",
+        lambda command, cwd: (True, "cmd: Can't find service: package"),
+    )
+
+    result = capture_screenshots.auto_install_debug_apks(args)
+
+    assert result.virtualization_unavailable
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
+
+
 def test_run_instrumentation_once_skips_when_virtualization_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
