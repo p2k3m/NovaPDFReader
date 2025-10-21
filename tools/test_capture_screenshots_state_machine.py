@@ -297,6 +297,50 @@ def test_resolve_instrumentation_component_emits_error(monkeypatch: pytest.Monke
     assert f"::error::{expected}" in error_output
 
 
+def test_resolve_instrumentation_component_warns_when_virtualization_env(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    args = argparse.Namespace(instrumentation="com.example/.Runner", skip_auto_install=False)
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_resolve_instrumentation_component_once",
+        lambda *unused_args, **unused_kwargs: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_normalize_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "_prefer_requested_instrumentation_component",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "auto_install_debug_apks",
+        lambda *_: capture_screenshots.AutoInstallResult(
+            attempted=False, succeeded=False
+        ),
+    )
+    monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: True)
+
+    assert capture_screenshots.resolve_instrumentation_component(args) is None
+
+    error_output = capsys.readouterr().err
+    expected = "Failed to detect screenshot harness instrumentation component."
+    warning = (
+        "Android emulator virtualization is unavailable in this environment. "
+        "Connect a physical device or enable virtualization to install the screenshot harness."
+    )
+    assert expected in error_output
+    assert warning in error_output
+    assert f"::warning::{expected}" in error_output
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
+
+
 def test_resolve_instrumentation_component_warns_when_adb_lacks_package_service(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
