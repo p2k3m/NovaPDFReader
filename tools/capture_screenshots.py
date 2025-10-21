@@ -697,6 +697,8 @@ def _emit_missing_instrumentation_error(
         virtualization_unavailable = virtualization_unavailable or getattr(
             args, "_novapdf_virtualization_unavailable", False
         )
+        if virtualization_unavailable:
+            setattr(args, "_novapdf_virtualization_unavailable", True)
     severity = "::warning::" if virtualization_unavailable else "::error::"
     print(f"{severity}{message}", file=sys.stderr)
 

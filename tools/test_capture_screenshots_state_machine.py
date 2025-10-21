@@ -468,10 +468,12 @@ def test_emit_missing_instrumentation_error_uses_result_virtualization_flag(
 ) -> None:
     monkeypatch.setattr(capture_screenshots, "_virtualization_unavailable", lambda: False)
 
+    args = argparse.Namespace(_novapdf_virtualization_unavailable=False)
     capture_screenshots._emit_missing_instrumentation_error(
         capture_screenshots.AutoInstallResult(
             attempted=True, succeeded=True, virtualization_unavailable=True
-        )
+        ),
+        args,
     )
 
     output = capsys.readouterr().err
@@ -485,6 +487,7 @@ def test_emit_missing_instrumentation_error_uses_result_virtualization_flag(
     )
     assert warning in output
     assert f"::warning::{warning}" in output
+    assert getattr(args, "_novapdf_virtualization_unavailable", False)
 
 
 def test_auto_install_debug_apks_detects_virtualization_with_ansi(
