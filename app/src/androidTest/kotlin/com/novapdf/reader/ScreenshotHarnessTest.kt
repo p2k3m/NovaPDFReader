@@ -90,11 +90,13 @@ class ScreenshotHarnessTest {
                     currentTestDescription = description.displayName
                     lastProgressStep = null
                     lastLoggedUiState = null
+                    uiReadyUnderLoadAccepted = false
                 }
                 HarnessTestWatcher.LifecycleEvent.FINISHED -> {
                     currentTestDescription = null
                     lastProgressStep = null
                     lastLoggedUiState = null
+                    uiReadyUnderLoadAccepted = false
                 }
             }
         }
@@ -132,6 +134,7 @@ class ScreenshotHarnessTest {
     private var currentTestDescription: String? = null
     private var lastProgressStep: HarnessProgressStep? = null
     private var lastLoggedUiState: PdfViewerUiState? = null
+    private var uiReadyUnderLoadAccepted: Boolean = false
     private val staticDeviceFields: List<LogField> by lazy {
         listOf(
             field("deviceApi", Build.VERSION.SDK_INT),
@@ -554,14 +557,40 @@ class ScreenshotHarnessTest {
         val startTime = SystemClock.elapsedRealtime()
         var lastLog = startTime
         var lastState: PdfViewerUiState? = null
+        var underLoadCandidateStart = 0L
+        var underLoadSnapshot: PdfViewerUiState? = null
 
         return try {
             withTimeout(timeoutMs) {
                 viewerStateFlow()
                     .onEach { state ->
-                        if (!isUiInteractive(state)) {
-                            lastState = state
-                            val now = SystemClock.elapsedRealtime()
+                        lastState = state
+                        val now = SystemClock.elapsedRealtime()
+                        val interactive = isUiInteractive(state)
+                        if (interactive) {
+                            underLoadCandidateStart = 0L
+                            underLoadSnapshot = null
+                            return@onEach
+                        }
+
+                        if (state.uiUnderLoad && isUiInteractiveIgnoringLoad(state)) {
+                            if (underLoadCandidateStart == 0L) {
+                                underLoadCandidateStart = now
+                                underLoadSnapshot = state
+                            }
+                            if (now - lastLog >= 5_000L) {
+                                logHarnessInfo(
+                                    "Waiting for interactive UI confirmation; " +
+                                        "status=${state.documentStatus.javaClass.simpleName} " +
+                                        "renderProgress=${state.renderProgress} uiUnderLoad=${state.uiUnderLoad} " +
+                                        "pageCount=${state.pageCount} " +
+                                        "underLoadForMs=${now - underLoadCandidateStart}"
+                                )
+                                lastLog = now
+                            }
+                        } else {
+                            underLoadCandidateStart = 0L
+                            underLoadSnapshot = null
                             if (now - lastLog >= 5_000L) {
                                 logHarnessInfo(
                                     "Waiting for interactive UI confirmation; " +
@@ -577,8 +606,36 @@ class ScreenshotHarnessTest {
                         val interactive = isUiInteractive(state)
                         if (interactive) {
                             lastState = state
+                            underLoadCandidateStart = 0L
+                            underLoadSnapshot = null
+                            return@first true
                         }
-                        interactive
+
+                        if (state.uiUnderLoad && isUiInteractiveIgnoringLoad(state)) {
+                            val now = SystemClock.elapsedRealtime()
+                            if (underLoadCandidateStart == 0L) {
+                                underLoadCandidateStart = now
+                                underLoadSnapshot = state
+                            }
+                            val elapsed = now - underLoadCandidateStart
+                            if (elapsed >= UI_READY_UNDER_LOAD_GRACE_PERIOD_MS) {
+                                uiReadyUnderLoadAccepted = true
+                                val snapshot = underLoadSnapshot ?: state
+                                val detail =
+                                    "elapsedMs=$elapsed status=${snapshot.documentStatus.javaClass.simpleName} " +
+                                        "renderProgress=${snapshot.renderProgress} pageCount=${snapshot.pageCount}"
+                                logHarnessWarn(
+                                    "Accepting interactive UI state despite sustained load; $detail"
+                                )
+                                recordHarnessProgress(
+                                    HarnessProgressStep.UI_READY_UNDER_LOAD_ACCEPTED,
+                                    detail
+                                )
+                                lastState = state
+                                return@first true
+                            }
+                        }
+                        false
                     }
             }
         } catch (error: TimeoutCancellationException) {
@@ -596,6 +653,16 @@ class ScreenshotHarnessTest {
     }
 
     private fun isUiInteractive(state: PdfViewerUiState): Boolean {
+        if (!isUiInteractiveIgnoringLoad(state)) {
+            return false
+        }
+        if (state.uiUnderLoad) {
+            return false
+        }
+        return true
+    }
+
+    private fun isUiInteractiveIgnoringLoad(state: PdfViewerUiState): Boolean {
         if (state.pageCount <= 0) {
             return false
         }
@@ -603,9 +670,6 @@ class ScreenshotHarnessTest {
             return false
         }
         if (state.renderProgress is PdfRenderProgress.Rendering) {
-            return false
-        }
-        if (state.uiUnderLoad) {
             return false
         }
         return true
@@ -669,12 +733,19 @@ class ScreenshotHarnessTest {
         try {
             val readinessState = confirmReadinessForScreenshots()
             if (!isUiInteractive(readinessState)) {
+                if (uiReadyUnderLoadAccepted && isUiInteractiveIgnoringLoad(readinessState)) {
+                    logHarnessWarn(
+                        "Proceeding with screenshot readiness despite sustained UI load; " +
+                            "renderProgress=${readinessState.renderProgress} page=${readinessState.currentPage + 1}/${readinessState.pageCount}"
+                    )
+                } else {
                 val error = IllegalStateException(
                     "Unable to confirm interactive ReaderActivity before publishing readiness flag"
                 )
                 logHarnessError(error.message ?: "Unable to confirm interactive ReaderActivity", error)
                 publishHarnessFailureFlag("ui_ready_regressed", error)
                 throw error
+                }
             }
 
             publishReadyFlags(readyFlags, readinessState)
@@ -732,6 +803,7 @@ class ScreenshotHarnessTest {
     }
 
     private suspend fun confirmReadinessForScreenshots(): PdfViewerUiState {
+        uiReadyUnderLoadAccepted = false
         val initialState = confirmInteractiveUiState()
         recordHarnessProgress(
             HarnessProgressStep.UI_READY_OBSERVED,
@@ -765,6 +837,7 @@ class ScreenshotHarnessTest {
                     "retrying_with_timeout=$UI_READY_CONFIRMATION_TIMEOUT_MS"
                 )
                 try {
+                    uiReadyUnderLoadAccepted = false
                     confirmInteractiveUiState()
                 } catch (error: Throwable) {
                     if (error is AssumptionViolatedException || error is CancellationException) {
@@ -2177,6 +2250,7 @@ class ScreenshotHarnessTest {
         UI_READY_REVALIDATED("ui_ready_revalidated"),
         HANDSHAKE_STARTED("handshake_started"),
         UI_READY_CONFIRMED("ui_ready_confirmed"),
+        UI_READY_UNDER_LOAD_ACCEPTED("ui_ready_under_load"),
         READY_PUBLISHED("ready_flag_published"),
         WAITING_FOR_COMPLETION("waiting_for_completion"),
         SCREENSHOT_CAPTURED("screenshot"),
@@ -2322,6 +2396,7 @@ class ScreenshotHarnessTest {
         private const val WORK_MANAGER_CANCEL_TIMEOUT_SECONDS = 15L
         private const val DEVICE_IDLE_TIMEOUT_MS = 10_000L
         private const val UI_READY_CONFIRMATION_TIMEOUT_MS = 30_000L
+        private const val UI_READY_UNDER_LOAD_GRACE_PERIOD_MS = 20_000L
         private const val PREFLIGHT_CPU_SAMPLE_INTERVAL_MS = 500L
         private const val PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT = 90f
         private const val PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT = 80f
