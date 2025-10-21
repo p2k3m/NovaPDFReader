@@ -64,10 +64,10 @@ import android.webkit.MimeTypeMap
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -1636,24 +1636,22 @@ class PdfDocumentRepository(
         }.coerceAtLeast(1)
 
         return try {
-            contentResolver.openInputStream(uri)?.let { raw ->
-                raw.buffered().use { stream ->
-                    withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
-                        val output = ByteArrayOutputStream(limit)
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var remaining = limit
-                        while (remaining > 0) {
-                            cancellationSignal.throwIfCanceled()
-                            val read = stream.read(buffer, 0, min(buffer.size, remaining))
-                            if (read == -1) break
-                            output.write(buffer, 0, read)
-                            remaining -= read
-                        }
-                        if (output.size() == 0) {
-                            null
-                        } else {
-                            output.toByteArray()
-                        }
+            openPageTreeInspectionStream(uri)?.buffered()?.use { stream ->
+                withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+                    val output = ByteArrayOutputStream(limit)
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var remaining = limit
+                    while (remaining > 0) {
+                        cancellationSignal.throwIfCanceled()
+                        val read = stream.read(buffer, 0, min(buffer.size, remaining))
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        remaining -= read
+                    }
+                    if (output.size() == 0) {
+                        null
+                    } else {
+                        output.toByteArray()
                     }
                 }
             }
@@ -1665,6 +1663,46 @@ class PdfDocumentRepository(
             null
         } catch (error: IOException) {
             NovaLog.w(TAG, "I/O error while inspecting PDF for page tree analysis", error)
+            null
+        }
+    }
+
+    private fun openPageTreeInspectionStream(uri: Uri): InputStream? {
+        runCatching { contentResolver.openInputStream(uri) }
+            .onSuccess { stream ->
+                if (stream != null) {
+                    return stream
+                }
+            }
+            .onFailure { error ->
+                NovaLog.w(
+                    TAG,
+                    "Unable to open PDF stream for page tree inspection via content resolver",
+                    error,
+                )
+            }
+
+        if (uri.scheme != ContentResolver.SCHEME_FILE) {
+            return null
+        }
+
+        val path = uri.path ?: return null
+        val file = File(path)
+        return try {
+            FileInputStream(file)
+        } catch (error: FileNotFoundException) {
+            NovaLog.w(
+                TAG,
+                "File unavailable for page tree inspection at ${file.absolutePath}",
+                error,
+            )
+            null
+        } catch (error: SecurityException) {
+            NovaLog.w(
+                TAG,
+                "Unable to open file for page tree inspection at ${file.absolutePath}",
+                error,
+            )
             null
         }
     }
