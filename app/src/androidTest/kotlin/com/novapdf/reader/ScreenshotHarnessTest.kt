@@ -12,8 +12,8 @@ import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
@@ -74,9 +74,6 @@ class ScreenshotHarnessTest {
     @get:Rule(order = 0)
     val hiltRule = HiltAndroidRule(this)
 
-    @get:Rule(order = 1)
-    val activityRule = ActivityScenarioRule(ReaderActivity::class.java)
-
     @get:Rule(order = 2)
     val harnessLoggerRule = HarnessTestWatcher(
         onEvent = { message -> logHarnessInfo(message) },
@@ -120,6 +117,7 @@ class ScreenshotHarnessTest {
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
+    private lateinit var activityScenario: ActivityScenario<ReaderActivity>
     private lateinit var documentUri: Uri
     private var documentSourceOverride: DocumentSource? = null
     private lateinit var handshakeCacheDirs: List<File>
@@ -161,6 +159,7 @@ class ScreenshotHarnessTest {
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
 
+            activityScenario = ActivityScenario.launch(ReaderActivity::class.java)
             appContext = ApplicationProvider.getApplicationContext()
             performSlowSystemPreflight()
             device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -472,7 +471,7 @@ class ScreenshotHarnessTest {
     private fun viewerStateFlow(): Flow<PdfViewerUiState> = callbackFlow {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         var registration: Closeable? = null
-        activityRule.scenario.onActivity { activity ->
+        activityScenario.onActivity { activity ->
             registration = activity.observeDocumentStateForTest { state ->
                 logHarnessStateChange("activity_observer", state)
                 trySend(state).isSuccess
@@ -488,7 +487,7 @@ class ScreenshotHarnessTest {
 
     private fun fetchViewerState(): PdfViewerUiState? {
         var snapshot: PdfViewerUiState? = null
-        activityRule.scenario.onActivity { activity ->
+        activityScenario.onActivity { activity ->
             snapshot = activity.currentDocumentStateForTest()
         }
         snapshot?.let { logHarnessStateChange("snapshot", it) }
@@ -677,23 +676,29 @@ class ScreenshotHarnessTest {
 
     @After
     fun tearDown() {
-        runBlocking {
-            if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
-                return@runBlocking
-            }
-            var thresholdError: Throwable? = null
-            metricsRecorder?.finish()?.let { report ->
-                publishPerformanceMetrics(report)
-                try {
-                    enforcePerformanceThresholds(report)
-                } catch (error: Throwable) {
-                    thresholdError = error
+        try {
+            runBlocking {
+                if (!harnessEnabled || !::handshakeCacheDirs.isInitialized) {
+                    return@runBlocking
                 }
+                var thresholdError: Throwable? = null
+                metricsRecorder?.finish()?.let { report ->
+                    publishPerformanceMetrics(report)
+                    try {
+                        enforcePerformanceThresholds(report)
+                    } catch (error: Throwable) {
+                        thresholdError = error
+                    }
+                }
+                metricsRecorder = null
+                cancelWorkManagerJobs()
+                withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = false) }
+                thresholdError?.let { throw it }
             }
-            metricsRecorder = null
-            cancelWorkManagerJobs()
-            withContext(Dispatchers.IO) { cleanupFlags(deleteStatusArtifacts = false) }
-            thresholdError?.let { throw it }
+        } finally {
+            if (this::activityScenario.isInitialized) {
+                activityScenario.close()
+            }
         }
     }
 
@@ -975,7 +980,7 @@ class ScreenshotHarnessTest {
                 val elapsed = now - startTimeMillis
                 var activityRunning = true
                 instrumentation.runOnMainSync {
-                    activityRunning = activityRule.scenario.state.isAtLeast(Lifecycle.State.STARTED)
+                    activityRunning = activityScenario.state.isAtLeast(Lifecycle.State.STARTED)
                 }
                 if (!activityRunning) {
                     val error = IllegalStateException(
@@ -1637,8 +1642,8 @@ class ScreenshotHarnessTest {
         } else {
             logHarnessInfo("Opening thousand-page document in viewer: $documentUri")
         }
-        metricsRecorder?.start(activityRule.scenario)
-        activityRule.scenario.onActivity { activity ->
+        metricsRecorder?.start(activityScenario)
+        activityScenario.onActivity { activity ->
             if (remoteSource != null) {
                 activity.openRemoteDocumentForTest(remoteSource)
             } else {
