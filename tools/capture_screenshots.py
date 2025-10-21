@@ -806,14 +806,16 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
         return AutoInstallResult(attempted=True, succeeded=False)
 
     _maybe_note_virtualization_unavailable(args, output=output)
-    sanitized_output = _strip_ansi_sequences(output)
-    sanitized_output_lower = sanitized_output.lower()
-    virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in sanitized_output_lower
+    virtualization_unavailable = getattr(args, "_novapdf_virtualization_unavailable", False)
     if not virtualization_unavailable:
-        for fragment in _ADB_VIRTUALIZATION_ERROR_FRAGMENTS:
-            if fragment in sanitized_output_lower:
-                virtualization_unavailable = True
-                break
+        sanitized_output = _strip_ansi_sequences(output)
+        sanitized_output_lower = sanitized_output.lower()
+        virtualization_unavailable = _VIRTUALIZATION_WARNING_FRAGMENT in sanitized_output_lower
+        if not virtualization_unavailable:
+            for fragment in _ADB_VIRTUALIZATION_ERROR_FRAGMENTS:
+                if fragment in sanitized_output_lower:
+                    virtualization_unavailable = True
+                    break
     if virtualization_unavailable:
         setattr(args, "_novapdf_virtualization_unavailable", True)
     return AutoInstallResult(
