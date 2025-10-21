@@ -610,6 +610,26 @@ def test_run_instrumentation_once_skips_when_virtualization_unavailable(
     assert ctx.capture_completed
 
 
+def test_main_returns_success_when_virtualization_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = argparse.Namespace()
+
+    monkeypatch.setattr(capture_screenshots, "load_harness_environment", lambda: None)
+    monkeypatch.setattr(capture_screenshots, "parse_args", lambda: args)
+
+    def fake_run_once(
+        _args: argparse.Namespace,
+    ) -> Tuple[int, capture_screenshots.HarnessContext]:
+        ctx = capture_screenshots.HarnessContext(args=_args)
+        ctx.virtualization_unavailable = True
+        return 1, ctx
+
+    monkeypatch.setattr(capture_screenshots, "run_instrumentation_once", fake_run_once)
+
+    assert capture_screenshots.main() == 0
+
+
 def test_run_instrumentation_once_skips_when_args_marked_virtualization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
