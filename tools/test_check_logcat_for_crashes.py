@@ -1,7 +1,11 @@
+import os
 import pathlib
+import sys
 import tempfile
 import unittest
 import zipfile
+
+from unittest import mock
 
 from tools import check_logcat_for_crashes
 
@@ -90,6 +94,44 @@ class CrashSignatureTests(unittest.TestCase):
         self.assertIn("Fatal signal 11", matching_issue.snippet)
         self.assertIn("Process name: com.example.app", matching_issue.snippet)
         self.assertTrue(matching_issue.source.endswith("FS/data/anr/traces.txt"))
+
+
+class MainBehaviorTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.log_path = pathlib.Path(self.tmpdir.name) / "logcat.txt"
+        self.log_path.write_text(
+            "10-21 17:20:45.927   348   348 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 348 (main), pid 348 (main)\n"
+            "Process name: com.novapdf.reader\n",
+            encoding="utf-8",
+        )
+
+    def test_main_skips_when_virtualization_unavailable_env(self):
+        argv = ["check_logcat_for_crashes.py", str(self.log_path)]
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
+            os.environ,
+            {"ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION": "true"},
+            clear=True,
+        ):
+            exit_code = check_logcat_for_crashes.main()
+
+        self.assertEqual(exit_code, 0)
+
+    def test_main_reports_crash_when_virtualization_forced_available(self):
+        argv = [
+            "check_logcat_for_crashes.py",
+            str(self.log_path),
+            "--virtualization-available",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
+            os.environ,
+            {"ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION": "true"},
+            clear=True,
+        ):
+            exit_code = check_logcat_for_crashes.main()
+
+        self.assertEqual(exit_code, 1)
 
 
 if __name__ == "__main__":
