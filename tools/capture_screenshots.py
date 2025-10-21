@@ -827,7 +827,11 @@ def auto_install_debug_apks(args: argparse.Namespace) -> AutoInstallResult:
 
 def resolve_instrumentation_component(args: argparse.Namespace) -> Optional[str]:
     setattr(args, "_novapdf_last_auto_install_result", None)
-    setattr(args, "_novapdf_virtualization_unavailable", False)
+    setattr(
+        args,
+        "_novapdf_virtualization_unavailable",
+        _virtualization_unavailable(),
+    )
     requested = args.instrumentation.strip()
     package = ""
     runner = ""
