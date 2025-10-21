@@ -121,7 +121,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
             .detectDiskWrites()
             .detectNetwork()
             .penaltyLog()
-            .applyAnrDeathPenalty()
+            .applyAnrPenalty(killOnViolation = !runningInTestHarness)
         val vmPolicyBuilder = StrictMode.VmPolicy.Builder()
             .detectAll()
             .penaltyLog()
@@ -129,7 +129,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         if (runningInTestHarness) {
             NovaLog.i(
                 TAG,
-                "Skipping StrictMode death penalties in test harness except for ANR",
+                "Skipping StrictMode death penalties in test harness",
                 field("testHarness", true),
             )
         } else {
@@ -141,35 +141,50 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         StrictMode.setVmPolicy(vmPolicyBuilder.build())
     }
 
-    private fun StrictMode.ThreadPolicy.Builder.applyAnrDeathPenalty(): StrictMode.ThreadPolicy.Builder {
+    private fun StrictMode.ThreadPolicy.Builder.applyAnrPenalty(
+        killOnViolation: Boolean,
+    ): StrictMode.ThreadPolicy.Builder {
         return apply {
             penaltyListener(strictModePenaltyExecutor, StrictMode.OnThreadViolationListener { violation ->
-                if (violation.javaClass.name == STRICT_MODE_UNRESPONSIVE_VIOLATION &&
-                    strictModeAnrDeathTriggered.compareAndSet(false, true)
-                ) {
-                    handleStrictModeAnr()
+                if (violation.javaClass.name == STRICT_MODE_UNRESPONSIVE_VIOLATION) {
+                    if (killOnViolation) {
+                        if (strictModeAnrDeathTriggered.compareAndSet(false, true)) {
+                            handleStrictModeAnr(terminateProcess = true)
+                        }
+                    } else {
+                        if (strictModeAnrDeathTriggered.compareAndSet(false, true)) {
+                            handleStrictModeAnr(terminateProcess = false)
+                            strictModeAnrDeathTriggered.set(false)
+                        }
+                    }
                 }
             })
         }
     }
 
-    private fun handleStrictModeAnr() {
+    private fun handleStrictModeAnr(terminateProcess: Boolean) {
         val pid = Process.myPid()
+        val fields = mutableListOf(field("pid", pid))
+        if (!terminateProcess) {
+            fields += field("terminate", false)
+        }
         NovaLog.e(
             tag = TAG,
             message = "StrictMode detected an unresponsive UI; forcing JVM dump via SIGQUIT.",
-            fields = arrayOf(field("pid", pid)),
+            fields = fields.toTypedArray(),
         )
-        runCatching { Process.sendSignal(pid, Process.SIGNAL_QUIT) }
-            .onFailure { error ->
-                NovaLog.w(
-                    TAG,
-                    "Failed to signal StrictMode ANR via SIGQUIT",
-                    error,
-                    field("pid", pid),
-                )
-            }
-        Process.killProcess(pid)
+        if (terminateProcess) {
+            runCatching { Process.sendSignal(pid, Process.SIGNAL_QUIT) }
+                .onFailure { error ->
+                    NovaLog.w(
+                        TAG,
+                        "Failed to signal StrictMode ANR via SIGQUIT",
+                        error,
+                        field("pid", pid),
+                    )
+                }
+            Process.killProcess(pid)
+        }
     }
 
     private fun isRunningInTestHarness(): Boolean {
