@@ -446,19 +446,34 @@ val ensureStandardDebugApk = tasks.register("ensureStandardDebugApk") {
     doLast {
         val outputDir = debugApkDirProvider.get().asFile
         val target = File(outputDir, "app-debug.apk")
-        val candidates = listOf(
+
+        val preferredCandidates = listOf(
             "app-universal-debug.apk",
             "app-x86_64-debug.apk",
             "app-arm64-v8a-debug.apk"
         ).map { candidate -> File(outputDir, candidate) }
 
-        val source = candidates.firstOrNull(File::exists)
-            ?: throw GradleException(
-                "Unable to locate a packaged debug APK to copy into ${target.absolutePath}."
-            )
+        val existingApks = outputDir
+            .listFiles()
+            ?.filter { file -> file.isFile && file.extension == "apk" }
+            .orEmpty()
+
+        val source = preferredCandidates.firstOrNull(File::exists)
+            ?: existingApks.firstOrNull { file -> file != target }
+
+        if (source == null) {
+            if (!target.exists()) {
+                throw GradleException(
+                    "Unable to locate a packaged debug APK to copy into ${target.absolutePath}."
+                )
+            }
+
+            return@doLast
+        }
 
         if (!target.exists() || source.lastModified() != target.lastModified()) {
             source.copyTo(target, overwrite = true)
+            target.setLastModified(source.lastModified())
         }
     }
 }
