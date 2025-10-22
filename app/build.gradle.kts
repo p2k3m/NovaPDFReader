@@ -202,10 +202,14 @@ val isCiEnvironment = parseOptionalBoolean(System.getenv("CI")) ?: false
 
 val supportedAbis = listOf("arm64-v8a", "x86_64")
 
+// Default to disabling ABI splits on CI to keep release builds within the
+// storage limits of hosted runners. Releases that need the per-ABI artifacts
+// can re-enable the behaviour via NOVAPDF_ENABLE_ABI_SPLITS or the matching
+// Gradle property.
 val enableAbiSplits = parseOptionalBoolean(
     (findProperty("novapdf.enableAbiSplits") as? String)
         ?: System.getenv("NOVAPDF_ENABLE_ABI_SPLITS")
-) ?: true
+) ?: !isCiEnvironment
 
 android {
     namespace = "com.novapdf.reader"
