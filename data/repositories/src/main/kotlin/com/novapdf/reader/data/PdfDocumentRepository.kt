@@ -61,7 +61,6 @@ import android.print.PrintDocumentInfo
 import com.novapdf.reader.model.PdfOutlineNode
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileNotFoundException
@@ -100,9 +99,9 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
 private const val MAX_BITMAP_DIMENSION = 8_192
-private const val PRE_REPAIR_SCAN_LIMIT_BYTES = 8L * 1024L * 1024L
 private const val PRE_REPAIR_MAX_KIDS_PER_ARRAY = 32
 private const val PRE_REPAIR_MIN_PAGE_COUNT = 512
+private const val PAGE_TREE_SCAN_WINDOW_CHARS = 256 * 1024
 @Suppress("unused") // Accessed via reflection in tests.
 private const val HARNESS_FIXTURE_MARKER = "Generated for screenshot harness"
 private const val TAG = "PdfDocumentRepository"
@@ -1579,80 +1578,100 @@ class PdfDocumentRepository(
         sizeHint: Long?,
         cancellationSignal: CancellationSignal? = null,
     ): Boolean {
-        val buffer = readBytesForPageTreeInspection(uri, sizeHint, cancellationSignal) ?: return false
-        val contents = try {
-            String(buffer, Charsets.ISO_8859_1)
-        } catch (error: Exception) {
-            NovaLog.w(TAG, "Unable to decode PDF for page tree inspection", error)
-            return false
+        val inspection = scanPageTreeForIndicators(uri, sizeHint, cancellationSignal) ?: return false
+
+        inspection.oversizedKids?.let { count ->
+            NovaLog.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
+            return true
         }
 
-        val containsHarnessMarker = contents.contains(HARNESS_FIXTURE_MARKER)
-
-        val matcher = KIDS_ARRAY_PATTERN.matcher(contents)
-        while (matcher.find()) {
-            cancellationSignal.throwIfCanceled()
-            val section = matcher.group(1) ?: continue
-            val referenceMatcher = KID_REFERENCE_PATTERN.matcher(section)
-            var count = 0
-            while (referenceMatcher.find()) {
-                cancellationSignal.throwIfCanceled()
-                count++
-                if (count > PRE_REPAIR_MAX_KIDS_PER_ARRAY) {
-                    NovaLog.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
-                    return true
-                }
-            }
-        }
-
-        val pageTreeMatcher = PAGE_TREE_COUNT_PATTERN.matcher(contents)
-        while (pageTreeMatcher.find()) {
-            cancellationSignal.throwIfCanceled()
-            val countValue = pageTreeMatcher.group(1)?.toIntOrNull() ?: continue
-            if (countValue >= PRE_REPAIR_MIN_PAGE_COUNT) {
-                NovaLog.i(
-                    TAG,
-                    buildString {
-                        append("Detected large page tree with /Count=$countValue for $uri; preparing repair")
-                        if (containsHarnessMarker) {
-                            append(" (harness fixture detected)")
-                        }
+        inspection.largeCount?.let { countValue ->
+            NovaLog.i(
+                TAG,
+                buildString {
+                    append("Detected large page tree with /Count=$countValue for $uri; preparing repair")
+                    if (inspection.containsHarnessMarker) {
+                        append(" (harness fixture detected)")
                     }
-                )
-                return true
-            }
+                }
+            )
+            return true
         }
+
+        if (inspection.truncated) {
+            NovaLog.w(
+                TAG,
+                "Page tree inspection truncated after ${inspection.bytesScanned} bytes for $uri",
+            )
+        }
+
         return false
     }
 
-    private suspend fun readBytesForPageTreeInspection(
+    private suspend fun scanPageTreeForIndicators(
         uri: Uri,
         sizeHint: Long?,
         cancellationSignal: CancellationSignal? = null,
-    ): ByteArray? {
-        val limit = when {
-            sizeHint != null && sizeHint in 1L..PRE_REPAIR_SCAN_LIMIT_BYTES -> sizeHint.toInt()
-            else -> PRE_REPAIR_SCAN_LIMIT_BYTES.toInt()
-        }.coerceAtLeast(1)
+    ): PageTreeScanResult? {
+        val maxBytes = when {
+            sizeHint != null && sizeHint > 0L -> sizeHint.coerceAtMost(MAX_DOCUMENT_BYTES)
+            else -> MAX_DOCUMENT_BYTES
+        }.coerceAtLeast(1L)
 
         return try {
             openPageTreeInspectionStream(uri)?.buffered()?.use { stream ->
                 withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
-                    val output = ByteArrayOutputStream(limit)
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var remaining = limit
-                    while (remaining > 0) {
+                    val window = StringBuilder(PAGE_TREE_SCAN_WINDOW_CHARS)
+                    var bytesRead = 0L
+                    var containsHarnessMarker = false
+                    var oversizedKids: Int? = null
+                    var largeCount: Int? = null
+
+                    while (true) {
                         cancellationSignal.throwIfCanceled()
-                        val read = stream.read(buffer, 0, min(buffer.size, remaining))
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        remaining -= read
+                        val remaining = maxBytes - bytesRead
+                        if (remaining <= 0L) {
+                            return@withTimeout PageTreeScanResult(
+                                containsHarnessMarker = containsHarnessMarker,
+                                oversizedKids = oversizedKids,
+                                largeCount = largeCount,
+                                truncated = true,
+                                bytesScanned = bytesRead,
+                            )
+                        }
+                        val toRead = min(buffer.size.toLong(), remaining).toInt()
+                        val read = stream.read(buffer, 0, toRead)
+                        if (read == -1) {
+                            break
+                        }
+                        bytesRead += read
+                        val chunk = String(buffer, 0, read, Charsets.ISO_8859_1)
+                        window.append(chunk)
+                        if (window.length > PAGE_TREE_SCAN_WINDOW_CHARS) {
+                            window.delete(0, window.length - PAGE_TREE_SCAN_WINDOW_CHARS)
+                        }
+                        if (!containsHarnessMarker && window.indexOf(HARNESS_FIXTURE_MARKER) >= 0) {
+                            containsHarnessMarker = true
+                        }
+                        if (oversizedKids == null) {
+                            oversizedKids = detectOversizedKids(window)
+                        }
+                        if (largeCount == null) {
+                            largeCount = detectLargePageCount(window)
+                        }
+                        if (oversizedKids != null || largeCount != null) {
+                            break
+                        }
                     }
-                    if (output.size() == 0) {
-                        null
-                    } else {
-                        output.toByteArray()
-                    }
+
+                    PageTreeScanResult(
+                        containsHarnessMarker = containsHarnessMarker,
+                        oversizedKids = oversizedKids,
+                        largeCount = largeCount,
+                        truncated = bytesRead >= maxBytes && (sizeHint == null || sizeHint > maxBytes),
+                        bytesScanned = bytesRead,
+                    )
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
@@ -1666,6 +1685,41 @@ class PdfDocumentRepository(
             null
         }
     }
+
+    private fun detectOversizedKids(window: CharSequence): Int? {
+        val matcher = KIDS_ARRAY_PATTERN.matcher(window)
+        while (matcher.find()) {
+            val section = matcher.group(1) ?: continue
+            val referenceMatcher = KID_REFERENCE_PATTERN.matcher(section)
+            var count = 0
+            while (referenceMatcher.find()) {
+                count++
+                if (count > PRE_REPAIR_MAX_KIDS_PER_ARRAY) {
+                    return count
+                }
+            }
+        }
+        return null
+    }
+
+    private fun detectLargePageCount(window: CharSequence): Int? {
+        val matcher = PAGE_TREE_COUNT_PATTERN.matcher(window)
+        while (matcher.find()) {
+            val countValue = matcher.group(1)?.toIntOrNull() ?: continue
+            if (countValue >= PRE_REPAIR_MIN_PAGE_COUNT) {
+                return countValue
+            }
+        }
+        return null
+    }
+
+    private data class PageTreeScanResult(
+        val containsHarnessMarker: Boolean,
+        val oversizedKids: Int?,
+        val largeCount: Int?,
+        val truncated: Boolean,
+        val bytesScanned: Long,
+    )
 
     private fun openPageTreeInspectionStream(uri: Uri): InputStream? {
         runCatching { contentResolver.openInputStream(uri) }
