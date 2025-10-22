@@ -1849,15 +1849,7 @@ class PdfDocumentRepository(
             }
         }
 
-        val input = try {
-            contentResolver.openInputStream(uri)
-        } catch (openError: Exception) {
-            NovaLog.w(TAG, "Unable to open input stream for PDF repair", openError)
-            null
-        }
-        if (input == null) {
-            return null
-        }
+        val input = openPdfRepairInputStream(uri) ?: return null
 
         val repairedFile = try {
             File.createTempFile("repaired-", ".pdf", repairDir)
@@ -1931,6 +1923,34 @@ class PdfDocumentRepository(
                 input.close()
             } catch (_: IOException) {
             }
+        }
+    }
+
+    private fun openPdfRepairInputStream(uri: Uri): InputStream? {
+        val resolverStream = runCatching { contentResolver.openInputStream(uri) }
+            .onFailure { error ->
+                NovaLog.w(TAG, "Unable to open PDF stream for repair via content resolver", error)
+            }
+            .getOrNull()
+
+        if (resolverStream != null) {
+            return resolverStream
+        }
+
+        if (uri.scheme != ContentResolver.SCHEME_FILE) {
+            return null
+        }
+
+        val path = uri.path ?: return null
+        val file = File(path)
+        return try {
+            FileInputStream(file)
+        } catch (error: FileNotFoundException) {
+            NovaLog.w(TAG, "File unavailable for PDF repair at ${file.absolutePath}", error)
+            null
+        } catch (error: SecurityException) {
+            NovaLog.w(TAG, "Security exception opening PDF for repair at ${file.absolutePath}", error)
+            null
         }
     }
 
