@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import os
 import pathlib
 import sys
 from dataclasses import dataclass
@@ -74,6 +75,30 @@ def _parse_groups(values: Sequence[str]) -> list[list[str]]:
     return groups
 
 
+def _parse_optional_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _virtualization_unavailable_from_env() -> bool:
+    for key in (
+        "NOVAPDF_VIRTUALIZATION_UNAVAILABLE",
+        "NOVAPDF_TEST_VIRTUALIZATION_UNAVAILABLE",
+        "ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION",
+    ):
+        parsed = _parse_optional_bool(os.environ.get(key))
+        if parsed is not None:
+            return parsed
+    return False
+
+
 def verify_logs(paths: Sequence[pathlib.Path], required: Sequence[str], require_any: Sequence[Sequence[str]]) -> list[RequirementFailure]:
     failures: list[RequirementFailure] = []
     for path in paths:
@@ -125,6 +150,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     required: list[str] = args.require or []
     require_any = _parse_groups(args.require_any)
     paths = _expand_paths(args.path)
+
+    if _virtualization_unavailable_from_env():
+        print(
+            "Skipping log marker verification because Android emulator virtualization is unavailable.",
+            file=sys.stderr,
+        )
+        return 0
 
     failures = verify_logs(paths, required, require_any)
     if not failures:
