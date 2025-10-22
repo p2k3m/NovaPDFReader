@@ -21,7 +21,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.OutputStreamWriter
 import java.io.RandomAccessFile
 import java.util.Base64
 import kotlin.text.Charsets
@@ -237,6 +239,73 @@ class PdfDocumentRepositoryEdgeCaseTest {
 
         repository.dispose()
         harnessFile.delete()
+    }
+
+    @Test
+    fun pageTreeInspectionHandlesLateCountNodes() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val constants = Class.forName("com.novapdf.reader.data.PdfDocumentRepositoryKt")
+        val minCountField = constants.getDeclaredField("PRE_REPAIR_MIN_PAGE_COUNT").apply {
+            isAccessible = true
+        }
+        val minPageCount = minCountField.getInt(null)
+
+        val fillerBytes = 12 * 1024 * 1024
+        val pdfBytes = ByteArrayOutputStream().use { output ->
+            OutputStreamWriter(output, Charsets.ISO_8859_1).use { writer ->
+                writer.write("%PDF-1.4\n")
+                writer.flush()
+                output.write(ByteArray(fillerBytes) { 'X'.code.toByte() })
+                writer.write(
+                    """
+                    1 0 obj
+                    << /Type /Catalog /Pages 2 0 R >>
+                    endobj
+                    2 0 obj
+                    << /Type /Pages /Count $minPageCount /Kids [3 0 R] >>
+                    endobj
+                    3 0 obj
+                    << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+                    endobj
+                    4 0 obj
+                    << /Length 0 >>
+                    stream
+                    endstream
+                    endobj
+                    %%EOF
+                    """.trimIndent()
+                )
+            }
+            output.toByteArray()
+        }
+
+        val delayedFile = File(context.cacheDir, "late-page-tree.pdf")
+        delayedFile.writeBytes(pdfBytes)
+
+        val detectOversized = PdfDocumentRepository::class.declaredFunctions
+            .first { it.name == "detectOversizedPageTree" }
+            .apply { isAccessible = true }
+
+        val shouldRepair = detectOversized.callSuspend(
+            repository,
+            delayedFile.toUri(),
+            delayedFile.length(),
+            null,
+        ) as Boolean
+
+        assertTrue(
+            "Large documents should trigger pre-emptive repair even when the page tree appears late",
+            shouldRepair,
+        )
+
+        repository.dispose()
+        delayedFile.delete()
     }
 
     private fun loadBase64Fixture(path: String): ByteArray {
