@@ -283,19 +283,19 @@ class TestDocumentFixtures @Inject constructor() {
             throw IOException("Unable to clear stale thousand-page PDF cache")
         }
 
-        val preparedFromWriter = tryGenerateThousandPagePdf(tempFile)
-        val preparedFromAsset = if (!preparedFromWriter) {
-            copyBundledThousandPagePdf(tempFile)
-        } else {
-            false
-        }
-        val preparedFromNetwork = if (!preparedFromWriter && !preparedFromAsset) {
+        val preparedFromAsset = copyBundledThousandPagePdf(tempFile)
+        val preparedFromNetwork = if (!preparedFromAsset) {
             tryDownloadThousandPagePdf(tempFile)
         } else {
             false
         }
+        val preparedFromWriter = if (!preparedFromAsset && !preparedFromNetwork) {
+            tryGenerateThousandPagePdf(tempFile)
+        } else {
+            false
+        }
 
-        if (!preparedFromWriter && !preparedFromAsset && !preparedFromNetwork) {
+        if (!preparedFromAsset && !preparedFromNetwork && !preparedFromWriter) {
             try {
                 NovaLog.i(TAG, "Falling back to thousand-page writer after asset/network failures")
                 writeThousandPagePdf(tempFile)
