@@ -7,6 +7,7 @@ import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
@@ -2298,6 +2299,18 @@ class ScreenshotHarnessTest {
 
     private fun printHarnessConsole(message: String, fields: Array<LogField>, error: Throwable?) {
         val formatted = renderHarnessConsoleMessage(message, fields)
+        val instrumentation = runCatching { InstrumentationRegistry.getInstrumentation() }.getOrNull()
+        if (instrumentation != null) {
+            val statusMessage = "$TAG: $formatted"
+            val bundle = Bundle().apply { putString("stream", statusMessage) }
+            runCatching { instrumentation.sendStatus(0, bundle) }
+            if (error != null) {
+                val errorBundle = Bundle().apply {
+                    putString("stream", android.util.Log.getStackTraceString(error))
+                }
+                runCatching { instrumentation.sendStatus(0, errorBundle) }
+            }
+        }
         if (error != null) {
             println("$TAG: $formatted\n${android.util.Log.getStackTraceString(error)}")
         } else {
