@@ -1580,6 +1580,19 @@ class PdfDocumentRepository(
     ): Boolean {
         val inspection = scanPageTreeForIndicators(uri, sizeHint, cancellationSignal) ?: return false
 
+        if (inspection.containsHarnessMarker) {
+            NovaLog.i(
+                TAG,
+                buildString {
+                    append("Detected screenshot harness fixture at $uri; skipping pre-emptive repair")
+                    inspection.largeCount?.let { countValue ->
+                        append(" (/Count=$countValue)")
+                    }
+                },
+            )
+            return false
+        }
+
         inspection.oversizedKids?.let { count ->
             NovaLog.w(TAG, "Detected oversized /Kids array with $count entries for $uri")
             return true
@@ -1590,9 +1603,6 @@ class PdfDocumentRepository(
                 TAG,
                 buildString {
                     append("Detected large page tree with /Count=$countValue for $uri; preparing repair")
-                    if (inspection.containsHarnessMarker) {
-                        append(" (harness fixture detected)")
-                    }
                 }
             )
             return true
