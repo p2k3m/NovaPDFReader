@@ -1581,16 +1581,26 @@ class PdfDocumentRepository(
         val inspection = scanPageTreeForIndicators(uri, sizeHint, cancellationSignal) ?: return false
 
         if (inspection.containsHarnessMarker) {
-            NovaLog.i(
-                TAG,
-                buildString {
-                    append("Detected screenshot harness fixture at $uri; skipping pre-emptive repair")
-                    inspection.largeCount?.let { countValue ->
-                        append(" (/Count=$countValue)")
-                    }
-                },
-            )
-            return false
+            val repairReasons = mutableListOf<String>()
+            inspection.oversizedKids?.let { count ->
+                repairReasons += "oversized /Kids array ($count entries)"
+            }
+            inspection.largeCount?.let { countValue ->
+                repairReasons += "/Count=$countValue"
+            }
+
+            if (repairReasons.isEmpty()) {
+                NovaLog.i(
+                    TAG,
+                    "Detected screenshot harness fixture at $uri; skipping pre-emptive repair",
+                )
+                return false
+            } else {
+                NovaLog.i(
+                    TAG,
+                    "Detected screenshot harness fixture at $uri; continuing pre-emptive repair (${repairReasons.joinToString(", ")})",
+                )
+            }
         }
 
         inspection.oversizedKids?.let { count ->
