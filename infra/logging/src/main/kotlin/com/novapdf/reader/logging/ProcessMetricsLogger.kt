@@ -2,6 +2,8 @@ package com.novapdf.reader.logging
 
 import android.app.Application
 import android.content.Context
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Process
 import java.io.File
 import java.io.FileWriter
@@ -11,6 +13,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.jvm.Volatile
 
 /**
  * Persists lightweight cache metrics to a per-process artifact for offline debugging.
@@ -20,9 +23,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 object ProcessMetricsLogger {
 
     private const val DEFAULT_FILE_PREFIX = "cache-metrics"
+    private const val LOGGER_THREAD_NAME = "ProcessMetricsLogger"
     private val installed = AtomicBoolean(false)
     private val lock = Any()
+    @Volatile
     private var metricsFile: File? = null
+    @Volatile
+    private var writeThread: HandlerThread? = null
+    @Volatile
+    private var writeHandler: Handler? = null
     private val timestampFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
     }
@@ -52,19 +61,33 @@ object ProcessMetricsLogger {
             if (!file.exists()) {
                 file.createNewFile()
             }
-            if (file.length() == 0L) {
-                synchronized(lock) {
+            synchronized(lock) {
+                if (file.length() == 0L) {
                     FileWriter(file, true).use { writer ->
                         writer.appendLine("timestamp,event,cache,keyHash,keyType,sizeBytes,reason")
                     }
                 }
             }
-            metricsFile = file
-            installed.set(true)
         } catch (_: IOException) {
-            installed.set(false)
-            metricsFile = null
+            disableLogging()
+            return
         }
+
+        val thread = HandlerThread(LOGGER_THREAD_NAME, Process.THREAD_PRIORITY_BACKGROUND)
+        try {
+            thread.start()
+        } catch (_: Throwable) {
+            thread.quitSafely()
+            disableLogging()
+            return
+        }
+
+        val handler = Handler(thread.looper)
+        stopWriterThread()
+        writeThread = thread
+        writeHandler = handler
+        metricsFile = file
+        installed.set(true)
     }
 
     fun logCacheHit(cacheName: String, key: Any?, sizeBytes: Int?) {
@@ -83,20 +106,60 @@ object ProcessMetricsLogger {
         if (!installed.get()) {
             return
         }
+        val handler = writeHandler ?: return
         val file = metricsFile ?: return
-        val timestamp = timestampFormatter.format(Date())
         val keyHash = key?.hashCode()?.let { Integer.toHexString(it) } ?: ""
         val keyType = key?.javaClass?.simpleName.orEmpty()
         val sizeField = sizeBytes?.takeIf { it >= 0 }?.toString().orEmpty()
         val reasonField = reason.orEmpty()
-        val payload = "$timestamp,${event.label},$cacheName,$keyHash,$keyType,$sizeField,$reasonField"
+        val eventLabel = event.label
+
+        if (!handler.post {
+                writeEvent(
+                    file = file,
+                    cacheName = cacheName,
+                    eventLabel = eventLabel,
+                    keyHash = keyHash,
+                    keyType = keyType,
+                    sizeField = sizeField,
+                    reasonField = reasonField,
+                )
+            }
+        ) {
+            disableLogging()
+        }
+    }
+
+    private fun writeEvent(
+        file: File,
+        cacheName: String,
+        eventLabel: String,
+        keyHash: String,
+        keyType: String,
+        sizeField: String,
+        reasonField: String,
+    ) {
         synchronized(lock) {
+            val timestamp = timestampFormatter.format(Date())
+            val payload = "$timestamp,$eventLabel,$cacheName,$keyHash,$keyType,$sizeField,$reasonField"
             runCatching {
                 FileWriter(file, true).use { writer ->
                     writer.appendLine(payload)
                 }
             }
         }
+    }
+
+    private fun stopWriterThread() {
+        writeHandler = null
+        writeThread?.quitSafely()
+        writeThread = null
+    }
+
+    private fun disableLogging() {
+        installed.set(false)
+        metricsFile = null
+        stopWriterThread()
     }
 
     enum class CacheEvent(internal val label: String) {
