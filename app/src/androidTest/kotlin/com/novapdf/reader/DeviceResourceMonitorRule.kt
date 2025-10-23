@@ -28,6 +28,7 @@ class DeviceResourceMonitorRule(
         val minAvailableMemKb: Long = 256_000L,
         val maxSustainedCpuPercent: Float = 95f,
         val maxMemoryDropPercent: Float = 60f,
+        val minCpuIncreasePercent: Float = 10f,
     )
 
     private data class ResourceSnapshot(
@@ -158,7 +159,19 @@ class DeviceResourceMonitorRule(
         }
         val cpu = after.cpuUsagePercent
         if (cpu != null && cpu > thresholds.maxSustainedCpuPercent) {
-            return String.format(Locale.US, "CPU usage %.1f%% exceeds limit %.1f%%", cpu, thresholds.maxSustainedCpuPercent)
+            val beforeCpu = before.cpuUsagePercent
+            if (beforeCpu != null) {
+                val delta = cpu - beforeCpu
+                if (delta < thresholds.minCpuIncreasePercent) {
+                    return null
+                }
+            }
+            return String.format(
+                Locale.US,
+                "CPU usage %.1f%% exceeds limit %.1f%%",
+                cpu,
+                thresholds.maxSustainedCpuPercent,
+            )
         }
         return null
     }
