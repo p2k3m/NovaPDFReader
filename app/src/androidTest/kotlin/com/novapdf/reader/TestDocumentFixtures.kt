@@ -427,8 +427,63 @@ class TestDocumentFixtures @Inject constructor() {
             return false
         }
 
-        val bytes = try {
-            candidate.readBytes()
+        val digest = MessageDigest.getInstance("SHA-256")
+        val headerSample = StringBuilder(HEADER_SAMPLE_LIMIT)
+        val markerBuffer = StringBuilder()
+        val kidsBuffer = StringBuilder()
+        val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
+        val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
+        var footerFound = false
+        var totalPagesFound = false
+        var lastPageFound = false
+        var oversizedKidsCount: Int? = null
+        var bytesRead = 0L
+
+        try {
+            candidate.inputStream().buffered().use { stream ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = stream.read(buffer)
+                    if (read == -1) {
+                        break
+                    }
+                    digest.update(buffer, 0, read)
+                    bytesRead += read
+
+                    val chunk = String(buffer, 0, read, StandardCharsets.ISO_8859_1)
+
+                    if (headerSample.length < HEADER_SAMPLE_LIMIT) {
+                        val remaining = HEADER_SAMPLE_LIMIT - headerSample.length
+                        headerSample.append(chunk.take(remaining))
+                    }
+
+                    if (!totalPagesFound && chunk.contains(totalPagesMarker)) {
+                        totalPagesFound = true
+                    }
+                    if (!lastPageFound && chunk.contains(lastPageMarker)) {
+                        lastPageFound = true
+                    }
+
+                    markerBuffer.append(chunk)
+                    if (!footerFound && markerBuffer.contains(PDF_FOOTER_MARKER)) {
+                        footerFound = true
+                    }
+                    if (!totalPagesFound && markerBuffer.contains(totalPagesMarker)) {
+                        totalPagesFound = true
+                    }
+                    if (!lastPageFound && markerBuffer.contains(lastPageMarker)) {
+                        lastPageFound = true
+                    }
+                    if (markerBuffer.length > MARKER_BUFFER_LIMIT) {
+                        markerBuffer.delete(0, markerBuffer.length - MARKER_BUFFER_LIMIT)
+                    }
+
+                    if (oversizedKidsCount == null) {
+                        kidsBuffer.append(chunk)
+                        oversizedKidsCount = processKidsBuffer(kidsBuffer)
+                    }
+                }
+            }
         } catch (error: IOException) {
             NovaLog.w(TAG, "Unable to read thousand-page PDF for validation", error)
             return false
@@ -437,13 +492,12 @@ class TestDocumentFixtures @Inject constructor() {
             return false
         }
 
-        if (bytes.isEmpty()) {
+        if (bytesRead <= 0L) {
             NovaLog.w(TAG, "Validation failed; thousand-page PDF is empty at ${candidate.absolutePath}")
             return false
         }
 
-        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
-        val digestHex = digest.toHexString()
+        val digestHex = digest.digest().toHexString()
         if (!digestHex.equals(EXPECTED_THOUSAND_PAGE_DIGEST, ignoreCase = true)) {
             NovaLog.w(
                 TAG,
@@ -453,37 +507,24 @@ class TestDocumentFixtures @Inject constructor() {
             return false
         }
 
-        val contents = try {
-            String(bytes, StandardCharsets.ISO_8859_1)
-        } catch (error: Exception) {
-            NovaLog.w(TAG, "Unable to decode thousand-page PDF for validation", error)
-            return false
-        }
-
-        if (!contents.startsWith("%PDF-1.")) {
+        if (!headerSample.startsWith(PDF_HEADER_PREFIX)) {
             NovaLog.w(TAG, "Validation failed; unexpected PDF header in thousand-page document")
             return false
         }
 
-        val footerValid = contents.contains("%%EOF")
-        val totalPagesMarker = "(Total pages: $THOUSAND_PAGE_COUNT)"
-        val lastPageMarker = "(Page index: ${THOUSAND_PAGE_COUNT - 1})"
-        val totalPagesFound = contents.contains(totalPagesMarker)
-        val lastPageFound = contents.contains(lastPageMarker)
-
-        if (!footerValid || !totalPagesFound || !lastPageFound) {
+        if (!footerFound || !totalPagesFound || !lastPageFound) {
             NovaLog.w(
                 TAG,
-                "Validation failed for thousand-page PDF (footer=$footerValid, " +
+                "Validation failed for thousand-page PDF (footer=$footerFound, " +
                     "totalPages=$totalPagesFound, lastPage=$lastPageFound)"
             )
             return false
         }
 
-        if (!validatePageTree(candidate, contents)) {
+        if (oversizedKidsCount != null) {
             NovaLog.w(
                 TAG,
-                "Validation failed for thousand-page PDF due to oversized /Kids arrays"
+                "Detected oversized /Kids array with $oversizedKidsCount entries in ${candidate.absolutePath}"
             )
             return false
         }
@@ -496,27 +537,44 @@ class TestDocumentFixtures @Inject constructor() {
         return true
     }
 
-    private fun validatePageTree(candidate: File, contents: String): Boolean {
-        val kidsMatcher = KIDS_ARRAY_PATTERN.matcher(contents)
-        while (kidsMatcher.find()) {
-            val kidsSection = kidsMatcher.group(1) ?: continue
-            val referenceMatcher = REFERENCE_PATTERN.matcher(kidsSection)
+    private fun processKidsBuffer(buffer: StringBuilder): Int? {
+        while (true) {
+            val kidsIndex = buffer.indexOf("/Kids")
+            if (kidsIndex == -1) {
+                if (buffer.length > KIDS_BUFFER_RETAIN) {
+                    buffer.delete(0, buffer.length - KIDS_BUFFER_RETAIN)
+                }
+                return null
+            }
+
+            val openIndex = buffer.indexOf("[", kidsIndex)
+            if (openIndex == -1) {
+                if (kidsIndex > 0) {
+                    buffer.delete(0, kidsIndex)
+                }
+                return null
+            }
+
+            val closeIndex = buffer.indexOf("]", openIndex + 1)
+            if (closeIndex == -1) {
+                if (kidsIndex > 0) {
+                    buffer.delete(0, kidsIndex)
+                }
+                return null
+            }
+
+            val section = buffer.substring(openIndex + 1, closeIndex)
+            val referenceMatcher = REFERENCE_PATTERN.matcher(section)
             var referenceCount = 0
             while (referenceMatcher.find()) {
                 referenceCount++
                 if (referenceCount > MAX_KIDS_PER_ARRAY) {
-                    break
+                    return referenceCount
                 }
             }
-            if (referenceCount > MAX_KIDS_PER_ARRAY) {
-                NovaLog.w(
-                    TAG,
-                    "Detected oversized /Kids array with $referenceCount entries in ${candidate.absolutePath}"
-                )
-                return false
-            }
+
+            buffer.delete(0, closeIndex + 1)
         }
-        return true
     }
 
     private fun writeThousandPagePdf(destination: File) {
@@ -548,8 +606,11 @@ class TestDocumentFixtures @Inject constructor() {
         private const val TAG = "TestDocumentFixtures"
         private const val EXPECTED_THOUSAND_PAGE_DIGEST =
             "7d6484d4a4a768062325fc6d0f51ad19f2c2da17b9dc1bcfb80740239db89089"
-        private val KIDS_ARRAY_PATTERN: Pattern =
-            Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL)
+        private const val PDF_HEADER_PREFIX = "%PDF-1."
+        private const val PDF_FOOTER_MARKER = "%%EOF"
+        private const val HEADER_SAMPLE_LIMIT = 64
+        private const val MARKER_BUFFER_LIMIT = 8 * 1024
+        private const val KIDS_BUFFER_RETAIN = 4 * 1024
         private val REFERENCE_PATTERN: Pattern =
             Pattern.compile("\\d+\\s+\\d+\\s+R")
         private const val MAX_KIDS_PER_ARRAY = 4
