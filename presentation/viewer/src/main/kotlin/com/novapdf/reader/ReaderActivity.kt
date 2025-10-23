@@ -41,7 +41,8 @@ import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.field
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.Closeable
 import javax.inject.Inject
@@ -51,6 +52,7 @@ open class ReaderActivity : ComponentActivity() {
     private val viewModel: PdfViewerViewModel by viewModels()
     private val snackbarHost = SnackbarHostState()
     private var useComposeUi = true
+    private var currentUiMode: UiMode? = null
     private var legacyAdapter: LegacyPdfPageAdapter? = null
     private var legacyRecyclerView: RecyclerView? = null
     private var legacyStatusContainer: View? = null
@@ -87,11 +89,15 @@ open class ReaderActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreenIfAvailable()
         super.onCreate(savedInstanceState)
+        initializeUi(viewModel.uiState.value.fallbackMode)
+
         lifecycleScope.launch {
-            val fallbackMode = runCatching {
-                useCases.preferences.preferences.first().fallbackMode
-            }.getOrDefault(FallbackMode.NONE)
-            initializeUi(fallbackMode)
+            repeatOnLifecycle(Lifecycle.State.CREATED) {
+                viewModel.uiState
+                    .map { it.fallbackMode }
+                    .distinctUntilChanged()
+                    .collect { fallbackMode -> initializeUi(fallbackMode) }
+            }
         }
     }
 
@@ -136,14 +142,36 @@ open class ReaderActivity : ComponentActivity() {
     }
 
     private fun initializeUi(fallbackMode: FallbackMode) {
-        useComposeUi = resources.getBoolean(R.bool.config_use_compose) &&
+        val shouldUseCompose = resources.getBoolean(R.bool.config_use_compose) &&
             fallbackMode != FallbackMode.LEGACY_SIMPLE_RENDERER
-        if (useComposeUi) {
+        val desiredMode = if (shouldUseCompose) UiMode.COMPOSE else UiMode.LEGACY
+        if (currentUiMode == desiredMode) {
+            return
+        }
+        currentUiMode = desiredMode
+        useComposeUi = shouldUseCompose
+        if (shouldUseCompose) {
+            tearDownLegacyUi()
             setupComposeUi()
         } else {
             setContentView(R.layout.activity_main)
             setupLegacyUi()
         }
+    }
+
+    private fun tearDownLegacyUi() {
+        legacyAdapter?.dispose()
+        legacyAdapter = null
+        legacyRecyclerView = null
+        legacyStatusContainer = null
+        legacyStatusText = null
+        legacyRetryButton = null
+        legacyProgress = null
+        legacyToolbar = null
+        legacyRoot = null
+        legacyLayoutManager = null
+        legacyLastFocusedPage = -1
+        legacyRecycledViewPool.clear()
     }
 
     private fun setupComposeUi() {
@@ -446,6 +474,8 @@ open class ReaderActivity : ComponentActivity() {
             installMethod.invoke(null, this)
         }
     }
+
+    private enum class UiMode { COMPOSE, LEGACY }
     private companion object {
         private const val HARNESS_LOG_TAG = "HarnessViewerState"
     }
