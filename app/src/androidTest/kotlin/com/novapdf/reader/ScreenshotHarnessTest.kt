@@ -1318,13 +1318,26 @@ class ScreenshotHarnessTest {
                 "Primary cache directory probes failed for screenshot handshake; attempting instrumentation cache fallback"
             )
 
-            val fallbackDirectories = buildList {
-                add(instrumentation.context.cacheDir)
-                add(instrumentation.context.applicationContext?.cacheDir)
-                add(instrumentation.targetContext.cacheDir)
-                add(instrumentation.targetContext.applicationContext?.cacheDir)
+            fun resolveCacheDir(label: String, provider: () -> File?): File? {
+                return runCatching(provider)
+                    .onFailure { error ->
+                        logHarnessWarn(
+                            "Unable to access $label for screenshot handshake fallback", error
+                        )
+                    }
+                    .getOrNull()
             }
-                .filterNotNull()
+
+            val fallbackDirectories = listOfNotNull(
+                resolveCacheDir("instrumentation.context.cacheDir") { instrumentation.context.cacheDir },
+                resolveCacheDir("instrumentation.context.applicationContext.cacheDir") {
+                    instrumentation.context.applicationContext?.cacheDir
+                },
+                resolveCacheDir("instrumentation.targetContext.cacheDir") { instrumentation.targetContext.cacheDir },
+                resolveCacheDir("instrumentation.targetContext.applicationContext.cacheDir") {
+                    instrumentation.targetContext.applicationContext?.cacheDir
+                },
+            )
                 .filter(::prepareCacheDirectory)
                 .mapNotNull { directory ->
                     runCatching { directory.canonicalFile }.getOrElse { directory }
