@@ -76,6 +76,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         CoroutineScope(SupervisorJob() + dispatchers.default + scopeExceptionHandler)
     }
     private val backgroundInitializationStarted = AtomicBoolean(false)
+    private val strictModeHarnessApplied = AtomicBoolean(false)
 
     private var searchCoordinatorInstance: DocumentSearchCoordinator? = null
     private var bookmarkManagerInstance: BookmarkManager? = null
@@ -110,11 +111,28 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         ProcessMetricsLogger.install(this)
         if (BuildConfig.DEBUG) {
             val runningInHarness = isRunningInTestHarness()
+            strictModeHarnessApplied.set(runningInHarness)
             if (!runningInHarness) {
                 installDebugAnrDetector()
             }
             configureStrictMode(runningInHarness)
         }
+    }
+
+    internal fun ensureStrictModeHarnessOverride() {
+        if (!BuildConfig.DEBUG) {
+            return
+        }
+        if (!strictModeHarnessApplied.compareAndSet(false, true)) {
+            return
+        }
+        NovaLog.i(
+            TAG,
+            "Reconfiguring StrictMode for screenshot harness",
+            field("testHarness", true),
+            field("lateOverride", true),
+        )
+        configureStrictMode(runningInTestHarness = true)
     }
 
     private fun configureStrictMode(runningInTestHarness: Boolean) {
