@@ -160,8 +160,9 @@ class ScreenshotHarnessTest {
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
 
-            activityScenario = ActivityScenario.launch(ReaderActivity::class.java)
             appContext = ApplicationProvider.getApplicationContext()
+            (appContext as? NovaPdfApp)?.ensureStrictModeHarnessOverride()
+            activityScenario = ActivityScenario.launch(ReaderActivity::class.java)
             performSlowSystemPreflight()
             device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
             handshakePackageName = resolveTestPackageName()
