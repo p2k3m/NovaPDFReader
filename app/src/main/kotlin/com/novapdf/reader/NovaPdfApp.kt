@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.app.Instrumentation
 import android.os.Build
+import android.os.Bundle
 import android.os.Process
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
@@ -34,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import java.util.HashMap
+import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -197,6 +199,9 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         if (ActivityManager.isRunningInTestHarness()) {
             return true
         }
+        if (hasTestHarnessInstrumentationArguments()) {
+            return true
+        }
         return isInstrumentationRuntime()
     }
 
@@ -230,6 +235,27 @@ open class NovaPdfApp : Application(), Configuration.Provider {
                 method.invoke(null)
             }.getOrNull() != null
         }
+    }
+
+    private fun hasTestHarnessInstrumentationArguments(): Boolean {
+        val arguments = obtainInstrumentationArguments() ?: return false
+        val harnessValue = arguments.getString(HARNESS_ARGUMENT_KEY)?.lowercase(Locale.US)
+        if (harnessValue != null && harnessValue in HARNESS_TRUTHY_VALUES) {
+            return true
+        }
+        val orchestratorValue = arguments.getString(ORCHESTRATOR_RUNNER_BUILDER_KEY)
+        if (!orchestratorValue.isNullOrEmpty()) {
+            return true
+        }
+        return false
+    }
+
+    private fun obtainInstrumentationArguments(): Bundle? {
+        return runCatching {
+            val registryClass = Class.forName("androidx.test.platform.app.InstrumentationRegistry")
+            val method = registryClass.getMethod("getArguments")
+            method.invoke(null) as? Bundle
+        }.getOrNull()
     }
 
     @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
@@ -351,6 +377,9 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         private const val TAG = "NovaPdfApp"
         private const val STRICT_MODE_UNRESPONSIVE_VIOLATION =
             "android.os.strictmode.UnresponsiveUiViolation"
+        private const val HARNESS_ARGUMENT_KEY = "runScreenshotHarness"
+        private const val ORCHESTRATOR_RUNNER_BUILDER_KEY = "runnerBuilder"
+        private val HARNESS_TRUTHY_VALUES = setOf("1", "true", "yes")
         private val strictModeAnrDeathTriggered = AtomicBoolean(false)
         private val strictModePenaltyExecutor = Executor { command -> command.run() }
     }
