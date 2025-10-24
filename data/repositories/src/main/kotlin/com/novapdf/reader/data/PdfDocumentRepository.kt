@@ -68,6 +68,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.BufferedOutputStream
+import java.util.ArrayList
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.Locale
@@ -94,7 +95,12 @@ import com.novapdf.reader.model.BitmapMemoryStats
 import com.novapdf.reader.model.PageRenderProfile
 import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.search.PdfBoxInitializer
+import com.tom_roush.pdfbox.cos.COSArray
+import com.tom_roush.pdfbox.cos.COSDictionary
+import com.tom_roush.pdfbox.cos.COSName
+import com.tom_roush.pdfbox.cos.COSObject
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
 
 private const val CACHE_BUDGET_BYTES = 50L * 1024L * 1024L
 private const val MAX_DOCUMENT_BYTES = 100L * 1024L * 1024L
@@ -1942,6 +1948,17 @@ class PdfDocumentRepository(
                     input.buffered().use { stream ->
                         cancellationSignal.throwIfCanceled()
                         PDDocument.load(stream).use { document ->
+                            if (!PdfPageTreeRepair.rebalance(
+                                    document = document,
+                                    maxChildrenPerNode = PRE_REPAIR_MAX_KIDS_PER_ARRAY,
+                                    logTag = TAG,
+                                )
+                            ) {
+                                NovaLog.w(
+                                    TAG,
+                                    "Unable to rebalance PDF page tree during repair; proceeding with original structure",
+                                )
+                            }
                             document.save(repairedFile)
                         }
                         val result = if (persistentTarget != null) {
@@ -2530,6 +2547,124 @@ class PdfDocumentRepository(
         internal fun defaultBitmapPoolFactory(): BitmapPoolFactory = BitmapPoolFactory { repository ->
             repository.instantiateBitmapPool()
         }
+
+        private object PdfPageTreeRepair {
+            fun rebalance(document: PDDocument, maxChildrenPerNode: Int, logTag: String): Boolean {
+                if (maxChildrenPerNode <= 0) {
+                    return false
+                }
+                val pages = collectPages(document)
+                if (pages.isEmpty()) {
+                    return false
+                }
+                val cosDocument = document.document
+                val existingObjects = cosDocument.objects
+                var nextObjectNumber = cosDocument.highestXRefObjectNumber + 1
+
+                fun registerNode(dictionary: COSDictionary): COSObject? {
+                    return try {
+                        COSObject(dictionary).apply {
+                            setObjectNumber(nextObjectNumber)
+                            setGenerationNumber(0)
+                            setNeedToBeUpdated(true)
+                            existingObjects.add(this)
+                            nextObjectNumber++
+                        }
+                    } catch (error: IOException) {
+                        NovaLog.w(logTag, "Unable to allocate COS object for page tree node", error)
+                        null
+                    }
+                }
+
+                fun fetchPageReference(page: PDPage): COSObject? {
+                    val pageDictionary = page.cosObject
+                    val key = cosDocument.getKey(pageDictionary)
+                    return try {
+                        if (key != null) {
+                            cosDocument.getObjectFromPool(key)
+                        } else {
+                            COSObject(pageDictionary).apply {
+                                setObjectNumber(nextObjectNumber)
+                                setGenerationNumber(0)
+                                setNeedToBeUpdated(true)
+                                existingObjects.add(this)
+                                nextObjectNumber++
+                            }
+                        }
+                    } catch (error: IOException) {
+                        NovaLog.w(logTag, "Unable to allocate COS object for page dictionary", error)
+                        null
+                    }
+                }
+
+                fun buildBranch(pageSlice: List<PDPage>): COSObject? {
+                    if (pageSlice.isEmpty()) {
+                        return null
+                    }
+                    val nodeDictionary = COSDictionary().apply {
+                        setItem(COSName.TYPE, COSName.PAGES)
+                        setInt(COSName.COUNT, pageSlice.size)
+                        setNeedToBeUpdated(true)
+                    }
+                    val nodeObject = registerNode(nodeDictionary) ?: return null
+
+                    if (pageSlice.size <= maxChildrenPerNode) {
+                        val kidsArray = COSArray().apply { setNeedToBeUpdated(true) }
+                        for (page in pageSlice) {
+                            val pageObject = fetchPageReference(page) ?: return null
+                            kidsArray.add(pageObject)
+                            page.cosObject.apply {
+                                setItem(COSName.PARENT, nodeObject)
+                                setNeedToBeUpdated(true)
+                            }
+                        }
+                        nodeDictionary.setItem(COSName.KIDS, kidsArray)
+                        return nodeObject
+                    }
+
+                    val kidsArray = COSArray().apply { setNeedToBeUpdated(true) }
+                    var index = 0
+                    while (index < pageSlice.size) {
+                        val end = min(index + maxChildrenPerNode, pageSlice.size)
+                        val childObject = buildBranch(pageSlice.subList(index, end)) ?: return null
+                        kidsArray.add(childObject)
+                        (childObject.`object` as? COSDictionary)?.apply {
+                            setItem(COSName.PARENT, nodeObject)
+                            setNeedToBeUpdated(true)
+                        }
+                        index = end
+                    }
+                    nodeDictionary.setItem(COSName.KIDS, kidsArray)
+                    return nodeObject
+                }
+
+                val rootObject = buildBranch(pages) ?: return false
+                (rootObject.`object` as? COSDictionary)?.apply {
+                    removeItem(COSName.PARENT)
+                    setNeedToBeUpdated(true)
+                    setInt(COSName.COUNT, pages.size)
+                }
+                cosDocument.setHighestXRefObjectNumber(nextObjectNumber - 1)
+                document.documentCatalog.cosObject.setItem(COSName.PAGES, rootObject)
+                return true
+            }
+
+            private fun collectPages(document: PDDocument): List<PDPage> {
+                val result = ArrayList<PDPage>()
+                val iterator = document.documentCatalog.pages.iterator()
+                while (iterator.hasNext()) {
+                    result += iterator.next()
+                }
+                return result
+            }
+        }
+
+        @JvmStatic
+        @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+        fun rebalancePdfPageTree(
+            document: PDDocument,
+            maxChildrenPerNode: Int = PRE_REPAIR_MAX_KIDS_PER_ARRAY,
+        ): Boolean = PdfPageTreeRepair.rebalance(document, maxChildrenPerNode, TAG)
     }
 
     abstract inner class BitmapCache {
