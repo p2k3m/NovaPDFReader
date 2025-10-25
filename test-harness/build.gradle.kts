@@ -30,6 +30,7 @@ dependencies {
     implementation(project(":infra:storage"))
     implementation(project(":domain:model"))
     implementation(libs.kotlinx.coroutines.core)
+    testImplementation(libs.junit4)
 }
 
 kotlin {
