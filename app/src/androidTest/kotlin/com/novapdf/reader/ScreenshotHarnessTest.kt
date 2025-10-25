@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.Manifest
+import android.app.Instrumentation
 import android.content.Context
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -2315,20 +2316,48 @@ class ScreenshotHarnessTest {
         val formatted = renderHarnessConsoleMessage(message, fields)
         val instrumentation = runCatching { InstrumentationRegistry.getInstrumentation() }.getOrNull()
         if (instrumentation != null) {
-            val statusMessage = "$TAG: $formatted"
-            val bundle = Bundle().apply { putString("stream", statusMessage) }
-            runCatching { instrumentation.sendStatus(0, bundle) }
+            sendInstrumentationConsole(instrumentation, "$TAG: $formatted")
             if (error != null) {
-                val errorBundle = Bundle().apply {
-                    putString("stream", android.util.Log.getStackTraceString(error))
-                }
-                runCatching { instrumentation.sendStatus(0, errorBundle) }
+                sendInstrumentationConsole(
+                    instrumentation,
+                    android.util.Log.getStackTraceString(error)
+                )
             }
         }
         if (error != null) {
             println("$TAG: $formatted\n${android.util.Log.getStackTraceString(error)}")
         } else {
             println("$TAG: $formatted")
+        }
+    }
+
+    private fun sendInstrumentationConsole(instrumentation: Instrumentation, message: String) {
+        chunkInstrumentationMessage(message).forEach { chunk ->
+            val bundle = Bundle().apply { putString("stream", chunk) }
+            runCatching { instrumentation.sendStatus(0, bundle) }
+        }
+    }
+
+    private fun chunkInstrumentationMessage(message: String): List<String> {
+        if (message.length <= MAX_INSTRUMENTATION_STATUS_LENGTH) {
+            return listOf(message)
+        }
+        val chunks = message.chunked(MAX_INSTRUMENTATION_STATUS_LENGTH)
+        val total = chunks.size
+        return chunks.mapIndexed { index, chunk ->
+            if (index == 0) {
+                chunk
+            } else {
+                buildString(chunk.length + 32) {
+                    append(TAG)
+                    append(": (chunk ")
+                    append(index + 1)
+                    append('/')
+                    append(total)
+                    append(") ")
+                    append(chunk)
+                }
+            }
         }
     }
 
@@ -2434,5 +2463,6 @@ class ScreenshotHarnessTest {
         private const val PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT = 80f
         private const val TAG = "ScreenshotHarness"
         private val PACKAGE_NAME_PATTERN = Regex("^[A-Za-z0-9._]+$")
+        private const val MAX_INSTRUMENTATION_STATUS_LENGTH = 30_000
     }
 }
