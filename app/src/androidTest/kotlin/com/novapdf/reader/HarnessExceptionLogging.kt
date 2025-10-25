@@ -3,9 +3,11 @@ package com.novapdf.reader
 import android.os.Debug
 import android.os.Process
 import android.util.Log
+import com.novapdf.reader.logging.CrashReporter
 import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.field
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal object HarnessExceptionLogging {
     private const val TAG = "HarnessEntryPoint"
@@ -165,6 +167,7 @@ internal fun <T> runHarnessEntry(
     operation: String,
     block: () -> T,
 ): T {
+    HarnessLoggingInitializer.ensureInitialized()
     val metricsSession = HarnessPhaseMetricsSession(component, operation)
     return try {
         block().also { metricsSession.recordSuccess() }
@@ -180,6 +183,7 @@ internal suspend fun <T> runHarnessEntrySuspending(
     operation: String,
     block: suspend () -> T,
 ): T {
+    HarnessLoggingInitializer.ensureInitialized()
     val metricsSession = HarnessPhaseMetricsSession(component, operation)
     return try {
         block().also { metricsSession.recordSuccess() }
@@ -187,6 +191,35 @@ internal suspend fun <T> runHarnessEntrySuspending(
         metricsSession.recordFailure(error)
         HarnessExceptionLogging.log(component, operation, error)
         throw error
+    }
+}
+
+private object HarnessLoggingInitializer {
+    private val initialised = AtomicBoolean(false)
+
+    fun ensureInitialized() {
+        if (initialised.get()) {
+            return
+        }
+        if (initialised.compareAndSet(false, true)) {
+            NovaLog.install(
+                debug = true,
+                crashReporter = object : CrashReporter {
+                    override fun install() {}
+
+                    override fun recordNonFatal(
+                        throwable: Throwable,
+                        metadata: Map<String, String>,
+                    ) {
+                        // No-op crash reporting in test harness runs.
+                    }
+
+                    override fun logBreadcrumb(message: String) {
+                        // No-op crash reporting in test harness runs.
+                    }
+                },
+            )
+        }
     }
 }
 
