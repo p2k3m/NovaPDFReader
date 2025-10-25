@@ -13,6 +13,11 @@ class TestNovaPdfApp : NovaPdfApp(), TestApplicationComponentManagerHolder {
         TestApplicationComponentManager(this)
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        ensureStrictModeHarnessOverride()
+    }
+
     override fun componentManager(): TestApplicationComponentManager = testComponentManager
 
     override fun generatedComponent(): Any = testComponentManager.generatedComponent()
