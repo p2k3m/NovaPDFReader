@@ -911,6 +911,17 @@ def _sanitize(value: str) -> str:
     return normalized.strip("_.")
 
 
+def _strip_console_suffix(value: str) -> str:
+    """Remove structured console metadata appended to harness log messages."""
+
+    trimmed = value.strip()
+    if not trimmed:
+        return trimmed
+    if " | " in trimmed:
+        trimmed = trimmed.split(" | ", 1)[0].rstrip()
+    return trimmed
+
+
 class HarnessContext:
     def __init__(
         self,
@@ -1056,7 +1067,10 @@ class HarnessContext:
     def maybe_collect_ready_flag(self, line: str) -> None:
         match = re.search(r"Writing screenshot ready flag to (.+)", line)
         if match:
-            path = match.group(1).strip()
+            path = match.group(1)
+            path = _strip_console_suffix(path)
+            if " with payload" in path:
+                path = path.split(" with payload", 1)[0].strip()
             if path and path not in self.ready_flags:
                 self.ready_flags.append(path)
 
@@ -1064,14 +1078,16 @@ class HarnessContext:
         match = re.search(r"completion signal at (.+)", line)
         if not match:
             return
-        raw = match.group(1)
-        candidates = [candidate.strip() for candidate in raw.split(",")]
+        raw = _strip_console_suffix(match.group(1))
+        candidates = [
+            _strip_console_suffix(candidate).strip() for candidate in raw.split(",")
+        ]
         self.done_flags = [candidate for candidate in candidates if candidate]
 
     def maybe_collect_package(self, line: str) -> None:
         match = re.search(r"Resolved screenshot harness package name: (.+)", line)
         if match:
-            candidate = match.group(1).strip()
+            candidate = _strip_console_suffix(match.group(1))
             if not candidate:
                 return
             if self._maybe_set_package(candidate):

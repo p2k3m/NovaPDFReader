@@ -44,6 +44,21 @@ def test_collects_ready_and_done_flags() -> None:
     assert ctx.done_flags == ["/tmp/done.txt", "/tmp/other.txt"]
 
 
+def test_collects_ready_and_done_flags_with_console_metadata() -> None:
+    ctx = HarnessContext(args=argparse.Namespace())
+
+    ctx.maybe_collect_ready_flag(
+        "Writing screenshot ready flag to /tmp/ready.txt with payload {\"ok\":true}"
+        " | module=\"harness\" | timestampMs=123"
+    )
+    ctx.maybe_collect_done_flags(
+        "completion signal at /tmp/done.txt, /tmp/other.txt | module=\"harness\""
+    )
+
+    assert ctx.ready_flags == ["/tmp/ready.txt"]
+    assert ctx.done_flags == ["/tmp/done.txt", "/tmp/other.txt"]
+
+
 def test_collect_package_prefers_normalized_value(capsys: pytest.CaptureFixture[str]) -> None:
     ctx = HarnessContext(args=argparse.Namespace())
 
@@ -57,6 +72,17 @@ def test_collect_package_prefers_normalized_value(capsys: pytest.CaptureFixture[
     # Second warning should be suppressed once emitted.
     ctx.maybe_collect_package("Resolved screenshot harness package name: ???")
     assert capsys.readouterr().err == ""
+
+
+def test_collect_package_with_console_metadata() -> None:
+    ctx = HarnessContext(args=argparse.Namespace())
+
+    ctx.maybe_collect_package(
+        "ScreenshotHarnessTest: Resolved screenshot harness package name: com.example.app"
+        " | module=\"harness\" | timestampMs=123"
+    )
+
+    assert ctx.package == "com.example.app"
 
 
 def test_register_instrumentation_component_tracks_candidates() -> None:
