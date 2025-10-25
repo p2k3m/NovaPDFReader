@@ -1598,9 +1598,9 @@ class PdfDocumentRepository(
             if (repairReasons.isEmpty()) {
                 NovaLog.i(
                     TAG,
-                    "Detected screenshot harness fixture at $uri; skipping pre-emptive repair",
+                    "Detected screenshot harness fixture at $uri; forcing pre-emptive repair",
                 )
-                return false
+                return true
             } else {
                 NovaLog.i(
                     TAG,
