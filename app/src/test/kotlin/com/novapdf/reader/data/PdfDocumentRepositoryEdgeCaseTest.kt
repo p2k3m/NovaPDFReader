@@ -218,7 +218,7 @@ class PdfDocumentRepositoryEdgeCaseTest {
             endobj
             % $harnessMarker
             %%EOF
-        """.trimIndent()
+            """.trimIndent()
         harnessFile.writeText(pdfSkeleton, Charsets.ISO_8859_1)
 
         val detectOversized = PdfDocumentRepository::class.declaredFunctions
@@ -234,6 +234,63 @@ class PdfDocumentRepositoryEdgeCaseTest {
 
         assertTrue(
             "Harness fixture should trigger pre-emptive repair",
+            shouldRepair
+        )
+
+        repository.dispose()
+        harnessFile.delete()
+    }
+
+    @Test
+    fun harnessFixtureWithoutLargeCountStillRepairs() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val constants = Class.forName("com.novapdf.reader.data.PdfDocumentRepositoryKt")
+        val markerField = constants.getDeclaredField("HARNESS_FIXTURE_MARKER").apply {
+            isAccessible = true
+        }
+        val harnessMarker = markerField.get(null) as String
+
+        val harnessFile = File(context.cacheDir, "harness-fixture-minimal.pdf")
+        val pdfSkeleton = """
+            %PDF-1.4
+            1 0 obj
+            << /Type /Catalog /Pages 2 0 R >>
+            endobj
+            2 0 obj
+            << /Type /Pages /Count 4 /Kids [3 0 R] >>
+            endobj
+            3 0 obj
+            << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+            endobj
+            4 0 obj
+            << /Length 0 >>
+            stream
+            endstream
+            endobj
+            % $harnessMarker
+            %%EOF
+            """.trimIndent()
+        harnessFile.writeText(pdfSkeleton, Charsets.ISO_8859_1)
+
+        val detectOversized = PdfDocumentRepository::class.declaredFunctions
+            .first { it.name == "detectOversizedPageTree" }
+            .apply { isAccessible = true }
+
+        val shouldRepair = detectOversized.callSuspend(
+            repository,
+            harnessFile.toUri(),
+            harnessFile.length(),
+            null,
+        ) as Boolean
+
+        assertTrue(
+            "Harness fixtures should always be repaired to stabilise Pdfium",
             shouldRepair
         )
 
