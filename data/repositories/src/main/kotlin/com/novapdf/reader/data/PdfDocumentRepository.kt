@@ -32,6 +32,7 @@ import com.novapdf.reader.logging.LogField
 import com.novapdf.reader.logging.NovaLog
 import com.novapdf.reader.logging.ProcessMetricsLogger
 import com.novapdf.reader.logging.field
+import com.novapdf.reader.storage.PdfiumCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -274,14 +275,6 @@ class PdfDocumentRepository(
             PdfiumCore::class.java.getDeclaredMethod("nativeClosePage", java.lang.Long.TYPE).apply {
                 isAccessible = true
             }
-        }.getOrNull()
-    }
-    // SensitiveApi[Reflection]: Reach into PdfiumCore.lock to coordinate native access.
-    private val pdfiumLockObject by lazy(LazyThreadSafetyMode.PUBLICATION) {
-        runCatching {
-            PdfiumCore::class.java.getDeclaredField("lock").apply {
-                isAccessible = true
-            }.get(null)
         }.getOrNull()
     }
     @Volatile
@@ -2255,21 +2248,14 @@ class PdfDocumentRepository(
     }
 
     private fun openPdfiumDocument(descriptor: ParcelFileDescriptor): PdfDocument {
-        val lock = pdfiumLockObject
-        return if (lock != null) {
-            // PdfiumCore exposes a global lock that coordinates all native access. Use it when
-            // available so concurrent document creation does not race with other Pdfium calls.
-            synchronized(lock) { pdfiumCore.newDocument(descriptor) }
-        } else {
-            pdfiumCore.newDocument(descriptor)
-        }
+        return PdfiumCompat.openDocument(pdfiumCore, descriptor)
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun closePdfiumPage(document: PdfDocument, pageIndex: Int) {
         val pagesField = pdfiumPagesField ?: return
         val closePage = pdfiumClosePageMethod ?: return
-        val lock = pdfiumLockObject ?: return
+        val lock = PdfiumCompat.lock ?: return
         val pages = runCatching { pagesField.get(document) as? MutableMap<Int, Long> }.getOrNull() ?: return
         synchronized(lock) {
             val pointer = pages.remove(pageIndex) ?: return
