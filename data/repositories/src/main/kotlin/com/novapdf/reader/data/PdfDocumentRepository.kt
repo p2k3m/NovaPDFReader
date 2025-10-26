@@ -114,6 +114,7 @@ private const val TAG = "PdfDocumentRepository"
 private const val BITMAP_POOL_REPORT_INTERVAL = 64
 private const val MAX_RENDER_FAILURES = 2
 private const val CONTENT_RESOLVER_READ_TIMEOUT_MS = 30_000L
+private const val PDF_REPAIR_TIMEOUT_MS = 180_000L
 private const val MIN_DISK_CACHE_BYTES = 16L * 1024L * 1024L
 private const val MAX_DISK_CACHE_BYTES = 256L * 1024L * 1024L
 private const val FALLBACK_MEMORY_FRACTION = 4
@@ -1968,7 +1969,7 @@ class PdfDocumentRepository(
         }
 
         return try {
-            withTimeout(CONTENT_RESOLVER_READ_TIMEOUT_MS) {
+            withTimeout(PDF_REPAIR_TIMEOUT_MS) {
                 try {
                     input.buffered().use { stream ->
                         cancellationSignal.throwIfCanceled()
