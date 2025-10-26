@@ -38,6 +38,7 @@ import java.util.HashMap
 import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.jvm.Volatile
 
 @HiltAndroidApp
 open class NovaPdfApp : Application(), Configuration.Provider {
@@ -208,6 +209,9 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     }
 
     private fun isRunningInTestHarness(): Boolean {
+        if (harnessModeOverride) {
+            return true
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
             ActivityManager.isRunningInUserTestHarness()
         ) {
@@ -400,5 +404,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         private val HARNESS_TRUTHY_VALUES = setOf("1", "true", "yes")
         private val strictModeAnrDeathTriggered = AtomicBoolean(false)
         private val strictModePenaltyExecutor = Executor { command -> command.run() }
+        @Volatile
+        internal var harnessModeOverride: Boolean = false
     }
 }

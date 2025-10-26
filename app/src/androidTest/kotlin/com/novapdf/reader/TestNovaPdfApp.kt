@@ -14,7 +14,12 @@ class TestNovaPdfApp : NovaPdfApp(), TestApplicationComponentManagerHolder {
     }
 
     override fun onCreate() {
-        super.onCreate()
+        NovaPdfApp.harnessModeOverride = true
+        try {
+            super.onCreate()
+        } finally {
+            NovaPdfApp.harnessModeOverride = false
+        }
         ensureStrictModeHarnessOverride()
     }
 
