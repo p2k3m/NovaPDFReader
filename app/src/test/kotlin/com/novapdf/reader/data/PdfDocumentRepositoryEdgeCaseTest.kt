@@ -299,6 +299,58 @@ class PdfDocumentRepositoryEdgeCaseTest {
     }
 
     @Test
+    fun harnessPathHintsTriggerRepair() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = PdfDocumentRepository(
+            context,
+            dispatcher,
+            cacheDirectories = DefaultCacheDirectories(context),
+        )
+
+        val harnessDirectory = File(context.cacheDir, "screenshot-harness").apply { mkdirs() }
+        val harnessFile = File(harnessDirectory, "stress-thousand-pages.pdf")
+        val pdfSkeleton = """
+            %PDF-1.4
+            1 0 obj
+            << /Type /Catalog /Pages 2 0 R >>
+            endobj
+            2 0 obj
+            << /Type /Pages /Count 1 /Kids [3 0 R] >>
+            endobj
+            3 0 obj
+            << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+            endobj
+            4 0 obj
+            << /Length 0 >>
+            stream
+            endstream
+            endobj
+            %%EOF
+            """.trimIndent()
+        harnessFile.writeText(pdfSkeleton, Charsets.ISO_8859_1)
+
+        val detectOversized = PdfDocumentRepository::class.declaredFunctions
+            .first { it.name == "detectOversizedPageTree" }
+            .apply { isAccessible = true }
+
+        val shouldRepair = detectOversized.callSuspend(
+            repository,
+            harnessFile.toUri(),
+            harnessFile.length(),
+            null,
+        ) as Boolean
+
+        assertTrue(
+            "Harness path hints should trigger pre-emptive repair",
+            shouldRepair
+        )
+
+        repository.dispose()
+        harnessFile.delete()
+        harnessDirectory.delete()
+    }
+
+    @Test
     fun pageTreeInspectionHandlesLateCountNodes() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val repository = PdfDocumentRepository(
