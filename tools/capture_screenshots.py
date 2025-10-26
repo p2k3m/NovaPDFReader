@@ -44,6 +44,8 @@ LOGCAT_TAIL_LINES = 200
 NATIVE_CRASH_ARTIFACT_ROOT = Path("native-crash-artifacts")
 HARNESS_PHASE_PREFIX = "HARNESS PHASE: "
 
+STRICT_SHELL_PREFIX = "set -eu; { set -o pipefail 2>/dev/null; } || true; "
+
 
 @dataclass
 class HarnessPhaseEvent:
@@ -1232,7 +1234,9 @@ def signal_completion(args: argparse.Namespace, ctx: HarnessContext) -> None:
         return
     for flag in ctx.done_flags:
         try:
-            command = f"> {shlex.quote(flag)}"
+            command = (
+                f"{STRICT_SHELL_PREFIX}: > {shlex.quote(flag)}"
+            )
             adb_command(
                 args,
                 "shell",
@@ -1251,7 +1255,7 @@ def signal_completion(args: argparse.Namespace, ctx: HarnessContext) -> None:
                 ctx.package,
                 "sh",
                 "-c",
-                f"echo done > {shlex.quote(flag)}",
+                f"{STRICT_SHELL_PREFIX}echo done > {shlex.quote(flag)}",
             )
 
 

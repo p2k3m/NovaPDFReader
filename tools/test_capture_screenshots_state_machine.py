@@ -59,6 +59,54 @@ def test_collects_ready_and_done_flags_with_console_metadata() -> None:
     assert ctx.done_flags == ["/tmp/done.txt", "/tmp/other.txt"]
 
 
+def test_signal_completion_uses_strict_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    args = argparse.Namespace(adb="adb", serial=None)
+    ctx = HarnessContext(args=args)
+    ctx.package = "com.example.app"
+    ctx.done_flags = ["/tmp/done.txt"]
+
+    calls: List[Tuple[str, ...]] = []
+
+    def fake_adb_command(*cmd, **_kwargs):
+        calls.append(cmd)
+        return None
+
+    monkeypatch.setattr(capture_screenshots, "adb_command", fake_adb_command)
+
+    capture_screenshots.signal_completion(args, ctx)
+
+    assert len(calls) == 1
+    command = calls[0][-1]
+    assert command.startswith(capture_screenshots.STRICT_SHELL_PREFIX)
+    assert ": > /tmp/done.txt" in command
+
+
+def test_signal_completion_fallback_preserves_strict_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = argparse.Namespace(adb="adb", serial=None)
+    ctx = HarnessContext(args=args)
+    ctx.package = "com.example.app"
+    ctx.done_flags = ["/tmp/done.txt"]
+
+    calls: List[Tuple[str, ...]] = []
+
+    def fake_adb_command(*cmd, **_kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+        return None
+
+    monkeypatch.setattr(capture_screenshots, "adb_command", fake_adb_command)
+
+    capture_screenshots.signal_completion(args, ctx)
+
+    assert len(calls) == 2
+    command = calls[1][-1]
+    assert command.startswith(capture_screenshots.STRICT_SHELL_PREFIX)
+    assert "echo done > /tmp/done.txt" in command
+
+
 def test_collect_package_prefers_normalized_value(capsys: pytest.CaptureFixture[str]) -> None:
     ctx = HarnessContext(args=argparse.Namespace())
 
