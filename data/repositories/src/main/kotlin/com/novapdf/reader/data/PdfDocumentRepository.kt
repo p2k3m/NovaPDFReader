@@ -571,7 +571,7 @@ class PdfDocumentRepository(
                     cancellationSignal.throwIfCanceled()
                     signalPipelineProgress()
                     val document: PdfDocument = try {
-                        pdfiumCore.newDocument(activePfd).also { signalPipelineProgress() }
+                        openPdfiumDocument(activePfd).also { signalPipelineProgress() }
                     } catch (throwable: Throwable) {
                         try {
                             activePfd.close()
@@ -595,7 +595,7 @@ class PdfDocumentRepository(
                         }
 
                         val repairedDocument = try {
-                            pdfiumCore.newDocument(repairedPfd)
+                            openPdfiumDocument(repairedPfd)
                         } catch (second: Throwable) {
                             try {
                                 repairedPfd.close()
@@ -2251,6 +2251,17 @@ class PdfDocumentRepository(
             block()
         } finally {
             pdfiumCallVerifier.onExit(document)
+        }
+    }
+
+    private fun openPdfiumDocument(descriptor: ParcelFileDescriptor): PdfDocument {
+        val lock = pdfiumLockObject
+        return if (lock != null) {
+            // PdfiumCore exposes a global lock that coordinates all native access. Use it when
+            // available so concurrent document creation does not race with other Pdfium calls.
+            synchronized(lock) { pdfiumCore.newDocument(descriptor) }
+        } else {
+            pdfiumCore.newDocument(descriptor)
         }
     }
 
