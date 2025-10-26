@@ -9,6 +9,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.shockwave.pdfium.PdfiumCore
+import com.novapdf.reader.storage.PdfiumCompat
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
@@ -56,7 +57,7 @@ class NativeDependencyCompatibilityTest {
 
         context.contentResolver.openFileDescriptor(sampleUri, "r").use { descriptor ->
             requireNotNull(descriptor) { "Sample PDF should resolve to a file descriptor" }
-            val document = pdfiumCore.newDocument(descriptor)
+            val document = PdfiumCompat.openDocument(pdfiumCore, descriptor)
             try {
                 assertTrue("Sample PDF should contain at least one page", pdfiumCore.getPageCount(document) > 0)
             } finally {

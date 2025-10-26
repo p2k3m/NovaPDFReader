@@ -10,6 +10,7 @@ import com.novapdf.reader.model.RemoteDocumentStage
 import com.novapdf.reader.data.remote.contentLengthOrNull
 import com.shockwave.pdfium.PdfDocument
 import com.shockwave.pdfium.PdfiumCore
+import com.novapdf.reader.storage.PdfiumCompat
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -148,7 +149,7 @@ class PdfDownloadManager(
         var document: PdfDocument? = null
         try {
             descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-            document = pdfiumCore.newDocument(descriptor)
+            document = PdfiumCompat.openDocument(pdfiumCore, descriptor)
             val pageCount = pdfiumCore.getPageCount(document)
             if (pageCount <= 0) {
                 throw RemotePdfException(
