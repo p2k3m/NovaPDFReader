@@ -49,6 +49,13 @@ class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
     override fun onCreate() {
         NovaPdfAppBase.harnessModeOverride = true
         try {
+            // Ensure Hilt creates the test component before the base application logic
+            // attempts to access any injected dependencies. The screenshot harness
+            // launches the process before the test rules have a chance to invoke
+            // [HiltAndroidRule.inject], which meant the first call to
+            // [NovaPdfAppBase.dependencies] happened without an initialized component
+            // and crashed with "The component was not created".
+            testComponentManager.generatedComponent()
             super.onCreate()
         } finally {
             NovaPdfAppBase.harnessModeOverride = false
