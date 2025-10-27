@@ -13,10 +13,24 @@ permissions:
 
 jobs:
   trigger-auto-fix:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     steps:
+      - name: Evaluate triggering conditions
+        id: trigger-check
+        env:
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$WORKFLOW_CONCLUSION" = "failure" ] && [ "$HEAD_REPOSITORY" = "$TARGET_REPOSITORY" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping auto-fix: conclusion=$WORKFLOW_CONCLUSION, head_repo=$HEAD_REPOSITORY"
+          fi
+
       - name: Determine OpenAI API key availability
+        if: steps.trigger-check.outputs.should_run == 'true'
         id: openai-key-check
         env:
           AUTO_FIX_OPENAI_API_KEY: ${{ secrets.AUTO_FIX_OPENAI_API_KEY }}
@@ -30,26 +44,26 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: steps.openai-key-check.outputs.has_key == 'true'
+        if: steps.trigger-check.outputs.should_run == 'true' && steps.openai-key-check.outputs.has_key == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        if: steps.openai-key-check.outputs.has_key == 'true'
+        if: steps.trigger-check.outputs.should_run == 'true' && steps.openai-key-check.outputs.has_key == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install auto-fixer dependencies
-        if: steps.openai-key-check.outputs.has_key == 'true'
+        if: steps.trigger-check.outputs.should_run == 'true' && steps.openai-key-check.outputs.has_key == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r tools/auto_fixer/requirements.txt
 
       - name: Run auto fix pipeline
-        if: steps.openai-key-check.outputs.has_key == 'true'
+        if: steps.trigger-check.outputs.should_run == 'true' && steps.openai-key-check.outputs.has_key == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_FIX_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           REPO_OWNER: ${{ github.event.workflow_run.repository.owner.login }}
