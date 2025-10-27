@@ -11,6 +11,7 @@ import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.novapdf.reader.anr.installDebugAnrDetector
+import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
 import com.novapdf.reader.domain.usecase.PdfViewerUseCases
@@ -23,9 +24,14 @@ import com.novapdf.reader.search.DocumentSearchCoordinator
 import com.novapdf.reader.search.PdfBoxInitializer
 import com.novapdf.reader.work.DocumentMaintenanceScheduler
 import dagger.hilt.android.HiltAndroidApp
+import java.util.HashMap
+import java.util.Locale
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Provider
-import com.novapdf.reader.coroutines.CoroutineDispatchers
+import kotlin.coroutines.CoroutineContext
+import kotlin.jvm.Volatile
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -33,49 +39,58 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.CoroutineContext
-import java.util.HashMap
-import java.util.Locale
-import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.jvm.Volatile
 
-@HiltAndroidApp
-open class NovaPdfApp : Application(), Configuration.Provider {
+abstract class NovaPdfAppBase : Application(), Configuration.Provider {
 
-    @Inject
-    lateinit var crashReporter: CrashReporter
+    protected abstract val dependencies: Dependencies
 
-    @Inject
-    lateinit var adaptiveFlowManager: AdaptiveFlowManager
+    protected data class Dependencies(
+        val crashReporter: CrashReporter,
+        val adaptiveFlowManager: AdaptiveFlowManager,
+        val pdfViewerUseCases: PdfViewerUseCases,
+        val workerFactory: HiltWorkerFactory,
+        val documentMaintenanceSchedulerProvider: Provider<DocumentMaintenanceScheduler>,
+        val searchCoordinatorProvider: Provider<DocumentSearchCoordinator>,
+        val bookmarkManagerProvider: Provider<BookmarkManager>,
+        val databaseProvider: Provider<NovaPdfDatabase>,
+        val dispatchers: CoroutineDispatchers,
+    )
 
-    @Inject
-    lateinit var pdfViewerUseCases: PdfViewerUseCases
+    private val crashReporter: CrashReporter
+        get() = dependencies.crashReporter
 
-    @Inject
-    lateinit var workerFactory: HiltWorkerFactory
+    private val adaptiveFlowManager: AdaptiveFlowManager
+        get() = dependencies.adaptiveFlowManager
 
-    @Inject
-    lateinit var documentMaintenanceSchedulerProvider: Provider<DocumentMaintenanceScheduler>
+    private val pdfViewerUseCases: PdfViewerUseCases
+        get() = dependencies.pdfViewerUseCases
 
-    @Inject
-    lateinit var searchCoordinatorProvider: Provider<DocumentSearchCoordinator>
+    private val workerFactory: HiltWorkerFactory
+        get() = dependencies.workerFactory
 
-    @Inject
-    lateinit var bookmarkManagerProvider: Provider<BookmarkManager>
+    private val documentMaintenanceSchedulerProvider: Provider<DocumentMaintenanceScheduler>
+        get() = dependencies.documentMaintenanceSchedulerProvider
 
-    @Inject
-    lateinit var databaseProvider: Provider<NovaPdfDatabase>
+    private val searchCoordinatorProvider: Provider<DocumentSearchCoordinator>
+        get() = dependencies.searchCoordinatorProvider
 
-    @Inject
-    lateinit var dispatchers: CoroutineDispatchers
+    private val bookmarkManagerProvider: Provider<BookmarkManager>
+        get() = dependencies.bookmarkManagerProvider
+
+    private val databaseProvider: Provider<NovaPdfDatabase>
+        get() = dependencies.databaseProvider
+
+    private val dispatchers: CoroutineDispatchers
+        get() = dependencies.dispatchers
 
     private val scopeExceptionHandler = CoroutineExceptionHandler { context, error ->
         logUnhandledCoroutineException(context, error)
     }
+
     private val applicationScope by lazy {
         CoroutineScope(SupervisorJob() + dispatchers.default + scopeExceptionHandler)
     }
+
     private val backgroundInitializationStarted = AtomicBoolean(false)
     private val strictModeHarnessApplied = AtomicBoolean(false)
 
@@ -251,7 +266,6 @@ open class NovaPdfApp : Application(), Configuration.Provider {
 
         return registryCandidates.any { className ->
             runCatching {
-                // SensitiveApi[Reflection]: Probe instrumentation registries to detect test runtime.
                 val registryClass = Class.forName(className)
                 val method = registryClass.getMethod("getInstrumentation")
                 method.invoke(null)
@@ -283,13 +297,11 @@ open class NovaPdfApp : Application(), Configuration.Provider {
     @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
     private fun isActivityThreadInstrumented(): Boolean {
         return runCatching {
-            // SensitiveApi[Reflection]: Inspect android.app.ActivityThread internals for instrumentation overrides.
             val activityThreadClass = Class.forName("android.app.ActivityThread")
             val currentThread = activityThreadClass
                 .getMethod("currentActivityThread")
                 .invoke(null)
                 ?: return@runCatching false
-            // SensitiveApi[Reflection]: Access ActivityThread.mInstrumentation to validate injected instrumentation.
             val instrumentationField = activityThreadClass.getDeclaredField("mInstrumentation")
             instrumentationField.isAccessible = true
             val instrumentation = instrumentationField.get(currentThread) as? Instrumentation
@@ -334,7 +346,7 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         if (!pdfBoxReady) {
             logDeferredInitializationWarning(
                 "pdfbox",
-                "PDFBox resources failed to initialise; search indexing will be disabled"
+                "PDFBox resources failed to initialise; search indexing will be disabled",
             )
         }
     }
@@ -404,7 +416,53 @@ open class NovaPdfApp : Application(), Configuration.Provider {
         private val HARNESS_TRUTHY_VALUES = setOf("1", "true", "yes")
         private val strictModeAnrDeathTriggered = AtomicBoolean(false)
         private val strictModePenaltyExecutor = Executor { command -> command.run() }
+
         @Volatile
         internal var harnessModeOverride: Boolean = false
+    }
+}
+
+@HiltAndroidApp
+class NovaPdfApp : NovaPdfAppBase() {
+
+    @Inject
+    lateinit var crashReporter: CrashReporter
+
+    @Inject
+    lateinit var adaptiveFlowManager: AdaptiveFlowManager
+
+    @Inject
+    lateinit var pdfViewerUseCases: PdfViewerUseCases
+
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    @Inject
+    lateinit var documentMaintenanceSchedulerProvider: Provider<DocumentMaintenanceScheduler>
+
+    @Inject
+    lateinit var searchCoordinatorProvider: Provider<DocumentSearchCoordinator>
+
+    @Inject
+    lateinit var bookmarkManagerProvider: Provider<BookmarkManager>
+
+    @Inject
+    lateinit var databaseProvider: Provider<NovaPdfDatabase>
+
+    @Inject
+    lateinit var dispatchers: CoroutineDispatchers
+
+    override val dependencies: Dependencies by lazy(LazyThreadSafetyMode.NONE) {
+        Dependencies(
+            crashReporter = crashReporter,
+            adaptiveFlowManager = adaptiveFlowManager,
+            pdfViewerUseCases = pdfViewerUseCases,
+            workerFactory = workerFactory,
+            documentMaintenanceSchedulerProvider = documentMaintenanceSchedulerProvider,
+            searchCoordinatorProvider = searchCoordinatorProvider,
+            bookmarkManagerProvider = bookmarkManagerProvider,
+            databaseProvider = databaseProvider,
+            dispatchers = dispatchers,
+        )
     }
 }
