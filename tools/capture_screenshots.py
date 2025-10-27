@@ -314,6 +314,21 @@ def _resolve_sanitized_package(
     return matches[0]
 
 
+def _package_visible_on_device(
+    args: Optional[argparse.Namespace], package_name: str
+) -> bool:
+    if args is None:
+        return False
+    adb_path = getattr(args, "adb", None)
+    if not adb_path:
+        return False
+    try:
+        output = adb_command_output(args, "shell", "pm", "path", package_name)
+    except subprocess.CalledProcessError:
+        return False
+    return bool(output.strip())
+
+
 def normalize_package_name(
     candidate: str, *, args: Optional[argparse.Namespace] = None
 ) -> Optional[str]:
@@ -324,14 +339,18 @@ def normalize_package_name(
     if PACKAGE_NAME_PATTERN.match(value):
         return value
 
-    if "*" in value:
+    contains_wildcards = "*" in value
+    if contains_wildcards:
         resolved = _resolve_sanitized_package(args, value)
         if resolved:
             return resolved
 
     sanitized = re.sub(r"[^A-Za-z0-9._]", "", value)
     if sanitized and PACKAGE_NAME_PATTERN.match(sanitized):
-        return sanitized
+        if not contains_wildcards:
+            return sanitized
+        if _package_visible_on_device(args, sanitized):
+            return sanitized
 
     return None
 
