@@ -1996,6 +1996,8 @@ def main() -> int:
 
     max_system_crash_retries = 1
     system_crash_attempts = 0
+    max_process_crash_retries = 1
+    process_crash_attempts = 0
     auto_install_attempted = getattr(args, "skip_auto_install", False)
 
     last_exit_code = 1
@@ -2016,6 +2018,30 @@ def main() -> int:
             auto_install_attempted = True
             if auto_install_debug_apks(args).succeeded:
                 continue
+
+        if (
+            ctx.process_crash_detected
+            and process_crash_attempts < max_process_crash_retries
+        ):
+            process_crash_attempts += 1
+            retry_requested = False
+            if (
+                not getattr(args, "skip_auto_install", False)
+                and not auto_install_attempted
+            ):
+                auto_install_attempted = True
+                install_result = auto_install_debug_apks(args)
+                if install_result.virtualization_unavailable:
+                    return 0
+                if install_result.succeeded:
+                    retry_requested = True
+            if not retry_requested:
+                print(
+                    "Detected instrumentation process crash; retrying once after short delay",
+                    file=sys.stderr,
+                )
+                time.sleep(5)
+            continue
 
         if (
             ctx.system_crash_detected

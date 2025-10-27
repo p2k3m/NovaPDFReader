@@ -704,6 +704,34 @@ def test_main_returns_success_when_virtualization_unavailable(
     assert capture_screenshots.main() == 0
 
 
+def test_main_retries_after_process_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    args = argparse.Namespace(skip_auto_install=True)
+
+    monkeypatch.setattr(capture_screenshots, "load_harness_environment", lambda: None)
+    monkeypatch.setattr(capture_screenshots, "parse_args", lambda: args)
+
+    attempts: List[str] = []
+
+    def fake_run_once(
+        _args: argparse.Namespace,
+    ) -> Tuple[int, capture_screenshots.HarnessContext]:
+        ctx = capture_screenshots.HarnessContext(args=_args)
+        if not attempts:
+            ctx.process_crash_detected = True
+            ctx.capture_completed = False
+            attempts.append("crash")
+            return 1, ctx
+        ctx.capture_completed = True
+        attempts.append("success")
+        return 0, ctx
+
+    monkeypatch.setattr(capture_screenshots, "run_instrumentation_once", fake_run_once)
+    monkeypatch.setattr(capture_screenshots.time, "sleep", lambda *_args, **_kwargs: None)
+
+    assert capture_screenshots.main() == 0
+    assert attempts == ["crash", "success"]
+
+
 def test_run_instrumentation_once_skips_when_args_marked_virtualization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
