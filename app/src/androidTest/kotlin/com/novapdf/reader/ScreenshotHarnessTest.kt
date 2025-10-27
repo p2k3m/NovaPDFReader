@@ -1528,11 +1528,17 @@ class ScreenshotHarnessTest {
             knownPackages.firstOrNull { candidate -> matchesPackagePattern(value, candidate) }?.let { return it }
         }
         resolveSanitizedPackageName(packageManager, value)?.let { return it }
-        if (value.contains('*')) {
-            return null
-        }
         val sanitized = value.replace(Regex("[^A-Za-z0-9._]"), "")
-        return sanitized.takeIf { it.isNotEmpty() && PACKAGE_NAME_PATTERN.matches(it) }
+        if (sanitized.isNotEmpty() && PACKAGE_NAME_PATTERN.matches(sanitized)) {
+            if (knownPackages.contains(sanitized)) {
+                return sanitized
+            }
+            val resolved = runCatching { packageManager.getApplicationInfo(sanitized, 0) }.getOrNull()
+            if (resolved != null) {
+                return sanitized
+            }
+        }
+        return null
     }
 
     private fun matchesPackagePattern(pattern: String, packageName: String): Boolean {
