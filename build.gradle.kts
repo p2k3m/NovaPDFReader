@@ -274,19 +274,6 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
     }
 
     val operations = buildList {
-        if (apiLevel >= 24) {
-            add(
-                listOf(
-                    "shell",
-                    "cmd",
-                    "appops",
-                    "set",
-                    "com.google.android.gms",
-                    "RUN_IN_BACKGROUND",
-                    "ignore"
-                )
-            )
-        }
         if (apiLevel >= 26) {
             add(
                 listOf(
@@ -296,19 +283,6 @@ fun disablePlayServicesAutoUpdates(serial: String, logger: Logger) {
                     "set",
                     "com.google.android.gms",
                     "REQUEST_INSTALL_PACKAGES",
-                    "ignore"
-                )
-            )
-        }
-        if (apiLevel >= 28) {
-            add(
-                listOf(
-                    "shell",
-                    "cmd",
-                    "appops",
-                    "set",
-                    "com.google.android.gms",
-                    "RUN_ANY_IN_BACKGROUND",
                     "ignore"
                 )
             )
