@@ -1,0 +1,48 @@
+name: Auto Fix Pipeline
+
+on:
+  workflow_run:
+    workflows: ["Android CI/CD"]
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  trigger-auto-fix:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          (secrets.AUTO_FIX_OPENAI_API_KEY != '' || secrets.OPENAI_API_KEY != '') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install auto-fixer dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r tools/auto_fixer/requirements.txt
+
+      - name: Run auto fix pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_FIX_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.event.workflow_run.repository.owner.login }}
+          REPO_NAME: ${{ github.event.workflow_run.repository.name }}
+          OPENAI_API_KEY: ${{ secrets.AUTO_FIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.AUTO_FIX_OPENAI_MODEL || '' }}
+          AUTO_FIX_MAX_ITERATIONS: ${{ vars.AUTO_FIX_MAX_ITERATIONS || '' }}
+        run: |
+          set -euo pipefail
+          python tools/auto_fixer/auto_fixer.py
