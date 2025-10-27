@@ -2239,11 +2239,13 @@ class PdfDocumentRepository(
         block: () -> T,
     ): T {
         ensureWorkerThread()
-        pdfiumCallVerifier.onEnter(document, documentToken)
-        return try {
-            block()
-        } finally {
-            pdfiumCallVerifier.onExit(document)
+        return PdfiumCompat.withLock {
+            pdfiumCallVerifier.onEnter(document, documentToken)
+            try {
+                block()
+            } finally {
+                pdfiumCallVerifier.onExit(document)
+            }
         }
     }
 
