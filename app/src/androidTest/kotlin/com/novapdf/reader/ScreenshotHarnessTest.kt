@@ -1940,6 +1940,12 @@ class ScreenshotHarnessTest {
                 error
             )
             publishHarnessFailureFlag("programmatic_screenshot_security", error)
+        } catch (error: OutOfMemoryError) {
+            logHarnessError(
+                error.message ?: "Out of memory during programmatic screenshot capture",
+                error
+            )
+            publishHarnessFailureFlag("programmatic_screenshot_oom", error)
         } catch (error: IOException) {
             logHarnessError(
                 error.message ?: "IO exception during programmatic screenshot capture",
