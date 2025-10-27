@@ -1,8 +1,8 @@
-"""Automation to detect failing GitHub workflows on main and attempt auto-fixes.
+"""Automation to detect failing GitHub workflows and attempt auto-fixes.
 
 This script orchestrates the following high-level steps:
 
-1. Inspect the latest failing workflow on ``main``.
+1. Inspect the most recent failing workflow run for the relevant branch.
 2. Download and summarise the failure logs with an LLM.
 3. Ask the LLM for a unified diff patch that should resolve the failure.
 4. Apply the patch on a new branch, push it, and open a PR with auto-merge enabled.
@@ -49,7 +49,9 @@ class RepoConfig:
     github_token: str
     openai_api_key: str
     model: str = "gpt-4.1-mini"
-    max_iterations: int = 3
+    max_iterations: int = 0
+    initial_run_id: Optional[int] = None
+    initial_branch: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "RepoConfig":
@@ -61,13 +63,16 @@ class RepoConfig:
             raise AutoFixerError(
                 "Missing required environment variables: " + ", ".join(missing)
             )
+        initial_run_id_env = os.getenv("FAILED_WORKFLOW_RUN_ID")
         return cls(
             owner=os.environ["REPO_OWNER"],
             name=os.environ["REPO_NAME"],
             github_token=os.environ["GITHUB_TOKEN"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            max_iterations=int(os.getenv("AUTO_FIX_MAX_ITERATIONS", "3")),
+            max_iterations=int(os.getenv("AUTO_FIX_MAX_ITERATIONS", "0")),
+            initial_run_id=int(initial_run_id_env) if initial_run_id_env else None,
+            initial_branch=os.getenv("FAILED_WORKFLOW_BRANCH"),
         )
 
 
@@ -77,6 +82,7 @@ class WorkflowRun:
     html_url: str
     head_sha: str
     display_title: str
+    head_branch: str
 
 
 @dataclass
@@ -106,23 +112,32 @@ class GitHubClient:
             )
         return response
 
-    def latest_failed_run(self) -> Optional[WorkflowRun]:
+    def latest_failed_run(self, branch: Optional[str] = None) -> Optional[WorkflowRun]:
         path = f"/repos/{self._config.owner}/{self._config.name}/actions/runs"
-        response = self._request(
-            "GET",
-            path,
-            params={"branch": "main", "status": "failure", "per_page": 1},
-        )
+        params = {"status": "failure", "per_page": 1}
+        if branch:
+            params["branch"] = branch
+        response = self._request("GET", path, params=params)
         data = response.json()
         runs = data.get("workflow_runs", [])
         if not runs:
             return None
         run = runs[0]
+        return self._parse_workflow_run(run)
+
+    def get_workflow_run(self, run_id: int) -> WorkflowRun:
+        path = f"/repos/{self._config.owner}/{self._config.name}/actions/runs/{run_id}"
+        response = self._request("GET", path)
+        return self._parse_workflow_run(response.json())
+
+    @staticmethod
+    def _parse_workflow_run(data: dict) -> WorkflowRun:
         return WorkflowRun(
-            id=run["id"],
-            html_url=run["html_url"],
-            head_sha=run["head_sha"],
-            display_title=run.get("display_title", run.get("name", "workflow")),
+            id=data["id"],
+            html_url=data["html_url"],
+            head_sha=data["head_sha"],
+            display_title=data.get("display_title", data.get("name", "workflow")),
+            head_branch=data.get("head_branch", ""),
         )
 
     def download_logs(self, run_id: int, destination: Path) -> Path:
@@ -349,12 +364,21 @@ def iterate_auto_fix(config: RepoConfig) -> None:
     openai_client = OpenAIClient(config)
 
     processed_runs: set[int] = set()
-    for iteration in range(1, config.max_iterations + 1):
-        print(f"Iteration {iteration}/{config.max_iterations}")
-        run = github.latest_failed_run()
+    branch_hint = config.initial_branch
+    next_run_id = config.initial_run_id
+    iteration = 1
+    while config.max_iterations <= 0 or iteration <= config.max_iterations:
+        max_display = "∞" if config.max_iterations <= 0 else str(config.max_iterations)
+        print(f"Iteration {iteration}/{max_display}")
+        if next_run_id is not None:
+            run = github.get_workflow_run(next_run_id)
+            next_run_id = None
+        else:
+            run = github.latest_failed_run(branch_hint)
         if run is None:
             print("No failing workflow detected. Exiting.")
             return
+        branch_hint = run.head_branch or branch_hint
         if run.id in processed_runs:
             print(f"Workflow run {run.id} already processed. Waiting for a new failure.")
             time.sleep(60)
@@ -381,6 +405,8 @@ def iterate_auto_fix(config: RepoConfig) -> None:
         head_sha = current_head_sha()
         push_branch(branch)
 
+        branch_hint = branch
+
         pr_number = github.create_pull_request(
             branch,
             title=f"Auto fix: {run.display_title}",
@@ -406,6 +432,7 @@ def iterate_auto_fix(config: RepoConfig) -> None:
             print("Checks passed. Stopping automation.")
             return
         print("Checks failed. Iterating with updated failure logs.")
+        iteration += 1
     raise AutoFixerError("Reached maximum iterations without resolving failures")
 
 
