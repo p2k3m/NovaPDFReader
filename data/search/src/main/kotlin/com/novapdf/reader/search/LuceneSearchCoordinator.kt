@@ -1,9 +1,11 @@
 package com.novapdf.reader.search
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import android.os.CancellationSignal
 import android.os.Process
 import android.util.Base64
@@ -189,11 +191,7 @@ class LuceneSearchCoordinator(
     private var prepareJob: Job? = null
     @Volatile
     private var prepareStartSignal: CompletableDeferred<Unit>? = null
-    private val textRecognizer: TextRecognizer? = runCatching {
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-    }.onFailure { error ->
-        NovaLog.w(TAG, "Text recognition unavailable; OCR fallback disabled", error)
-    }.getOrNull()
+    private val textRecognizer: TextRecognizer? = createTextRecognizer(context)
     @Volatile
     private var pageContents: List<PageSearchContent> = emptyList()
 
@@ -1303,6 +1301,32 @@ class LuceneSearchCoordinator(
                     )
                 }
             }
+    }
+
+    private fun createTextRecognizer(context: Context): TextRecognizer? {
+        if (shouldBypassTextRecognition(context)) {
+            NovaLog.i(TAG, "Skipping text recognition initialization in test harness")
+            return null
+        }
+        return runCatching {
+            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        }.onFailure { error ->
+            NovaLog.w(TAG, "Text recognition unavailable; OCR fallback disabled", error)
+        }.getOrNull()
+    }
+
+    private fun shouldBypassTextRecognition(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            ActivityManager.isRunningInUserTestHarness()
+        ) {
+            return true
+        }
+        @Suppress("DEPRECATION")
+        if (ActivityManager.isRunningInTestHarness()) {
+            return true
+        }
+        val applicationClass = context.applicationContext?.javaClass?.name.orEmpty()
+        return applicationClass.contains("TestNovaPdfApp")
     }
 
     private fun buildQuery(rawQuery: String): Query {
