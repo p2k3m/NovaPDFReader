@@ -103,7 +103,7 @@ class ScreenshotHarnessTest {
 
     @get:Rule(order = 3)
     val resourceMonitorRule = DeviceResourceMonitorRule(
-        contextProvider = { runCatching { ApplicationProvider.getApplicationContext<Context>() }.getOrNull() },
+        contextProvider = { resourceMonitorContext },
         logger = { message -> logHarnessInfo(message) },
         onResourceExhausted = { reason ->
             logHarnessWarn("Resource exhaustion detected: $reason")
@@ -119,6 +119,7 @@ class ScreenshotHarnessTest {
 
     private lateinit var device: UiDevice
     private lateinit var appContext: Context
+    private var resourceMonitorContext: Context? = null
     private lateinit var activityScenario: ActivityScenario<ReaderActivity>
     private lateinit var documentUri: Uri
     private var documentSourceOverride: DocumentSource? = null
@@ -162,6 +163,7 @@ class ScreenshotHarnessTest {
             assumeTrue("Screenshot harness disabled", harnessRequested)
 
             appContext = ApplicationProvider.getApplicationContext()
+            resourceMonitorContext = appContext
             (appContext as? NovaPdfApp)?.ensureStrictModeHarnessOverride()
             activityScenario = ActivityScenario.launch(ReaderActivity::class.java)
             performSlowSystemPreflight()
@@ -699,6 +701,7 @@ class ScreenshotHarnessTest {
                 thresholdError?.let { throw it }
             }
         } finally {
+            resourceMonitorContext = null
             if (this::activityScenario.isInitialized) {
                 activityScenario.close()
             }
