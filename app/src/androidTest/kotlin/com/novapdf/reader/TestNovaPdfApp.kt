@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import androidx.hilt.work.HiltWorkerFactory
+import dagger.hilt.android.EarlyEntryPoints
 import com.novapdf.reader.coroutines.CoroutineDispatchers
 import com.novapdf.reader.data.BookmarkManager
 import com.novapdf.reader.data.NovaPdfDatabase
@@ -14,6 +15,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.internal.testing.TestApplicationComponentManager
 import dagger.hilt.android.internal.testing.TestApplicationComponentManagerHolder
+import dagger.hilt.android.testing.OnComponentReadyRunner
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Provider
 
@@ -23,31 +25,29 @@ import javax.inject.Provider
  */
 class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
 
+    private var dependenciesState: Dependencies? = null
+
     private val testComponentManager by lazy(LazyThreadSafetyMode.NONE) {
         TestApplicationComponentManager(this)
     }
 
-    private fun entryPoint(): TestNovaPdfAppEntryPoint {
-        return EntryPointAccessors.fromApplication(this, TestNovaPdfAppEntryPoint::class.java)
-    }
-
-    override val dependencies: Dependencies by lazy(LazyThreadSafetyMode.NONE) {
-        val ep = entryPoint()
-        Dependencies(
-            crashReporter = ep.crashReporter(),
-            adaptiveFlowManager = ep.adaptiveFlowManager(),
-            pdfViewerUseCases = ep.pdfViewerUseCases(),
-            workerFactory = ep.workerFactory(),
-            documentMaintenanceSchedulerProvider = ep.documentMaintenanceSchedulerProvider(),
-            searchCoordinatorProvider = ep.searchCoordinatorProvider(),
-            bookmarkManagerProvider = ep.bookmarkManagerProvider(),
-            databaseProvider = ep.databaseProvider(),
-            dispatchers = ep.dispatchers(),
-        )
-    }
+    override val dependencies: Dependencies
+        get() = dependenciesState
+            ?: error("TestNovaPdfApp dependencies accessed before initialization")
 
     override fun onCreate() {
         NovaPdfAppBase.harnessModeOverride = true
+        val resolvedEntryPoint = resolveEntryPoint()
+        dependenciesState = buildDependencies(resolvedEntryPoint.entryPoint)
+        if (resolvedEntryPoint.usedEarlyComponent) {
+            OnComponentReadyRunner.addListener(
+                this,
+                TestNovaPdfAppEntryPoint::class.java,
+                OnComponentReadyRunner.OnComponentReadyListener { refreshedEntryPoint ->
+                    dependenciesState = buildDependencies(refreshedEntryPoint)
+                },
+            )
+        }
         try {
             // Ensure Hilt creates the test component before the base application logic
             // attempts to access any injected dependencies. The screenshot harness
@@ -55,13 +55,47 @@ class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
             // [HiltAndroidRule.inject], which meant the first call to
             // [NovaPdfAppBase.dependencies] happened without an initialized component
             // and crashed with "The component was not created".
-            testComponentManager.generatedComponent()
             super.onCreate()
         } finally {
             NovaPdfAppBase.harnessModeOverride = false
         }
         ensureStrictModeHarnessOverride()
     }
+
+    private fun buildDependencies(entryPoint: TestNovaPdfAppEntryPoint): Dependencies {
+        return Dependencies(
+            crashReporter = entryPoint.crashReporter(),
+            adaptiveFlowManager = entryPoint.adaptiveFlowManager(),
+            pdfViewerUseCases = entryPoint.pdfViewerUseCases(),
+            workerFactory = entryPoint.workerFactory(),
+            documentMaintenanceSchedulerProvider = entryPoint.documentMaintenanceSchedulerProvider(),
+            searchCoordinatorProvider = entryPoint.searchCoordinatorProvider(),
+            bookmarkManagerProvider = entryPoint.bookmarkManagerProvider(),
+            databaseProvider = entryPoint.databaseProvider(),
+            dispatchers = entryPoint.dispatchers(),
+        )
+    }
+
+    private fun resolveEntryPoint(): ResolvedEntryPoint {
+        val entryPoint = runCatching {
+            EntryPointAccessors.fromApplication(this, TestNovaPdfAppEntryPoint::class.java)
+        }.getOrElse { error ->
+            if (error is IllegalStateException && error.message?.contains(HILT_RULE_MESSAGE, ignoreCase = true) == true) {
+                val earlyEntryPoint = EarlyEntryPoints.get(
+                    this,
+                    TestNovaPdfAppEarlyEntryPoint::class.java,
+                )
+                return ResolvedEntryPoint(earlyEntryPoint, usedEarlyComponent = true)
+            }
+            throw error
+        }
+        return ResolvedEntryPoint(entryPoint, usedEarlyComponent = false)
+    }
+
+    private data class ResolvedEntryPoint(
+        val entryPoint: TestNovaPdfAppEntryPoint,
+        val usedEarlyComponent: Boolean,
+    )
 
     override fun componentManager(): TestApplicationComponentManager = testComponentManager
 
@@ -79,5 +113,13 @@ class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
         fun bookmarkManagerProvider(): Provider<BookmarkManager>
         fun databaseProvider(): Provider<NovaPdfDatabase>
         fun dispatchers(): CoroutineDispatchers
+    }
+
+    @dagger.hilt.android.EarlyEntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface TestNovaPdfAppEarlyEntryPoint : TestNovaPdfAppEntryPoint
+
+    private companion object {
+        private const val HILT_RULE_MESSAGE = "HiltAndroidRule"
     }
 }
