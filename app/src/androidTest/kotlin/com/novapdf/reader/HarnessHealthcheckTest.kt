@@ -1,6 +1,7 @@
 package com.novapdf.reader
 
 import android.util.Log
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.novapdf.reader.logging.LogField
@@ -32,6 +33,7 @@ class HarnessHealthcheckTest {
     fun setUp() {
         runHarnessEntry("HarnessHealthcheckTest", "setUp") {
             hiltRule.inject()
+            ApplicationProvider.getApplicationContext<TestNovaPdfApp>().refreshDependenciesIfNeeded()
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
         }
     }

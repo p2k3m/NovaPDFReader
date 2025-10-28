@@ -153,11 +153,12 @@ class ScreenshotHarnessTest {
             try {
                 hiltRule.inject()
                 InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-            HarnessReadiness.emit { readinessMarker ->
-                println(readinessMarker)
-                logHarnessInfo("Harness readiness marker emitted: $readinessMarker")
-            }
-            HarnessTestPoints.emit(HarnessTestPoint.PRE_INITIALIZATION)
+                ApplicationProvider.getApplicationContext<TestNovaPdfApp>().refreshDependenciesIfNeeded()
+                HarnessReadiness.emit { readinessMarker ->
+                    println(readinessMarker)
+                    logHarnessInfo("Harness readiness marker emitted: $readinessMarker")
+                }
+                HarnessTestPoints.emit(HarnessTestPoint.PRE_INITIALIZATION)
             val harnessRequested = shouldRunHarness()
             logHarnessInfo("Screenshot harness requested=$harnessRequested")
             assumeTrue("Screenshot harness disabled", harnessRequested)
