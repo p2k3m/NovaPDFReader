@@ -15,7 +15,6 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.internal.testing.TestApplicationComponentManager
 import dagger.hilt.android.internal.testing.TestApplicationComponentManagerHolder
-import dagger.hilt.android.testing.OnComponentReadyRunner
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Provider
 
@@ -26,6 +25,7 @@ import javax.inject.Provider
 class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
 
     private var dependenciesState: Dependencies? = null
+    private var needsDependencyRefresh: Boolean = false
 
     private val testComponentManager by lazy(LazyThreadSafetyMode.NONE) {
         TestApplicationComponentManager(this)
@@ -39,15 +39,7 @@ class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
         NovaPdfAppBase.harnessModeOverride = true
         val resolvedEntryPoint = resolveEntryPoint()
         dependenciesState = buildDependencies(resolvedEntryPoint.entryPoint)
-        if (resolvedEntryPoint.usedEarlyComponent) {
-            OnComponentReadyRunner.addListener(
-                this,
-                TestNovaPdfAppEntryPoint::class.java,
-                OnComponentReadyRunner.OnComponentReadyListener { refreshedEntryPoint ->
-                    dependenciesState = buildDependencies(refreshedEntryPoint)
-                },
-            )
-        }
+        needsDependencyRefresh = resolvedEntryPoint.usedEarlyComponent
         try {
             // Ensure Hilt creates the test component before the base application logic
             // attempts to access any injected dependencies. The screenshot harness
@@ -60,6 +52,18 @@ class TestNovaPdfApp : NovaPdfAppBase(), TestApplicationComponentManagerHolder {
             NovaPdfAppBase.harnessModeOverride = false
         }
         ensureStrictModeHarnessOverride()
+    }
+
+    fun refreshDependenciesIfNeeded() {
+        if (!needsDependencyRefresh) {
+            return
+        }
+        val refreshedEntryPoint = EntryPointAccessors.fromApplication(
+            this,
+            TestNovaPdfAppEntryPoint::class.java,
+        )
+        dependenciesState = buildDependencies(refreshedEntryPoint)
+        needsDependencyRefresh = false
     }
 
     private fun buildDependencies(entryPoint: TestNovaPdfAppEntryPoint): Dependencies {
