@@ -3039,17 +3039,108 @@ jobs:
 
           HANDSHAKE_PACKAGES=()
 
+          resolve_package_name() {
+            local candidate="$1"
+            if [ -z "$candidate" ]; then
+              return 1
+            fi
+
+            candidate=$(printf '%s' "$candidate" | tr -d '\r\n')
+            if [ -z "$candidate" ]; then
+              return 1
+            fi
+
+            if [[ "$candidate" == *"*"* ]]; then
+              local normalized
+              normalized=$(python3 - "$candidate" <<'PY' 2>/dev/null
+import re
+import subprocess
+import sys
+
+pattern = sys.argv[1]
+
+try:
+    result = subprocess.run(
+        ["adb", "shell", "pm", "list", "packages"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+except subprocess.CalledProcessError:
+    sys.exit(1)
+
+regex = re.compile("^" + re.escape(pattern).replace("\\*", ".*") + "$")
+matches = []
+for line in result.stdout.splitlines():
+    stripped = line.strip()
+    if not stripped.startswith("package:"):
+        continue
+    package = stripped.split(":", 1)[1].strip()
+    if regex.match(package):
+        matches.append(package)
+
+if not matches:
+    sys.exit(1)
+
+if len(matches) == 1:
+    print(matches[0])
+    sys.exit(0)
+
+suffix = pattern.split("*")[-1]
+if suffix:
+    for match in matches:
+        if match.endswith(suffix):
+            print(match)
+            sys.exit(0)
+
+print(matches[0])
+PY
+)
+              normalized=$(printf '%s' "$normalized" | tr -d '\r\n')
+              if [ -n "$normalized" ]; then
+                printf '%s' "$normalized"
+                return 0
+              fi
+            fi
+
+            printf '%s' "$candidate"
+            return 0
+          }
+
           add_handshake_package() {
             local candidate="$1"
             if [ -z "$candidate" ]; then
               return
             fi
+
+            local normalized=""
+            if ! normalized=$(resolve_package_name "$candidate" 2>/dev/null); then
+              normalized="$candidate"
+            fi
+
+            if [ -z "$normalized" ]; then
+              return
+            fi
+
             for existing in "${HANDSHAKE_PACKAGES[@]}"; do
-              if [ "$existing" = "$candidate" ]; then
-                return
+              if [ "$existing" = "$normalized" ]; then
+                normalized=""
+                break
               fi
             done
-            HANDSHAKE_PACKAGES+=("$candidate")
+
+            if [ -n "$normalized" ]; then
+              HANDSHAKE_PACKAGES+=("$normalized")
+            fi
+
+            if [ "$candidate" != "$normalized" ]; then
+              for existing in "${HANDSHAKE_PACKAGES[@]}"; do
+                if [ "$existing" = "$candidate" ]; then
+                  return
+                fi
+              done
+              HANDSHAKE_PACKAGES+=("$candidate")
+            fi
           }
 
           refresh_handshake_packages() {
@@ -3058,6 +3149,12 @@ jobs:
             local sanitized="${HARNESS_RUN_AS_PACKAGE//\*/}"
             if [ -n "$sanitized" ]; then
               add_handshake_package "$sanitized"
+            fi
+            local normalized=""
+            if normalized=$(resolve_package_name "$HARNESS_RUN_AS_PACKAGE" 2>/dev/null); then
+              if [ -n "$normalized" ] && [ "$normalized" != "$HARNESS_RUN_AS_PACKAGE" ]; then
+                add_handshake_package "$normalized"
+              fi
             fi
             if [ "$APP_RUN_AS_PACKAGE" != "$HARNESS_RUN_AS_PACKAGE" ]; then
               add_handshake_package "$APP_RUN_AS_PACKAGE"
@@ -3241,6 +3338,15 @@ jobs:
                 resolved=$(printf '%s' "$resolved" | tr -d '\r\n')
                 if [ -n "$resolved" ]; then
                   if [ "$resolved" != "$HARNESS_RUN_AS_PACKAGE" ]; then
+                    local normalized=""
+                    if normalized=$(resolve_package_name "$resolved" 2>/dev/null); then
+                      if [ -n "$normalized" ]; then
+                        if [ "$normalized" != "$resolved" ]; then
+                          echo "Resolved sanitized screenshot harness package $resolved to $normalized" >&2
+                        fi
+                        resolved="$normalized"
+                      fi
+                    fi
                     HARNESS_RUN_AS_PACKAGE="$resolved"
                     refresh_handshake_packages
                     HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
