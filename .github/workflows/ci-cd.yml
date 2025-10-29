@@ -3053,49 +3053,49 @@ jobs:
             if [[ "$candidate" == *"*"* ]]; then
               local normalized
               normalized=$(python3 - "$candidate" <<'PY' 2>/dev/null
-import re
-import subprocess
-import sys
+              import re
+              import subprocess
+              import sys
 
-pattern = sys.argv[1]
+              pattern = sys.argv[1]
 
-try:
-    result = subprocess.run(
-        ["adb", "shell", "pm", "list", "packages"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-except subprocess.CalledProcessError:
-    sys.exit(1)
+              try:
+                  result = subprocess.run(
+                      ["adb", "shell", "pm", "list", "packages"],
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  )
+              except subprocess.CalledProcessError:
+                  sys.exit(1)
 
-regex = re.compile("^" + re.escape(pattern).replace("\\*", ".*") + "$")
-matches = []
-for line in result.stdout.splitlines():
-    stripped = line.strip()
-    if not stripped.startswith("package:"):
-        continue
-    package = stripped.split(":", 1)[1].strip()
-    if regex.match(package):
-        matches.append(package)
+              regex = re.compile("^" + re.escape(pattern).replace("\\*", ".*") + "$")
+              matches = []
+              for line in result.stdout.splitlines():
+                  stripped = line.strip()
+                  if not stripped.startswith("package:"):
+                      continue
+                  package = stripped.split(":", 1)[1].strip()
+                  if regex.match(package):
+                      matches.append(package)
 
-if not matches:
-    sys.exit(1)
+              if not matches:
+                  sys.exit(1)
 
-if len(matches) == 1:
-    print(matches[0])
-    sys.exit(0)
+              if len(matches) == 1:
+                  print(matches[0])
+                  sys.exit(0)
 
-suffix = pattern.split("*")[-1]
-if suffix:
-    for match in matches:
-        if match.endswith(suffix):
-            print(match)
-            sys.exit(0)
+              suffix = pattern.split("*")[-1]
+              if suffix:
+                  for match in matches:
+                      if match.endswith(suffix):
+                          print(match)
+                          sys.exit(0)
 
-print(matches[0])
-PY
-)
+              print(matches[0])
+              PY
+              )
               normalized=$(printf '%s' "$normalized" | tr -d '\r\n')
               if [ -n "$normalized" ]; then
                 printf '%s' "$normalized"
