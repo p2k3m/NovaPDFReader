@@ -3035,6 +3035,37 @@ jobs:
           APP_RUN_AS_PACKAGE="${PACKAGE_NAME}"
           HARNESS_RUNNER="dagger.hilt.android.testing.HiltTestRunner"
           HARNESS_COMPONENT=""
+          HARNESS_FLAG_PACKAGE=""
+
+          HANDSHAKE_PACKAGES=()
+
+          add_handshake_package() {
+            local candidate="$1"
+            if [ -z "$candidate" ]; then
+              return
+            fi
+            for existing in "${HANDSHAKE_PACKAGES[@]}"; do
+              if [ "$existing" = "$candidate" ]; then
+                return
+              fi
+            done
+            HANDSHAKE_PACKAGES+=("$candidate")
+          }
+
+          refresh_handshake_packages() {
+            HANDSHAKE_PACKAGES=()
+            add_handshake_package "$HARNESS_RUN_AS_PACKAGE"
+            local sanitized="${HARNESS_RUN_AS_PACKAGE//\*/}"
+            if [ -n "$sanitized" ]; then
+              add_handshake_package "$sanitized"
+            fi
+            if [ "$APP_RUN_AS_PACKAGE" != "$HARNESS_RUN_AS_PACKAGE" ]; then
+              add_handshake_package "$APP_RUN_AS_PACKAGE"
+            fi
+          }
+
+          refresh_handshake_packages
+          HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
 
           resolve_instrumentation_component() {
             local package_name="$1"
@@ -3054,6 +3085,8 @@ jobs:
             if [ -n "$resolved" ]; then
               HARNESS_COMPONENT="$resolved"
               HARNESS_RUN_AS_PACKAGE="${resolved%%/*}"
+              refresh_handshake_packages
+              HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
               return 0
             fi
 
@@ -3090,7 +3123,12 @@ jobs:
           }
 
           cleanup_flags() {
-            adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
+            for package in "${HANDSHAKE_PACKAGES[@]}"; do
+              if [ -z "$package" ]; then
+                continue
+              fi
+              adb shell run-as "$package" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
+            done
           }
 
           harness_pid=""
@@ -3204,6 +3242,8 @@ jobs:
                 if [ -n "$resolved" ]; then
                   if [ "$resolved" != "$HARNESS_RUN_AS_PACKAGE" ]; then
                     HARNESS_RUN_AS_PACKAGE="$resolved"
+                    refresh_handshake_packages
+                    HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
                     echo "Updated screenshot harness run-as package to $HARNESS_RUN_AS_PACKAGE" >&2
                     if [ "$previous" != "$HARNESS_RUN_AS_PACKAGE" ]; then
                       cleanup_flags
@@ -3234,7 +3274,11 @@ jobs:
               captured_after_snapshot=1
               resource_snapshot "screenshot-harness-after" "$after_snapshot_path"
             fi
-            collect_performance_metrics "$HARNESS_RUN_AS_PACKAGE" "harness"
+            local metrics_package="$HARNESS_FLAG_PACKAGE"
+            if [ -z "$metrics_package" ]; then
+              metrics_package="$HARNESS_RUN_AS_PACKAGE"
+            fi
+            collect_performance_metrics "$metrics_package" "harness"
             collect_performance_metrics "$APP_RUN_AS_PACKAGE" "app"
             cleanup_flags
           }
@@ -3309,7 +3353,20 @@ jobs:
                 return 1
               fi
 
-              if adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
+              local ready_package=""
+              for package in "${HANDSHAKE_PACKAGES[@]}"; do
+                if [ -z "$package" ]; then
+                  continue
+                fi
+                if adb shell run-as "$package" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
+                  ready_package="$package"
+                  break
+                fi
+              done
+
+              if [ -n "$ready_package" ]; then
+                HARNESS_FLAG_PACKAGE="$ready_package"
+                echo "Detected screenshot readiness flag for package $HARNESS_FLAG_PACKAGE" >&2
                 break
               fi
 
@@ -3399,7 +3456,11 @@ jobs:
           capture_set "dark-landscape-accessibility" landscape yes 1 1 4
           capture_set "light-landscape-standard" landscape no 0 none 3
 
-          if ! adb shell run-as "$HARNESS_RUN_AS_PACKAGE" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
+          if [ -z "$HARNESS_FLAG_PACKAGE" ]; then
+            HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
+          fi
+
+          if ! adb shell run-as "$HARNESS_FLAG_PACKAGE" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
             echo "::error::Failed to signal screenshot harness completion" >&2
             exit 1
           fi
