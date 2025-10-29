@@ -684,6 +684,104 @@ def test_run_instrumentation_once_skips_when_virtualization_unavailable(
     assert ctx.capture_completed
 
 
+def test_run_instrumentation_once_collects_artifacts_for_process_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = argparse.Namespace(
+        extra_arg=[],
+        document_factory=None,
+        storage_client_factory=None,
+        instrumentation="com.example/.Runner",
+        skip_auto_install=True,
+        timeout=5,
+    )
+
+    monkeypatch.setattr(capture_screenshots, "parse_extra_args", lambda *_: [])
+    monkeypatch.setattr(
+        capture_screenshots,
+        "ensure_test_package_argument",
+        lambda _args, extras, _component: extras,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "resolve_instrumentation_component",
+        lambda *_: "com.example/.Runner",
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "derive_fallback_package",
+        lambda *_unused_args, **_unused_kwargs: None,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "ensure_instrumentation_target_installed",
+        lambda *_: None,
+    )
+
+    class FakeStdout:
+        def close(self) -> None:  # pragma: no cover - compatibility
+            pass
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = FakeStdout()
+
+        def wait(self, timeout: int | None = None) -> int:  # pragma: no cover - deterministic
+            return 0
+
+        def kill(self) -> None:  # pragma: no cover - compatibility
+            pass
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "launch_instrumentation",
+        lambda *_: FakeProcess(),
+    )
+
+    def fake_stream(
+        _process: FakeProcess,
+        ctx: capture_screenshots.HarnessContext,
+        *_unused_args,
+        **_unused_kwargs,
+    ):
+        line = "INSTRUMENTATION_RESULT: shortMsg=Process crashed."
+        ctx.observe_line(line)
+        yield line
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "stream_instrumentation_output",
+        fake_stream,
+    )
+    monkeypatch.setattr(
+        capture_screenshots,
+        "cleanup_lingering_instrumentation_processes",
+        lambda *_: None,
+    )
+
+    collected: List[str] = []
+
+    def fake_collect(
+        _args: argparse.Namespace,
+        _ctx: capture_screenshots.HarnessContext,
+        _component: str | None,
+        reason: str,
+    ) -> None:
+        collected.append(reason)
+
+    monkeypatch.setattr(
+        capture_screenshots,
+        "collect_native_crash_artifacts",
+        fake_collect,
+    )
+
+    exit_code, ctx = capture_screenshots.run_instrumentation_once(args)
+
+    assert exit_code == 1
+    assert ctx.process_crash_detected
+    assert collected == ["process-crash"]
+
+
 def test_main_returns_success_when_virtualization_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
