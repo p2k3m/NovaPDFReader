@@ -16,7 +16,7 @@ import java.io.InputStream
 import java.util.Locale
 
 @Singleton
-class S3StorageClient @Inject constructor(
+class S3StorageClient @Inject internal constructor(
     private val okHttpClient: OkHttpClient,
     private val awsRequestSigner: AwsRequestSigner,
 ) : StorageClient {
