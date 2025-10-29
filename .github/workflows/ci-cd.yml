@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 360
     outputs:
       firebase_configured: ${{ steps.validate_required_secrets.outputs.firebase_configured }}
+      heavy_pdf_configured: ${{ steps.validate_required_secrets.outputs.heavy_pdf_configured }}
     strategy:
       fail-fast: true
       max-parallel: ${{ vars.NOVAPDF_EMULATOR_MAX_PARALLEL || 1 }}
@@ -162,6 +163,7 @@ jobs:
           set -e
           missing=false
           firebase_missing=false
+          heavy_pdf_missing=false
           aws_auth_mode=none
           has_access_keys=false
 
@@ -180,6 +182,7 @@ jobs:
               echo "::error::Missing AWS_S3_READ_ROLE_ARN secret required to assume the read-only S3 role, and AWS access key credentials were not supplied as a fallback."
               echo "Remediation: Either provide an IAM role ARN via the AWS_S3_READ_ROLE_ARN repository secret, or configure long-lived credentials by storing an access key ID and secret access key as the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY repository secrets (double-check the secret names for typos)."
               missing=true
+              heavy_pdf_missing=true
             else
               echo "::notice::AWS_S3_READ_ROLE_ARN secret not provided; will fall back to AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY credentials."
             fi
@@ -189,18 +192,21 @@ jobs:
             echo "::error::Missing S3_BUCKET_NAME secret required for S3 access."
             echo "Remediation: Provision an S3 bucket (e.g., nova-pdf-artifacts) in the AWS console, ensure the IAM role grants s3:GetObject and s3:ListBucket permissions, then add the bucket name as the S3_BUCKET_NAME repository secret."
             missing=true
+            heavy_pdf_missing=true
           fi
 
           if [ -z "${STRESS_PDF_KEY:-}" ]; then
             echo "::error::Missing STRESS_PDF_S3_KEY repository variable or secret required to download the stress PDF fixture."
             echo "Remediation: Record the S3 object key for the stress PDF (for example, fixtures/stress-large.pdf) and add it as the STRESS_PDF_S3_KEY repository variable or secret."
             missing=true
+            heavy_pdf_missing=true
           fi
 
           if [ -z "${THOUSAND_PDF_KEY:-}" ]; then
             echo "::error::Missing THOUSAND_PAGE_PDF_S3_KEY repository variable or secret required to download the thousand-page PDF fixture."
             echo "Remediation: Record the S3 object key for the thousand-page PDF (for example, fixtures/stress-thousand-pages.pdf) and add it as the THOUSAND_PAGE_PDF_S3_KEY repository variable or secret."
             missing=true
+            heavy_pdf_missing=true
           fi
 
           if [ -z "${AI_PDF_SHA256_VALUE:-}" ]; then
@@ -254,6 +260,13 @@ jobs:
           fi
 
           echo "aws_auth_mode=${aws_auth_mode}" >> "$GITHUB_OUTPUT"
+
+          if [ "$heavy_pdf_missing" = true ]; then
+            echo "::notice::Heavy PDF tests will be skipped because required S3 configuration is unavailable."
+            echo "heavy_pdf_configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "heavy_pdf_configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
           if [ "$firebase_missing" = true ]; then
             echo "::notice::Firebase secrets missing; Firebase Test Lab jobs will be skipped."
@@ -752,7 +765,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     needs: build-test
-    if: needs.build-test.result == 'success'
+    if: needs.build-test.result == 'success' && needs.build-test.outputs.heavy_pdf_configured == 'true'
     strategy:
       fail-fast: true
       max-parallel: ${{ vars.NOVAPDF_EMULATOR_MAX_PARALLEL || 1 }}
