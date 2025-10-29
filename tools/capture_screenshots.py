@@ -1961,6 +1961,13 @@ def run_instrumentation_once(args: argparse.Namespace) -> Tuple[int, HarnessCont
 
     if not ctx.capture_completed:
         print("Did not capture any screenshots", file=sys.stderr)
+        reason: Optional[str] = None
+        if ctx.system_crash_detected:
+            reason = "system-server-crash"
+        elif ctx.process_crash_detected:
+            reason = "process-crash"
+        if reason:
+            collect_native_crash_artifacts(args, ctx, component, reason)
         ctx.maybe_emit_missing_instrumentation_guidance()
         ctx.maybe_emit_system_crash_guidance()
         ctx.maybe_emit_phase_guidance()
