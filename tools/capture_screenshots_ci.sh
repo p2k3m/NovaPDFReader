@@ -106,7 +106,7 @@ resolve_package_name() {
                 sys.exit(0)
 
     print(matches[0])
-    PY
+PY
     )
     normalized=$(printf '%s' "$normalized" | tr -d '\r\n')
     if [ -n "$normalized" ]; then
