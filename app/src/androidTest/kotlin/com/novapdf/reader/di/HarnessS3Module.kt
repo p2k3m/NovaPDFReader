@@ -7,6 +7,7 @@ import com.novapdf.reader.data.remote.PdfDownloadManager
 import com.novapdf.reader.data.remote.StorageClient
 import com.novapdf.reader.data.remote.di.S3Module
 import com.novapdf.reader.integration.aws.S3StorageClient
+import com.novapdf.reader.network.HarnessDnsAllowlist
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -54,31 +55,21 @@ object HarnessS3Module {
     ): PdfDownloadManager = PdfDownloadManager(context, storageClient, cacheDirectories)
 }
 
-private class HarnessAllowlistedDns : Dns {
+private class HarnessAllowlistedDns(
+    private val delegate: Dns = Dns.SYSTEM,
+) : Dns {
     override fun lookup(hostname: String): List<java.net.InetAddress> {
         val normalized = hostname.lowercase(Locale.US).trim().takeIf { it.isNotEmpty() }
             ?: throw UnknownHostException("Hostname is blank")
-        if (normalized in ALLOWED_EXACT_HOSTS) {
-            return Dns.SYSTEM.lookup(hostname)
+        if (!HarnessDnsAllowlist.isAllowedHost(normalized)) {
+            Log.w(TAG, "Blocked harness DNS lookup for $hostname")
+            throw UnknownHostException("Network access blocked by harness DNS: $hostname")
         }
-        if (ALLOWED_SUFFIXES.any { suffix -> normalized == suffix.trimStart('.') || normalized.endsWith(suffix) }) {
-            return Dns.SYSTEM.lookup(hostname)
-        }
-        Log.w(TAG, "Blocked harness DNS lookup for $hostname")
-        throw UnknownHostException("Network access blocked by harness DNS: $hostname")
+        return delegate.lookup(hostname)
     }
 
     private companion object {
         private const val TAG = "HarnessDns"
-        private val ALLOWED_EXACT_HOSTS = setOf(
-            "s3.amazonaws.com",
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        )
-        private val ALLOWED_SUFFIXES = setOf(
-            ".s3.amazonaws.com",
-        )
     }
 }
 
