@@ -1,4 +1,3 @@
-import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalogsExtension
@@ -35,6 +34,10 @@ android {
         )
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -58,11 +61,14 @@ kotlin {
 }
 
 private fun Project.resolveAwsCredential(name: String): String =
-    (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
-        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
-        ?: throw GradleException(
-            "Missing AWS credential \"$name\". Provide it via gradle.properties or as an environment variable."
-        )
+    resolveOptionalAwsCredential(name)
+        ?: run {
+            logger.warn(
+                "Missing AWS credential \"$name\". Using an empty placeholder. " +
+                    "Provide the credential via gradle.properties or as an environment variable for production builds."
+            )
+            ""
+        }
 
 private fun Project.resolveOptionalAwsCredential(name: String): String? =
     (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
