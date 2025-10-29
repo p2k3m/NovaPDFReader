@@ -1,4 +1,6 @@
+import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
+import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalogsExtension
 
 plugins {
@@ -17,6 +19,20 @@ android {
     defaultConfig {
         minSdk = versionCatalog.findVersion("androidMinSdk").get().requiredVersion.toInt()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val accessKeyId = project.resolveAwsCredential("AWS_ACCESS_KEY_ID")
+        val secretAccessKey = project.resolveAwsCredential("AWS_SECRET_ACCESS_KEY")
+        val sessionToken = project.resolveOptionalAwsCredential("AWS_SESSION_TOKEN")
+        val region = project.resolveAwsRegion()
+
+        buildConfigField("String", "AWS_ACCESS_KEY_ID", "\"${accessKeyId.asJavaStringLiteral()}\"")
+        buildConfigField("String", "AWS_SECRET_ACCESS_KEY", "\"${secretAccessKey.asJavaStringLiteral()}\"")
+        buildConfigField("String", "AWS_REGION", "\"${region.asJavaStringLiteral()}\"")
+        buildConfigField(
+            "String",
+            "AWS_SESSION_TOKEN",
+            sessionToken?.let { "\"${it.asJavaStringLiteral()}\"" } ?: "\"\""
+        )
     }
 
     compileOptions {
@@ -40,3 +56,25 @@ dependencies {
 kotlin {
     jvmToolchain(17)
 }
+
+private fun Project.resolveAwsCredential(name: String): String =
+    (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: throw GradleException(
+            "Missing AWS credential \"$name\". Provide it via gradle.properties or as an environment variable."
+        )
+
+private fun Project.resolveOptionalAwsCredential(name: String): String? =
+    (findProperty(name) as? String)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+
+private fun Project.resolveAwsRegion(): String =
+    listOf(
+        (findProperty("AWS_REGION") as? String),
+        System.getenv("AWS_REGION"),
+        System.getenv("AWS_DEFAULT_REGION"),
+    ).firstOrNull { !it.isNullOrBlank() }?.trim()
+        ?: "us-east-1"
+
+private fun String.asJavaStringLiteral(): String =
+    replace("\\", "\\\\").replace("\"", "\\\"")

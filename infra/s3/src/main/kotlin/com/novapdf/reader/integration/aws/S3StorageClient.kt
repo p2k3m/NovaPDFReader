@@ -18,6 +18,7 @@ import java.util.Locale
 @Singleton
 class S3StorageClient @Inject constructor(
     private val okHttpClient: OkHttpClient,
+    private val awsRequestSigner: AwsRequestSigner,
 ) : StorageClient {
 
     override fun handles(uri: Uri): Boolean {
@@ -30,12 +31,13 @@ class S3StorageClient @Inject constructor(
             ?: throw UnsupportedStorageUriException(uri)
         val key = uri.encodedPath?.trimStart('/')?.takeIf { it.isNotEmpty() }
             ?: throw UnsupportedStorageUriException(uri)
-        val request = Request.Builder()
+        val unsignedRequest = Request.Builder()
             .url("https://$bucket.s3.amazonaws.com/$key")
             .build()
 
         return withContext(Dispatchers.IO) {
-            val response = okHttpClient.newCall(request).execute()
+            val signedRequest = awsRequestSigner.sign(unsignedRequest)
+            val response = okHttpClient.newCall(signedRequest).execute()
             if (!response.isSuccessful) {
                 response.close()
                 throw IOException("S3 request failed with code ${response.code}")
