@@ -19,8 +19,8 @@ resource_snapshot() {
 base_dir="${ARTIFACTS_DIR}/screenshots/api${MATRIX_API}/${MATRIX_DEVICE_LABEL}"
 mkdir -p "$base_dir"
 
-READY_FLAG="cache/screenshot_ready.flag"
-DONE_FLAG="cache/screenshot_done.flag"
+READY_FLAG_BASENAME="screenshot_ready.flag"
+DONE_FLAG_BASENAME="screenshot_done.flag"
 HARNESS_CLASS="com.novapdf.reader.ScreenshotHarnessTest#openThousandPageDocumentForScreenshots"
 HARNESS_LOG="$base_dir/screenshot-harness.log"
 HARNESS_LOGCAT="$base_dir/screenshot-harness-logcat.log"
@@ -50,6 +50,7 @@ HARNESS_COMPONENT=""
 HARNESS_FLAG_PACKAGE=""
 
 HANDSHAKE_PACKAGES=()
+HANDSHAKE_DIRECTORY_HINTS=()
 
 resolve_package_name() {
   local candidate="$1"
@@ -119,6 +120,22 @@ PY
   return 0
 }
 
+add_handshake_directory_hint() {
+  local entry="$1"
+  if [ -z "$entry" ]; then
+    return
+  fi
+
+  local existing
+  for existing in "${HANDSHAKE_DIRECTORY_HINTS[@]}"; do
+    if [ "$existing" = "$entry" ]; then
+      return
+    fi
+  done
+
+  HANDSHAKE_DIRECTORY_HINTS+=("$entry")
+}
+
 add_handshake_package() {
   local candidate="$1"
   if [ -z "$candidate" ]; then
@@ -175,6 +192,158 @@ refresh_handshake_packages() {
 
 refresh_handshake_packages
 HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
+HARNESS_FLAG_RELATIVE_DIR=""
+
+list_flag_paths() {
+  local package="$1"
+  local basename="$2"
+  if [ -z "$package" ] || [ -z "$basename" ]; then
+    return
+  fi
+
+  local candidates=("cache/$basename")
+  local hint
+  for hint in "${HANDSHAKE_DIRECTORY_HINTS[@]}"; do
+    local hint_package="${hint%%:*}"
+    local hint_directory="${hint#*:}"
+    if [ -z "$hint_package" ] || [ "$hint_package" != "$package" ]; then
+      continue
+    fi
+    if [ -z "$hint_directory" ]; then
+      continue
+    fi
+    hint_directory="${hint_directory%/}"
+    if [ -z "$hint_directory" ]; then
+      continue
+    fi
+    candidates+=("$hint_directory/$basename")
+  done
+
+  printf '%s\n' "${candidates[@]}" | awk 'NF' | awk '!seen[$0]++'
+}
+
+update_handshake_directory_hints() {
+  if [ ! -f "$HARNESS_LOG" ]; then
+    return
+  fi
+
+  local parsed
+  parsed=$(
+    python3 - "$HARNESS_LOG" "${HANDSHAKE_PACKAGES[@]}" <<'PY'
+import os
+import re
+import sys
+
+log_path = sys.argv[1]
+packages = [arg for arg in sys.argv[2:] if arg]
+package_set = set(packages)
+
+try:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+        lines = handle.readlines()
+except OSError:
+    sys.exit(0)
+
+patterns = [
+    re.compile(r"Using handshake cache directories (?P<paths>.+)", re.IGNORECASE),
+    re.compile(r"Resolved screenshot handshake cache directories (?P<paths>.+)", re.IGNORECASE),
+]
+
+def parse_paths(segment):
+    if " for package " in segment:
+        paths_part, _ = segment.split(" for package ", 1)
+    else:
+        paths_part = segment
+    values = []
+    for candidate in paths_part.split(","):
+        value = candidate.strip()
+        if not value:
+            continue
+        if " |" in value:
+            value = value.split(" |", 1)[0].strip()
+        if value.endswith(")") and "(" in value:
+            value = value[: value.rfind("(")].strip()
+        values.append(value)
+    return values
+
+def extract_relative_path(path, package):
+    prefixes = [
+        f"/data/user/0/{package}/",
+        f"/data/user_de/0/{package}/",
+        f"/data/data/{package}/",
+    ]
+    for prefix in prefixes:
+        if path.startswith(prefix):
+            relative = path[len(prefix):].lstrip("/")
+            if relative:
+                return relative
+    return None
+
+def infer_package_from_path(path):
+    match = re.search(r"/data/(?:user(?:_de)?/\d+/|data/)([^/]+)/(.+)", path)
+    if match:
+        package = match.group(1)
+        relative = match.group(2).lstrip("/")
+        if relative:
+            return package, relative
+    return None, None
+
+results = []
+for raw_line in lines:
+    line = raw_line.strip()
+    if not line:
+        continue
+    if "handshake cache directories" not in line:
+        continue
+    if "|" in line:
+        line = line.split("|", 1)[0].strip()
+    match = None
+    path_package = None
+    for pattern in patterns:
+        match = pattern.search(line)
+        if match:
+            break
+    if not match:
+        continue
+    segment = match.group("paths").strip()
+    if " for package " in segment:
+        segment, package_segment = segment.split(" for package ", 1)
+        path_package = package_segment.strip().split()[0]
+    for path in parse_paths(segment):
+        if not path:
+            continue
+        inferred_package, inferred_relative = infer_package_from_path(path)
+        added = False
+        if inferred_package and inferred_relative:
+            if not package_set or inferred_package in package_set:
+                results.append(f"{inferred_package}:{inferred_relative}")
+                added = True
+        if added:
+            continue
+        if path_package:
+            if not package_set or path_package in package_set:
+                relative = extract_relative_path(path, path_package)
+                if relative:
+                    results.append(f"{path_package}:{relative}")
+
+if results:
+    seen = set()
+    for entry in results:
+        if entry in seen:
+            continue
+        seen.add(entry)
+        print(entry)
+PY
+  ) || return
+  if [ -z "$parsed" ]; then
+    return
+  fi
+
+  local line
+  while IFS= read -r line; do
+    add_handshake_directory_hint "$line"
+  done <<< "$parsed"
+}
 
 resolve_instrumentation_component() {
   local package_name="$1"
@@ -196,6 +365,7 @@ resolve_instrumentation_component() {
     HARNESS_RUN_AS_PACKAGE="${resolved%%/*}"
     refresh_handshake_packages
     HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
+    update_handshake_directory_hints
     return 0
   fi
 
@@ -232,11 +402,27 @@ wait_for_instrumentation_component() {
 }
 
 cleanup_flags() {
+  update_handshake_directory_hints
   for package in "${HANDSHAKE_PACKAGES[@]}"; do
     if [ -z "$package" ]; then
       continue
     fi
-    adb shell run-as "$package" sh -c "rm -f '$READY_FLAG' '$DONE_FLAG'" >/dev/null 2>&1 || true
+    local ready_paths
+    ready_paths=$(list_flag_paths "$package" "$READY_FLAG_BASENAME")
+    if [ -n "$ready_paths" ]; then
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        adb shell run-as "$package" sh -c "rm -f '$path'" >/dev/null 2>&1 || true
+      done <<< "$ready_paths"
+    fi
+    local done_paths
+    done_paths=$(list_flag_paths "$package" "$DONE_FLAG_BASENAME")
+    if [ -n "$done_paths" ]; then
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        adb shell run-as "$package" sh -c "rm -f '$path'" >/dev/null 2>&1 || true
+      done <<< "$done_paths"
+    fi
   done
 }
 
@@ -362,6 +548,7 @@ resolve_harness_run_as_package() {
           HARNESS_RUN_AS_PACKAGE="$resolved"
           refresh_handshake_packages
           HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
+          update_handshake_directory_hints
           echo "Updated screenshot harness run-as package to $HARNESS_RUN_AS_PACKAGE" >&2
           if [ "$previous" != "$HARNESS_RUN_AS_PACKAGE" ]; then
             cleanup_flags
@@ -443,6 +630,7 @@ fi
 
 launch_screenshot_harness() {
   echo "Launching screenshot harness instrumentation to load thousand-page PDF"
+  HARNESS_FLAG_RELATIVE_DIR=""
   adb logcat -c >/dev/null 2>&1 || true
   adb shell am instrument -w -r \
     -e runScreenshotHarness true \
@@ -459,6 +647,7 @@ wait_for_harness() {
   local timeout=${HARNESS_READY_TIMEOUT:-360}
   HARNESS_EXIT_REASON=""
   while true; do
+    update_handshake_directory_hints
     if ! kill -0 "$harness_pid" >/dev/null 2>&1; then
       echo "::error::Screenshot harness instrumentation exited before reporting readiness" >&2
       cat "$HARNESS_LOG" >&2 || true
@@ -472,18 +661,39 @@ wait_for_harness() {
     fi
 
     local ready_package=""
+    local ready_relative_path=""
     for package in "${HANDSHAKE_PACKAGES[@]}"; do
       if [ -z "$package" ]; then
         continue
       fi
-      if adb shell run-as "$package" sh -c "[ -f '$READY_FLAG' ]" >/dev/null 2>&1; then
-        ready_package="$package"
+      local candidate_paths
+      candidate_paths=$(list_flag_paths "$package" "$READY_FLAG_BASENAME")
+      if [ -z "$candidate_paths" ]; then
+        continue
+      fi
+      local path
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        if adb shell run-as "$package" sh -c "[ -f '$path' ]" >/dev/null 2>&1; then
+          ready_package="$package"
+          ready_relative_path="$path"
+          break
+        fi
+      done <<< "$candidate_paths"
+      if [ -n "$ready_package" ]; then
         break
       fi
     done
 
     if [ -n "$ready_package" ]; then
       HARNESS_FLAG_PACKAGE="$ready_package"
+      if [ -n "$ready_relative_path" ]; then
+        if [[ "$ready_relative_path" == */* ]]; then
+          HARNESS_FLAG_RELATIVE_DIR="${ready_relative_path%/*}"
+        else
+          HARNESS_FLAG_RELATIVE_DIR="."
+        fi
+      fi
       echo "Detected screenshot readiness flag for package $HARNESS_FLAG_PACKAGE" >&2
       break
     fi
@@ -502,6 +712,59 @@ wait_for_harness() {
   done
   HARNESS_EXIT_REASON=""
   return 0
+}
+
+signal_screenshot_completion() {
+  local package="$1"
+  if [ -z "$package" ]; then
+    return 1
+  fi
+
+  local candidates=()
+  if [ -n "$HARNESS_FLAG_RELATIVE_DIR" ]; then
+    if [ "$HARNESS_FLAG_RELATIVE_DIR" = "." ]; then
+      candidates+=("$DONE_FLAG_BASENAME")
+    else
+      candidates+=("${HARNESS_FLAG_RELATIVE_DIR%/}/$DONE_FLAG_BASENAME")
+    fi
+  fi
+
+  local fallback
+  fallback=$(list_flag_paths "$package" "$DONE_FLAG_BASENAME")
+  if [ -n "$fallback" ]; then
+    while IFS= read -r path; do
+      [ -z "$path" ] && continue
+      candidates+=("$path")
+    done <<< "$fallback"
+  fi
+
+  if [ ${#candidates[@]} -eq 0 ]; then
+    candidates+=("cache/$DONE_FLAG_BASENAME")
+  fi
+
+  local seen=""
+  local path
+  for path in "${candidates[@]}"; do
+    if [ -z "$path" ]; then
+      continue
+    fi
+    if printf '%s\n' "$seen" | grep -qxF "$path"; then
+      continue
+    fi
+    seen+="$path\n"
+    local command
+    if [[ "$path" == */* ]]; then
+      local dir="${path%/*}"
+      command="mkdir -p '$dir' && printf '' > '$path'"
+    else
+      command="printf '' > '$path'"
+    fi
+    if adb shell run-as "$package" sh -c "$command" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 system_crash_attempts=0
@@ -578,7 +841,7 @@ if [ -z "$HARNESS_FLAG_PACKAGE" ]; then
   HARNESS_FLAG_PACKAGE="$HARNESS_RUN_AS_PACKAGE"
 fi
 
-if ! adb shell run-as "$HARNESS_FLAG_PACKAGE" sh -c "printf '' > '$DONE_FLAG'" >/dev/null 2>&1; then
+if ! signal_screenshot_completion "$HARNESS_FLAG_PACKAGE"; then
   echo "::error::Failed to signal screenshot harness completion" >&2
   exit 1
 fi
