@@ -97,6 +97,11 @@ export ANDROID_HOME
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
+AVD_HOME="${ANDROID_AVD_HOME:-$ANDROID_HOME/avd}"
+mkdir -p "$AVD_HOME"
+export ANDROID_AVD_HOME="$AVD_HOME"
+log "Using ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
+
 resolve_cmdline_tool() {
   local tool="$1"
   local -a search_dirs=()
@@ -349,7 +354,7 @@ log "Ensuring required Android SDK packages are installed"
 # surface as a pipeline failure even if sdkmanager succeeded. Run those
 # pipelines inside a subshell with pipefail disabled so that we only pay
 # attention to the exit status of sdkmanager itself.
-if ! ( set +o pipefail; yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 ); then
+if ! ( set +o pipefail; yes 2>/dev/null | "$SDKMANAGER" --licenses >/dev/null 2>&1 ); then
   log "Failed to accept Android SDK licenses"
 fi
 packages=(
@@ -359,9 +364,10 @@ packages=(
   "emulator"
 )
 for pkg in "${packages[@]}"; do
-  if ! ( set +o pipefail; yes | "$SDKMANAGER" "$pkg" >/dev/null ); then
+  if ! ( set +o pipefail; yes 2>/dev/null | "$SDKMANAGER" "$pkg" >/dev/null ); then
     fatal "Failed to install SDK package $pkg"
   fi
+  log "Ensured SDK package $pkg is installed"
 done
 
 if [[ ! -x "$EMULATOR_BIN" ]]; then
@@ -372,7 +378,23 @@ if ! command -v adb >/dev/null 2>&1; then
   fatal "adb is not available after installing platform-tools"
 fi
 
-echo "no" | "$AVDMANAGER" create avd -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d "$DEVICE_PROFILE" --force >/dev/null 2>&1 || true
+log "Creating (or updating) AVD $AVD_NAME"
+if ! avd_output=$( ( set +o pipefail; echo "no" | "$AVDMANAGER" create avd -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d "$DEVICE_PROFILE" --force ) 2>&1 ); then
+  log "Failed to create AVD $AVD_NAME. avdmanager output follows:"
+  printf '%s\n' "$avd_output" >&2
+  fatal "Unable to create AVD $AVD_NAME"
+fi
+
+if [[ ! -f "$ANDROID_AVD_HOME/${AVD_NAME}.ini" ]]; then
+  log "Expected AVD definition not found at $ANDROID_AVD_HOME/${AVD_NAME}.ini"
+  if [[ -n "${avd_output:-}" ]]; then
+    log "avdmanager output:"
+    printf '%s\n' "$avd_output" >&2
+  fi
+  fatal "AVD $AVD_NAME was not created successfully"
+fi
+
+log "AVD $AVD_NAME is ready under $ANDROID_AVD_HOME"
 
 log "Downloading PDF s3://${SOURCE_BUCKET}/${SOURCE_KEY}"
 aws s3 cp "s3://${SOURCE_BUCKET}/${SOURCE_KEY}" "$PDF_LOCAL_PATH" --only-show-errors || fatal "Failed to download PDF from S3"
