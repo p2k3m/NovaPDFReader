@@ -254,7 +254,6 @@ AVDMANAGER_DIR="$(dirname "$AVDMANAGER")"
 if [[ "$AVDMANAGER_DIR" != "$CMDLINE_TOOLS_DIR" ]]; then
   export PATH="$AVDMANAGER_DIR:$PATH"
 fi
-[[ -x "$EMULATOR_BIN" ]] || fatal "Android emulator binary not found at $EMULATOR_BIN"
 
 SOURCE_BUCKET="${NOVAPDF_AUTOMATION_SOURCE_BUCKET:-pics-1234}"
 SOURCE_KEY="${NOVAPDF_AUTOMATION_SOURCE_KEY:-AI.pdf}"
@@ -355,6 +354,10 @@ packages=(
 for pkg in "${packages[@]}"; do
   yes | "$SDKMANAGER" "$pkg" >/dev/null || fatal "Failed to install SDK package $pkg"
 done
+
+if [[ ! -x "$EMULATOR_BIN" ]]; then
+  fatal "Android emulator binary not found at $EMULATOR_BIN after installing SDK packages"
+fi
 
 if ! command -v adb >/dev/null 2>&1; then
   fatal "adb is not available after installing platform-tools"
