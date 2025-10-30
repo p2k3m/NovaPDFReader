@@ -344,7 +344,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 log "Ensuring required Android SDK packages are installed"
-yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+# sdkmanager may close its stdin early which causes `yes` to receive SIGPIPE.
+# With `set -o pipefail` enabled at the top of this script, that would normally
+# surface as a pipeline failure even if sdkmanager succeeded. Run those
+# pipelines inside a subshell with pipefail disabled so that we only pay
+# attention to the exit status of sdkmanager itself.
+if ! ( set +o pipefail; yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 ); then
+  log "Failed to accept Android SDK licenses"
+fi
 packages=(
   "platform-tools"
   "platforms;android-${PLATFORM_API}"
@@ -352,7 +359,9 @@ packages=(
   "emulator"
 )
 for pkg in "${packages[@]}"; do
-  yes | "$SDKMANAGER" "$pkg" >/dev/null || fatal "Failed to install SDK package $pkg"
+  if ! ( set +o pipefail; yes | "$SDKMANAGER" "$pkg" >/dev/null ); then
+    fatal "Failed to install SDK package $pkg"
+  fi
 done
 
 if [[ ! -x "$EMULATOR_BIN" ]]; then
