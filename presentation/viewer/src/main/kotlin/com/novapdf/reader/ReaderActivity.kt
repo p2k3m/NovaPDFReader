@@ -36,6 +36,7 @@ import com.novapdf.reader.domain.usecase.PdfViewerUseCases
 import com.novapdf.reader.legacy.LegacyPdfPageAdapter
 import com.novapdf.reader.model.DocumentSource
 import com.novapdf.reader.model.FallbackMode
+import com.novapdf.reader.model.PdfRenderProgress
 import com.novapdf.reader.presentation.viewer.R
 import com.novapdf.reader.ui.theme.NovaPdfTheme
 import com.novapdf.reader.logging.NovaLog
@@ -69,6 +70,7 @@ open class ReaderActivity : ComponentActivity() {
         setMaxRecycledViews(0, 4)
     }
     private var lastAutomationUri: Uri? = null
+    private var automationRenderCompletionLogged: Boolean = true
 
     private val openDocumentLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.openDocument(it) }
@@ -229,6 +231,7 @@ open class ReaderActivity : ComponentActivity() {
         }
 
         lastAutomationUri = resolvedUri
+        automationRenderCompletionLogged = false
 
         NovaLog.i(
             AUTOMATION_LOG_TAG,
@@ -322,6 +325,7 @@ open class ReaderActivity : ComponentActivity() {
                 field("testHarness", isRunningInTestHarness()),
             )
             NovaLog.i(HARNESS_LOG_TAG, "Viewer state emission", fields)
+            maybeLogAutomationCompletion(state)
         }
 
         val initial = viewModel.uiState.value
@@ -334,6 +338,32 @@ open class ReaderActivity : ComponentActivity() {
             }
         }
         return Closeable { job.cancel() }
+    }
+
+    private fun maybeLogAutomationCompletion(state: PdfViewerUiState) {
+        if (automationRenderCompletionLogged) {
+            return
+        }
+
+        val hasValidDocument = state.pageCount > 0 && state.documentStatus !is DocumentStatus.Error
+        val renderIdle = state.renderProgress is PdfRenderProgress.Idle
+        val queueSettled = state.renderQueueStats.active == 0
+        val noMalformedPages = state.malformedPages.isEmpty()
+
+        if (hasValidDocument && renderIdle && queueSettled && noMalformedPages) {
+            automationRenderCompletionLogged = true
+            NovaLog.i(
+                AUTOMATION_STATUS_LOG_TAG,
+                "PDF automation render complete",
+                arrayOf(
+                    field("pageCount", state.pageCount),
+                    field("currentPage", state.currentPage),
+                    field("documentStatus", state.documentStatus.javaClass.simpleName),
+                    field("renderQueued", state.renderQueueStats.totalQueued),
+                    field("renderActive", state.renderQueueStats.active)
+                )
+            )
+        }
     }
 
     private fun isRunningInTestHarness(): Boolean {
@@ -540,5 +570,6 @@ open class ReaderActivity : ComponentActivity() {
     private companion object {
         private const val HARNESS_LOG_TAG = "HarnessViewerState"
         private const val AUTOMATION_LOG_TAG = "AutomationIntent"
+        private const val AUTOMATION_STATUS_LOG_TAG = "AutomationStatus"
     }
 }

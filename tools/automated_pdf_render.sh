@@ -25,6 +25,8 @@ Environment variables:
   NOVAPDF_AUTOMATION_DEVICE_PROFILE  AVD device profile (default: pixel_5)
   NOVAPDF_AUTOMATION_PLATFORM_API    Android platform API level (default: 32)
   NOVAPDF_AUTOMATION_RENDER_WAIT     Seconds to wait after launch before screenshot (default: 10)
+  NOVAPDF_AUTOMATION_INITIAL_DELAY   Initial delay before monitoring render logs (default: 5)
+  NOVAPDF_AUTOMATION_RENDER_TIMEOUT  Maximum seconds to wait for render confirmation (default: 120)
   AWS_REGION / AWS_DEFAULT_REGION    AWS region (default: us-east-1)
 USAGE
 }
@@ -94,6 +96,8 @@ SYSTEM_IMAGE="${NOVAPDF_AUTOMATION_SYSTEM_IMAGE:-system-images;android-32;google
 DEVICE_PROFILE="${NOVAPDF_AUTOMATION_DEVICE_PROFILE:-pixel_5}"
 PLATFORM_API="${NOVAPDF_AUTOMATION_PLATFORM_API:-32}"
 RENDER_WAIT="${NOVAPDF_AUTOMATION_RENDER_WAIT:-10}"
+RENDER_INITIAL_DELAY="${NOVAPDF_AUTOMATION_INITIAL_DELAY:-5}"
+RENDER_TIMEOUT="${NOVAPDF_AUTOMATION_RENDER_TIMEOUT:-120}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 ADB_SERIAL="${ADB_SERIAL:-${NOVAPDF_AUTOMATION_SERIAL:-emulator-5554}}"
 
@@ -103,6 +107,8 @@ export AWS_EC2_METADATA_DISABLED=true
 WORK_DIR="$(mktemp -d)"
 PDF_LOCAL_PATH="$WORK_DIR/AI.pdf"
 LOCAL_SCREENSHOT_RAW="$WORK_DIR/device_screencap.png"
+LOGCAT_CAPTURE_PATH="$WORK_DIR/logcat.txt"
+SHARED_STAGING_PATH="/sdcard/Download/AI.pdf"
 EMULATOR_SCREENSHOT_PATH="/sdcard/Download/novapdf_automation.png"
 ARTIFACT_NAME="AI_pdf_render_$(date -u +"%Y%m%d_%H%M%S").png"
 ARTIFACT_PATH="$WORK_DIR/$ARTIFACT_NAME"
@@ -111,9 +117,16 @@ DEVICE_CACHE_PATH="$DEVICE_CACHE_DIR/AI.pdf"
 CONTENT_URI="content://${PACKAGE_NAME}.fileprovider/pdf_docs/AI.pdf"
 
 EMULATOR_PID=""
+LOGCAT_PID=""
+AUTOMATION_SUCCESS_PATTERN="AutomationStatus"
 
 cleanup() {
   local exit_code=$?
+  if [[ -n "$LOGCAT_PID" ]] && kill -0 "$LOGCAT_PID" >/dev/null 2>&1; then
+    log "Stopping logcat capture (PID $LOGCAT_PID)"
+    kill "$LOGCAT_PID" >/dev/null 2>&1 || true
+    wait "$LOGCAT_PID" 2>/dev/null || true
+  fi
   if [[ -n "$EMULATOR_PID" ]] && kill -0 "$EMULATOR_PID" >/dev/null 2>&1; then
     log "Stopping Android emulator (PID $EMULATOR_PID)"
     adb -s "$ADB_SERIAL" emu kill >/dev/null 2>&1 || true
@@ -146,7 +159,7 @@ log "Starting Android emulator $AVD_NAME"
 EMULATOR_PID=$!
 
 log "Waiting for emulator (serial $ADB_SERIAL) to appear"
-adb wait-for-device >/dev/null
+adb -s "$ADB_SERIAL" wait-for-device >/dev/null
 
 boot_deadline=$((20 * 60))
 elapsed=0
@@ -169,8 +182,18 @@ if ! adb -s "$ADB_SERIAL" install -r "$APK_PATH" >/dev/null 2>&1; then
   adb -s "$ADB_SERIAL" install --no-streaming -r "$APK_PATH" >/dev/null 2>&1 || fatal "Unable to install APK"
 fi
 
+log "Pushing PDF to shared storage staging path $SHARED_STAGING_PATH"
+adb -s "$ADB_SERIAL" push "$PDF_LOCAL_PATH" "$SHARED_STAGING_PATH" >/dev/null || fatal "Failed to push PDF to shared storage"
+
 log "Staging PDF into application cache"
 adb -s "$ADB_SERIAL" shell run-as "$PACKAGE_NAME" sh -c "set -e; mkdir -p '$DEVICE_CACHE_DIR'; cat > '$DEVICE_CACHE_PATH'" < "$PDF_LOCAL_PATH" || fatal "Failed to stage PDF"
+
+log "Clearing logcat buffer"
+adb -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
+touch "$LOGCAT_CAPTURE_PATH"
+log "Starting logcat capture for automation validation"
+stdbuf -oL -eL adb -s "$ADB_SERIAL" logcat -v threadtime >"$LOGCAT_CAPTURE_PATH" &
+LOGCAT_PID=$!
 
 log "Launching NovaPDFReader via automation intent"
 adb -s "$ADB_SERIAL" shell am start -n "${PACKAGE_NAME}/.MainActivity" \
@@ -178,7 +201,32 @@ adb -s "$ADB_SERIAL" shell am start -n "${PACKAGE_NAME}/.MainActivity" \
   --es "com.novapdf.reader.extra.DOCUMENT_URI" "$CONTENT_URI" \
   --grant-read-uri-permission >/dev/null || fatal "Failed to launch application"
 
-log "Waiting ${RENDER_WAIT}s for rendering to settle"
+log "Waiting ${RENDER_INITIAL_DELAY}s initial delay before monitoring render status"
+sleep "$RENDER_INITIAL_DELAY"
+
+log "Monitoring logcat for successful PDF render (timeout ${RENDER_TIMEOUT}s)"
+deadline=$((RENDER_TIMEOUT))
+elapsed=0
+success_detected=false
+while (( elapsed < deadline )); do
+  if grep -q "${AUTOMATION_SUCCESS_PATTERN}.*PDF automation render complete" "$LOGCAT_CAPTURE_PATH"; then
+    success_detected=true
+    break
+  fi
+  if grep -qi "FATAL EXCEPTION" "$LOGCAT_CAPTURE_PATH"; then
+    tail -n 200 "$LOGCAT_CAPTURE_PATH" >&2 || true
+    fatal "Fatal exception detected in logcat while waiting for PDF render"
+  fi
+  sleep 2
+  elapsed=$((elapsed + 2))
+done
+
+if [[ "$success_detected" != true ]]; then
+  tail -n 200 "$LOGCAT_CAPTURE_PATH" >&2 || true
+  fatal "Timed out waiting for PDF render confirmation in logcat"
+fi
+
+log "Render confirmation detected; waiting additional ${RENDER_WAIT}s before capture"
 sleep "$RENDER_WAIT"
 
 log "Capturing emulator screenshot"

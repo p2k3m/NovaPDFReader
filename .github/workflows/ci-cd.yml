@@ -3371,9 +3371,15 @@ jobs:
     if: needs.build-test.result == 'success' && needs.build-test.outputs.heavy_pdf_configured == 'true'
     runs-on: ubuntu-latest
     env:
-      NOVAPDF_AUTOMATION_SOURCE_BUCKET: pics-1234
-      NOVAPDF_AUTOMATION_SOURCE_KEY: AI.pdf
-      NOVAPDF_AUTOMATION_TARGET_BUCKET: novapdfreader
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g"
+      ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
+      ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
+      ANDROID_HOME: /usr/lib/android-sdk
+      ANDROID_SDK_ROOT: /usr/lib/android-sdk
+      APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      NOVAPDF_AUTOMATION_SOURCE_BUCKET: ${{ vars.AI_PDF_BUCKET || 'pics-1234' }}
+      NOVAPDF_AUTOMATION_SOURCE_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
+      NOVAPDF_AUTOMATION_TARGET_BUCKET: ${{ vars.AUTOMATION_SCREENSHOT_BUCKET || vars.NOVAPDF_AUTOMATION_TARGET_BUCKET || 'novapdfreader' }}
       NOVAPDF_AUTOMATION_PLATFORM_API: 32
       NOVAPDF_AUTOMATION_SYSTEM_IMAGE: system-images;android-32;google_apis;x86_64
       NOVAPDF_AUTOMATION_AVD_NAME: novapdf-automation-api32
@@ -3388,23 +3394,38 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Grant execute permission for Gradle
         run: chmod +x gradlew
+      - name: Add Android platform tools to PATH
+        run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Validate AWS credentials for automation
+        run: |
+          set -euo pipefail
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets must be configured for automated PDF rendering." >&2
+            exit 1
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       - name: Configure AWS credentials for automation
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.NOVAPDF_AUTOMATION_AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.NOVAPDF_AUTOMATION_AWS_REGION || vars.AWS_REGION || 'us-east-1' }}
           mask-aws-account-id: true
       - name: Execute automated PDF rendering workflow
         env:
-          NOVAPDF_AUTOMATION_RENDER_WAIT: 10
           NOVAPDF_AUTOMATION_DEVICE_PROFILE: pixel_5
+          NOVAPDF_AUTOMATION_INITIAL_DELAY: 5
+          NOVAPDF_AUTOMATION_RENDER_WAIT: 10
+          NOVAPDF_AUTOMATION_RENDER_TIMEOUT: 180
         run: |
-          bash tools/automated_pdf_render.sh \
+          set -euo pipefail
+          tools/automated_pdf_render.sh \
             --apk app/build/outputs/apk/debug/app-debug.apk \
-            --package com.novapdf.reader
+            --package "$APP_PACKAGE_NAME"
   weekly-regressions:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
