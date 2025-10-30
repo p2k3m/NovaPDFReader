@@ -78,12 +78,49 @@ ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
-SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+resolve_cmdline_tool() {
+  local tool="$1"
+  local -a search_dirs=()
+
+  search_dirs+=("$ANDROID_HOME/cmdline-tools/latest/bin")
+  search_dirs+=("$ANDROID_HOME/cmdline-tools/bin")
+
+  if [[ -d "$ANDROID_HOME/cmdline-tools" ]]; then
+    while IFS= read -r dir; do
+      search_dirs+=("$dir")
+    done < <(find "$ANDROID_HOME/cmdline-tools" -mindepth 2 -maxdepth 3 -type d -name bin -print 2>/dev/null | sort)
+  fi
+
+  for dir in "${search_dirs[@]}"; do
+    local candidate="$dir/$tool"
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v "$tool" >/dev/null 2>&1; then
+    command -v "$tool"
+    return 0
+  fi
+
+  return 1
+}
+
+if ! SDKMANAGER="$(resolve_cmdline_tool sdkmanager)"; then
+  fatal "sdkmanager not found under $ANDROID_HOME/cmdline-tools"
+fi
+if ! AVDMANAGER="$(resolve_cmdline_tool avdmanager)"; then
+  fatal "avdmanager not found under $ANDROID_HOME/cmdline-tools"
+fi
 EMULATOR_BIN="$ANDROID_HOME/emulator/emulator"
 
-[[ -x "$SDKMANAGER" ]] || fatal "sdkmanager not found at $SDKMANAGER"
-[[ -x "$AVDMANAGER" ]] || fatal "avdmanager not found at $AVDMANAGER"
+CMDLINE_TOOLS_DIR="$(dirname "$SDKMANAGER")"
+export PATH="$CMDLINE_TOOLS_DIR:$PATH"
+AVDMANAGER_DIR="$(dirname "$AVDMANAGER")"
+if [[ "$AVDMANAGER_DIR" != "$CMDLINE_TOOLS_DIR" ]]; then
+  export PATH="$AVDMANAGER_DIR:$PATH"
+fi
 [[ -x "$EMULATOR_BIN" ]] || fatal "Android emulator binary not found at $EMULATOR_BIN"
 
 SOURCE_BUCKET="${NOVAPDF_AUTOMATION_SOURCE_BUCKET:-pics-1234}"
