@@ -3368,7 +3368,7 @@ jobs:
   automated-pdf-render:
     name: Automated PDF render artifact
     needs: build-test
-    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+    if: needs.build-test.result == 'success' && needs.build-test.outputs.heavy_pdf_configured == 'true'
     runs-on: ubuntu-latest
     env:
       NOVAPDF_AUTOMATION_SOURCE_BUCKET: pics-1234
