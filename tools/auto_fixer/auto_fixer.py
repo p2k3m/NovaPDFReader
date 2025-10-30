@@ -23,6 +23,7 @@ import tarfile
 import tempfile
 import textwrap
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -156,10 +157,27 @@ class GitHubClient:
     def download_logs(self, run_id: int, destination: Path) -> Path:
         path = f"/repos/{self._config.owner}/{self._config.name}/actions/runs/{run_id}/logs"
         response = self._request("GET", path)
-        archive = destination / "logs.tgz"
-        archive.write_bytes(response.content)
-        with tarfile.open(archive) as tar:
-            tar.extractall(destination)
+        content = response.content
+        content_type = response.headers.get("content-type", "").lower()
+
+        # GitHub typically serves workflow logs as a zip archive, but some
+        # enterprise deployments may return tarballs. Attempt to detect the
+        # format robustly before extracting to avoid tarfile.ReadError.
+        if "zip" in content_type or content.startswith(b"PK"):
+            archive = destination / "logs.zip"
+            archive.write_bytes(content)
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(destination)
+        else:
+            archive = destination / "logs.tgz"
+            archive.write_bytes(content)
+            if not tarfile.is_tarfile(archive):
+                raise AutoFixerError(
+                    "Unsupported log archive format received from GitHub "
+                    f"(content-type: {content_type or 'unknown'})"
+                )
+            with tarfile.open(archive) as tar:
+                tar.extractall(destination)
         return destination
 
     def create_branch(self, branch: str, base_sha: str) -> None:
