@@ -83,6 +83,7 @@ class WorkflowRun:
     head_sha: str
     display_title: str
     head_branch: str
+    conclusion: Optional[str]
 
 
 @dataclass
@@ -138,6 +139,7 @@ class GitHubClient:
             head_sha=data["head_sha"],
             display_title=data.get("display_title", data.get("name", "workflow")),
             head_branch=data.get("head_branch", ""),
+            conclusion=data.get("conclusion"),
         )
 
     def download_logs(self, run_id: int, destination: Path) -> Path:
@@ -261,7 +263,7 @@ class OpenAIClient:
         )
         return response.strip()
 
-    def propose_patch(self, summary: str) -> DiffResponse:
+    def propose_patch(self, summary: str, error_excerpt: str) -> DiffResponse:
         system_prompt = (
             "You are helping to fix a failing CI run. Respond ONLY with JSON object "
             "containing keys 'rationale' and 'patch'. The 'patch' must be a unified diff."
@@ -275,6 +277,9 @@ class OpenAIClient:
 
             Summary:
             {summary}
+
+            Key error excerpt:
+            {error_excerpt}
             """
         )
         response = self._chat(system_prompt, [{"role": "user", "content": user_prompt}])
@@ -312,6 +317,22 @@ def read_logs_from_directory(path: Path, limit: int = 2000) -> str:
         chunks.append(text)
     combined = "\n".join(chunks)
     return combined[-limit:]
+
+
+def extract_failure_snippet(logs: str, max_chars: int = 800) -> str:
+    """Return the most relevant failure excerpt to share with the LLM."""
+
+    lowered = logs.lower()
+    keywords = ["error", "exception", "fail", "failure", "traceback"]
+    indices = [lowered.rfind(keyword) for keyword in keywords if keyword in lowered]
+    if indices:
+        anchor = max(indices)
+        start = max(0, anchor - 200)
+        end = min(len(logs), anchor + max_chars)
+        snippet = logs[start:end]
+    else:
+        snippet = logs[-max_chars:]
+    return snippet.strip()
 
 
 def run_git(*args: str) -> None:
@@ -378,6 +399,12 @@ def iterate_auto_fix(config: RepoConfig) -> None:
         if run is None:
             print("No failing workflow detected. Exiting.")
             return
+        if (run.conclusion or "").lower() != "failure":
+            print(
+                "Latest workflow run did not conclude with a failure. "
+                "Auto fix only runs on failed pipelines. Exiting."
+            )
+            return
         branch_hint = run.head_branch or branch_hint
         if run.id in processed_runs:
             print(f"Workflow run {run.id} already processed. Waiting for a new failure.")
@@ -389,10 +416,12 @@ def iterate_auto_fix(config: RepoConfig) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             logs_dir = github.download_logs(run.id, Path(tmpdir))
             logs = read_logs_from_directory(Path(logs_dir))
+        error_excerpt = extract_failure_snippet(logs)
         summary = openai_client.summarise_logs(logs)
         print("Summary:\n", summary)
+        print("Error excerpt:\n", error_excerpt)
 
-        diff = openai_client.propose_patch(summary)
+        diff = openai_client.propose_patch(summary, error_excerpt)
         branch = random_branch_name()
         print(f"Creating branch {branch}")
 
@@ -461,6 +490,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         openai_client = OpenAIClient(config)
         summary = openai_client.summarise_logs(logs)
         print(summary)
+        print("\nError excerpt:\n", extract_failure_snippet(logs))
         return
     iterate_auto_fix(config)
 
