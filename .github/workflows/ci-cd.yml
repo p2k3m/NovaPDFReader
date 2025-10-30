@@ -3383,6 +3383,10 @@ jobs:
       NOVAPDF_AUTOMATION_PLATFORM_API: 32
       NOVAPDF_AUTOMATION_SYSTEM_IMAGE: system-images;android-32;google_apis;x86_64
       NOVAPDF_AUTOMATION_AVD_NAME: novapdf-automation-api32
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: ${{ vars.NOVAPDF_AUTOMATION_AWS_REGION || vars.AWS_REGION || 'us-east-1' }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -3394,6 +3398,16 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Grant execute permission for Gradle
         run: chmod +x gradlew
+      - name: Mask AWS credentials
+        shell: bash
+        run: |
+          set +e
+          for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION; do
+            value="${!var:-}"
+            if [[ -n "$value" ]]; then
+              echo "::add-mask::$value"
+            fi
+          done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - name: Assemble debug APK
@@ -3402,7 +3416,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "::error::AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets must be configured for automated PDF rendering." >&2
+            >&2 echo "::error::AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets must be configured for automated PDF rendering."
             exit 1
           fi
         env:
