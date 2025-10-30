@@ -73,12 +73,10 @@ if ! command -v aws >/dev/null 2>&1; then
   fatal "aws CLI is not installed"
 fi
 
-if ! command -v adb >/dev/null 2>&1; then
-  fatal "adb is not available in PATH"
-fi
-
 ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 [[ -n "$ANDROID_HOME" ]] || fatal "ANDROID_HOME or ANDROID_SDK_ROOT must be set"
+
+export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
@@ -187,6 +185,10 @@ packages=(
 for pkg in "${packages[@]}"; do
   yes | "$SDKMANAGER" "$pkg" >/dev/null || fatal "Failed to install SDK package $pkg"
 done
+
+if ! command -v adb >/dev/null 2>&1; then
+  fatal "adb is not available after installing platform-tools"
+fi
 
 echo "no" | "$AVDMANAGER" create avd -n "$AVD_NAME" -k "$SYSTEM_IMAGE" -d "$DEVICE_PROFILE" --force >/dev/null 2>&1 || true
 
