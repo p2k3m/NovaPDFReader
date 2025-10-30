@@ -202,6 +202,19 @@ list_flag_paths() {
   fi
 
   local candidates=("cache/$basename")
+  local harness_directories=(
+    "screenshot-harness"
+    "screenshot_harness"
+  )
+  local harness_directory
+  for harness_directory in "${harness_directories[@]}"; do
+    candidates+=(
+      "cache/$harness_directory/$basename"
+      "code_cache/$harness_directory/$basename"
+      "files/$harness_directory/$basename"
+      "no_backup/$harness_directory/$basename"
+    )
+  done
   local hint
   for hint in "${HANDSHAKE_DIRECTORY_HINTS[@]}"; do
     local hint_package="${hint%%:*}"
