@@ -74,8 +74,27 @@ if ! command -v aws >/dev/null 2>&1; then
 fi
 
 ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-[[ -n "$ANDROID_HOME" ]] || fatal "ANDROID_HOME or ANDROID_SDK_ROOT must be set"
+if [[ -z "$ANDROID_HOME" ]]; then
+  ANDROID_HOME="$HOME/.novapdf/android-sdk"
+  log "ANDROID_HOME not provided; defaulting to $ANDROID_HOME"
+else
+  if [[ -d "$ANDROID_HOME" ]]; then
+    if [[ ! -w "$ANDROID_HOME" ]]; then
+      log "ANDROID_HOME=$ANDROID_HOME is not writable; falling back to $HOME/.novapdf/android-sdk"
+      ANDROID_HOME="$HOME/.novapdf/android-sdk"
+    fi
+  else
+    if ! mkdir -p "$ANDROID_HOME" >/dev/null 2>&1; then
+      log "Unable to create ANDROID_HOME at $ANDROID_HOME; falling back to $HOME/.novapdf/android-sdk"
+      ANDROID_HOME="$HOME/.novapdf/android-sdk"
+    fi
+  fi
+fi
 
+mkdir -p "$ANDROID_HOME"
+
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 resolve_cmdline_tool() {
