@@ -107,25 +107,95 @@ resolve_cmdline_tool() {
   return 1
 }
 
+resolve_latest_cmdline_tools_url() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 2
+  fi
+
+  python3 - <<'PY'
+import re
+import sys
+import urllib.request
+
+REPOSITORY_URL = "https://dl.google.com/android/repository/repository2-1.xml"
+
+
+def main() -> int:
+    try:
+        with urllib.request.urlopen(REPOSITORY_URL) as response:
+            content = response.read().decode("utf-8", "ignore")
+    except Exception as exc:  # noqa: BLE001 - propagate failure details
+        print(f"Failed to download repository metadata: {exc}", file=sys.stderr)
+        return 1
+
+    versions = {
+        int(match)
+        for match in re.findall(
+            r"commandlinetools-linux-(\d+)_latest\.zip",
+            content,
+        )
+    }
+
+    if not versions:
+        print("Unable to locate any commandlinetools-linux archives in metadata", file=sys.stderr)
+        return 1
+
+    latest = max(versions)
+    print(f"https://dl.google.com/android/repository/commandlinetools-linux-{latest}_latest.zip")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+}
+
+download_archive() {
+  local url="$1"
+  local dest="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q "$url" -O "$dest"
+  else
+    return 2
+  fi
+}
+
 ensure_cmdline_tools() {
   if resolve_cmdline_tool sdkmanager >/dev/null 2>&1 && \
      resolve_cmdline_tool avdmanager >/dev/null 2>&1; then
     return 0
   fi
 
-  local tools_url="${ANDROID_CMDLINE_TOOLS_URL:-https://dl.google.com/android/repository/commandlinetools-linux-11076711_latest.zip}"
+  local tools_url="${ANDROID_CMDLINE_TOOLS_URL:-https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip}"
   local tmp_dir
   tmp_dir="$(mktemp -d)"
 
   log "Downloading Android command-line tools from $tools_url"
 
   local archive="$tmp_dir/cmdline-tools.zip"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$tools_url" -o "$archive" || fatal "Failed to download Android command-line tools"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q "$tools_url" -O "$archive" || fatal "Failed to download Android command-line tools"
-  else
-    fatal "Neither curl nor wget is available to download Android command-line tools"
+  if ! download_archive "$tools_url" "$archive"; then
+    local status=$?
+    if (( status == 2 )); then
+      fatal "Neither curl nor wget is available to download Android command-line tools"
+    fi
+
+    log "Default command-line tools URL failed, attempting to resolve latest dynamically"
+
+    if ! tools_url="$(resolve_latest_cmdline_tools_url)"; then
+      local resolve_status=$?
+      if (( resolve_status == 2 )); then
+        fatal "python3 is required to resolve the latest Android command-line tools URL"
+      fi
+      fatal "Failed to resolve latest Android command-line tools URL"
+    fi
+    log "Retrying download from $tools_url"
+    if ! download_archive "$tools_url" "$archive"; then
+      (( $? == 2 )) && fatal "Neither curl nor wget is available to download Android command-line tools"
+      fatal "Failed to download Android command-line tools"
+    fi
   fi
 
   if ! command -v unzip >/dev/null 2>&1; then
