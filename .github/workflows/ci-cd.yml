@@ -3364,6 +3364,47 @@ jobs:
       - name: Verify Caffeine is absent from build outputs
         if: always()
         run: python3 tools/scripts/verify_no_caffeine.py --github
+
+  automated-pdf-render:
+    name: Automated PDF render artifact
+    needs: build-test
+    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+    runs-on: ubuntu-latest
+    env:
+      NOVAPDF_AUTOMATION_SOURCE_BUCKET: pics-1234
+      NOVAPDF_AUTOMATION_SOURCE_KEY: AI.pdf
+      NOVAPDF_AUTOMATION_TARGET_BUCKET: novapdfreader
+      NOVAPDF_AUTOMATION_PLATFORM_API: 32
+      NOVAPDF_AUTOMATION_SYSTEM_IMAGE: system-images;android-32;google_apis;x86_64
+      NOVAPDF_AUTOMATION_AVD_NAME: novapdf-automation-api32
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Configure AWS credentials for automation
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.NOVAPDF_AUTOMATION_AWS_REGION || 'us-east-1' }}
+          mask-aws-account-id: true
+      - name: Execute automated PDF rendering workflow
+        env:
+          NOVAPDF_AUTOMATION_RENDER_WAIT: 10
+          NOVAPDF_AUTOMATION_DEVICE_PROFILE: pixel_5
+        run: |
+          bash tools/automated_pdf_render.sh \
+            --apk app/build/outputs/apk/debug/app-debug.apk \
+            --package com.novapdf.reader
   weekly-regressions:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

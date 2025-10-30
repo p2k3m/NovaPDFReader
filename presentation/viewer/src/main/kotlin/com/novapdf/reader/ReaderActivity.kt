@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withStarted
+import androidx.core.net.toUri
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
@@ -45,6 +46,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.Closeable
+import java.io.File
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -66,6 +68,7 @@ open class ReaderActivity : ComponentActivity() {
     private val legacyRecycledViewPool = RecyclerView.RecycledViewPool().apply {
         setMaxRecycledViews(0, 4)
     }
+    private var lastAutomationUri: Uri? = null
 
     private val openDocumentLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.openDocument(it) }
@@ -90,6 +93,7 @@ open class ReaderActivity : ComponentActivity() {
         installSplashScreenIfAvailable()
         super.onCreate(savedInstanceState)
         initializeUi(viewModel.uiState.value.fallbackMode)
+        maybeHandleAutomationIntent(intent)
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.CREATED) {
@@ -99,6 +103,12 @@ open class ReaderActivity : ComponentActivity() {
                     .collect { fallbackMode -> initializeUi(fallbackMode) }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        maybeHandleAutomationIntent(intent)
     }
 
     override fun onResume() {
@@ -208,6 +218,57 @@ open class ReaderActivity : ComponentActivity() {
                 viewModel.openDocument(uri)
             }
         }
+    }
+
+    private fun maybeHandleAutomationIntent(incomingIntent: Intent?) {
+        if (incomingIntent == null) return
+
+        val resolvedUri = resolveAutomationUri(incomingIntent) ?: return
+        if (resolvedUri == lastAutomationUri) {
+            return
+        }
+
+        lastAutomationUri = resolvedUri
+
+        NovaLog.i(
+            AUTOMATION_LOG_TAG,
+            "Opening document from automation intent",
+            arrayOf(field("uri", resolvedUri.toString())),
+        )
+
+        val persistableFlags = incomingIntent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        if (persistableFlags != 0) {
+            val grantFlags = incomingIntent.flags and
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            runCatching {
+                contentResolver.takePersistableUriPermission(resolvedUri, grantFlags)
+            }
+        }
+
+        openDocumentForTest(resolvedUri)
+    }
+
+    private fun resolveAutomationUri(intent: Intent): Uri? {
+        val explicit = intent.getStringExtra(AutomationIntents.EXTRA_DOCUMENT_URI)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.toUri()
+        if (explicit != null) {
+            return explicit
+        }
+
+        intent.data?.takeIf { it != Uri.EMPTY }?.let { return it }
+
+        if (intent.action == AutomationIntents.ACTION_VIEW_LOCAL_DOCUMENT) {
+            val path = intent.getStringExtra(AutomationIntents.EXTRA_DOCUMENT_PATH)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            if (path != null) {
+                return runCatching { Uri.fromFile(File(path)) }.getOrNull()
+            }
+        }
+
+        return null
     }
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
@@ -478,5 +539,6 @@ open class ReaderActivity : ComponentActivity() {
     private enum class UiMode { COMPOSE, LEGACY }
     private companion object {
         private const val HARNESS_LOG_TAG = "HarnessViewerState"
+        private const val AUTOMATION_LOG_TAG = "AutomationIntent"
     }
 }
