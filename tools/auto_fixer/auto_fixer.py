@@ -64,13 +64,24 @@ class RepoConfig:
                 "Missing required environment variables: " + ", ".join(missing)
             )
         initial_run_id_env = os.getenv("FAILED_WORKFLOW_RUN_ID")
+        max_iterations_env = os.getenv("AUTO_FIX_MAX_ITERATIONS")
+        if max_iterations_env is None or not max_iterations_env.strip():
+            max_iterations = 0
+        else:
+            try:
+                max_iterations = int(max_iterations_env)
+            except ValueError as exc:  # pragma: no cover - defensive parsing.
+                raise AutoFixerError(
+                    "AUTO_FIX_MAX_ITERATIONS must be an integer if provided"
+                ) from exc
+
         return cls(
             owner=os.environ["REPO_OWNER"],
             name=os.environ["REPO_NAME"],
             github_token=os.environ["GITHUB_TOKEN"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
             model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
-            max_iterations=int(os.getenv("AUTO_FIX_MAX_ITERATIONS", "0")),
+            max_iterations=max_iterations,
             initial_run_id=int(initial_run_id_env) if initial_run_id_env else None,
             initial_branch=os.getenv("FAILED_WORKFLOW_BRANCH"),
         )
