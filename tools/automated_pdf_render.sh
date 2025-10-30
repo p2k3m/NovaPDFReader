@@ -107,6 +107,50 @@ resolve_cmdline_tool() {
   return 1
 }
 
+ensure_cmdline_tools() {
+  if resolve_cmdline_tool sdkmanager >/dev/null 2>&1 && \
+     resolve_cmdline_tool avdmanager >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local tools_url="${ANDROID_CMDLINE_TOOLS_URL:-https://dl.google.com/android/repository/commandlinetools-linux-11076711_latest.zip}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+
+  log "Downloading Android command-line tools from $tools_url"
+
+  local archive="$tmp_dir/cmdline-tools.zip"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$tools_url" -o "$archive" || fatal "Failed to download Android command-line tools"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q "$tools_url" -O "$archive" || fatal "Failed to download Android command-line tools"
+  else
+    fatal "Neither curl nor wget is available to download Android command-line tools"
+  fi
+
+  if ! command -v unzip >/dev/null 2>&1; then
+    fatal "unzip is required to install Android command-line tools"
+  fi
+
+  unzip -q "$archive" -d "$tmp_dir" || fatal "Failed to extract Android command-line tools"
+
+  local extracted_dir="$tmp_dir/cmdline-tools"
+  [[ -d "$extracted_dir" ]] || fatal "Downloaded archive does not contain cmdline-tools directory"
+
+  local install_root="$ANDROID_HOME/cmdline-tools"
+  local install_dir="$install_root/latest"
+  mkdir -p "$install_root"
+  rm -rf "$install_dir"
+  mkdir -p "$install_dir"
+  cp -a "$extracted_dir"/. "$install_dir"/ || fatal "Failed to install Android command-line tools"
+
+  rm -rf "$tmp_dir"
+
+  log "Android command-line tools installed under $install_dir"
+}
+
+ensure_cmdline_tools
+
 if ! SDKMANAGER="$(resolve_cmdline_tool sdkmanager)"; then
   fatal "sdkmanager not found under $ANDROID_HOME/cmdline-tools"
 fi
