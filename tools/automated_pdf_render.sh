@@ -104,6 +104,14 @@ ADB_SERIAL="${ADB_SERIAL:-${NOVAPDF_AUTOMATION_SERIAL:-emulator-5554}}"
 export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
 export AWS_EC2_METADATA_DISABLED=true
 
+AWS_ACCESS_KEY_ID_VALUE="${AWS_ACCESS_KEY_ID:-}"
+AWS_SECRET_ACCESS_KEY_VALUE="${AWS_SECRET_ACCESS_KEY:-}"
+AWS_SESSION_TOKEN_VALUE="${AWS_SESSION_TOKEN:-}"
+
+if [[ -z "$AWS_ACCESS_KEY_ID_VALUE" || -z "$AWS_SECRET_ACCESS_KEY_VALUE" ]]; then
+  fatal "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables must be supplied"
+fi
+
 WORK_DIR="$(mktemp -d)"
 PDF_LOCAL_PATH="$WORK_DIR/AI.pdf"
 LOCAL_SCREENSHOT_RAW="$WORK_DIR/device_screencap.png"
@@ -119,6 +127,37 @@ CONTENT_URI="content://${PACKAGE_NAME}.fileprovider/pdf_docs/AI.pdf"
 EMULATOR_PID=""
 LOGCAT_PID=""
 AUTOMATION_SUCCESS_PATTERN="AutomationStatus"
+AWS_CONFIG_DIR="$WORK_DIR/aws"
+AWS_SHARED_CREDENTIALS_FILE="$AWS_CONFIG_DIR/credentials"
+AWS_CONFIG_FILE="$AWS_CONFIG_DIR/config"
+
+mkdir -p "$AWS_CONFIG_DIR"
+chmod 700 "$AWS_CONFIG_DIR"
+
+{
+  old_umask=$(umask)
+  umask 077
+  cat >"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY_ID_VALUE
+aws_secret_access_key = $AWS_SECRET_ACCESS_KEY_VALUE
+EOF
+  if [[ -n "$AWS_SESSION_TOKEN_VALUE" ]]; then
+    cat >>"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
+aws_session_token = $AWS_SESSION_TOKEN_VALUE
+EOF
+  fi
+  cat >"$AWS_CONFIG_FILE" <<EOF
+[default]
+region = $AWS_REGION
+output = json
+EOF
+  umask "$old_umask"
+}
+
+export AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE
+
+log "Configuring AWS CLI credentials for automation"
 
 cleanup() {
   local exit_code=$?
