@@ -12,9 +12,25 @@ fatal() {
   exit 1
 }
 
+trim_whitespace() {
+  local value="$1"
+  # Trim leading whitespace
+  value="${value#${value%%[!$' \t\r\n']*}}"
+  # Trim trailing whitespace
+  value="${value%${value##*[!$' \t\r\n']}}"
+  printf '%s' "$value"
+}
+
 usage() {
   cat <<'USAGE' >&2
-Usage: automated_pdf_render.sh --apk <path> --package <name> [--serial <serial>]
+Usage: automated_pdf_render.sh --apk <path> --package <name> [options]
+
+Options:
+  --apk <path>              Path to the application APK to install (required).
+  --package <name>          Application package name (required).
+  --serial <serial>         adb serial to target when using the emulator backend.
+  --test-apk <path>         Instrumentation APK required for the Firebase backend.
+  --backend <name>          Automation backend: "emulator" (default) or "firebase".
 
 Environment variables:
   NOVAPDF_AUTOMATION_SOURCE_BUCKET   Source S3 bucket (default: pics-1234)
@@ -27,13 +43,25 @@ Environment variables:
   NOVAPDF_AUTOMATION_RENDER_WAIT     Seconds to wait after launch before screenshot (default: 10)
   NOVAPDF_AUTOMATION_INITIAL_DELAY   Initial delay before monitoring render logs (default: 5)
   NOVAPDF_AUTOMATION_RENDER_TIMEOUT  Maximum seconds to wait for render confirmation (default: 120)
+  NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT  Seconds to wait for the emulator to register with adb (default: 180)
+  NOVAPDF_AUTOMATION_BACKEND         Default backend selection (emulator or firebase)
+  NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS  Comma-separated Firebase device specs for the firebase backend
+  NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT       Timeout passed to Firebase harness (default: 900)
+  NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET  Optional Firebase results bucket
+  NOVAPDF_AUTOMATION_FIREBASE_RESULTS_DIR     Optional Firebase results directory
+  NOVAPDF_AUTOMATION_FIREBASE_RESULTS_HISTORY Optional Firebase results history identifier
+  NOVAPDF_AUTOMATION_FIREBASE_ENV             Comma-separated instrumentation environment overrides
   AWS_REGION / AWS_DEFAULT_REGION    AWS region (default: us-east-1)
 USAGE
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 APK_PATH=""
 PACKAGE_NAME=""
 ADB_SERIAL=""
+TEST_APK=""
+AUTOMATION_BACKEND="${NOVAPDF_AUTOMATION_BACKEND:-emulator}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +80,16 @@ while [[ $# -gt 0 ]]; do
       ADB_SERIAL="$2"
       shift 2
       ;;
+    --test-apk)
+      [[ $# -ge 2 ]] || fatal "Missing value for --test-apk"
+      TEST_APK="$2"
+      shift 2
+      ;;
+    --backend)
+      [[ $# -ge 2 ]] || fatal "Missing value for --backend"
+      AUTOMATION_BACKEND="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -62,6 +100,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+AUTOMATION_BACKEND="${AUTOMATION_BACKEND,,}"
+case "$AUTOMATION_BACKEND" in
+  emulator|firebase)
+    ;;
+  *)
+    fatal "Unsupported backend '$AUTOMATION_BACKEND'. Expected 'emulator' or 'firebase'"
+    ;;
+esac
+
 [[ -n "$APK_PATH" ]] || fatal "--apk path is required"
 [[ -n "$PACKAGE_NAME" ]] || fatal "--package is required"
 
@@ -69,11 +116,23 @@ if [[ ! -f "$APK_PATH" ]]; then
   fatal "APK path $APK_PATH does not exist"
 fi
 
-if ! command -v aws >/dev/null 2>&1; then
+if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
+  [[ -n "$TEST_APK" ]] || fatal "--test-apk is required when using the Firebase backend"
+  if [[ ! -f "$TEST_APK" ]]; then
+    fatal "Test APK path $TEST_APK does not exist"
+  fi
+fi
+
+if [[ "$AUTOMATION_BACKEND" == "emulator" ]] && ! command -v aws >/dev/null 2>&1; then
   fatal "aws CLI is not installed"
 fi
 
 ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
+  run_firebase_backend
+  exit $?
+fi
+
 if [[ -z "$ANDROID_HOME" ]]; then
   ANDROID_HOME="$HOME/.novapdf/android-sdk"
   log "ANDROID_HOME not provided; defaulting to $ANDROID_HOME"
@@ -187,6 +246,99 @@ download_archive() {
   fi
 }
 
+check_kvm_support() {
+  if [[ "${NOVAPDF_AUTOMATION_SKIP_KVM_CHECK:-}" == "true" ]]; then
+    return 0
+  fi
+
+  if [[ ! -e /dev/kvm ]]; then
+    fatal "KVM acceleration is unavailable (/dev/kvm missing). Set NOVAPDF_AUTOMATION_BACKEND=firebase or enable virtualization."
+  fi
+
+  if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+    fatal "KVM device /dev/kvm is not accessible. Add the current user to the kvm group or adjust permissions, or use the Firebase backend."
+  fi
+}
+
+check_emulator_health() {
+  local emulator_pid="$1"
+  local log_path="$2"
+
+  if [[ -n "$emulator_pid" ]] && ! kill -0 "$emulator_pid" >/dev/null 2>&1; then
+    if [[ -f "$log_path" ]]; then
+      tail -n 200 "$log_path" >&2 || true
+    fi
+    fatal "Android emulator process exited unexpectedly"
+  fi
+
+  if [[ -f "$log_path" ]] && grep -qi 'x86_64 emulation currently requires hardware acceleration' "$log_path"; then
+    tail -n 200 "$log_path" >&2 || true
+    fatal "Android emulator reported missing hardware acceleration (KVM permissions required)"
+  fi
+}
+
+run_firebase_backend() {
+  local firebase_script="$SCRIPT_DIR/firebase_run_screenshot_harness.sh"
+
+  if [[ ! -x "$firebase_script" ]]; then
+    fatal "Firebase harness driver not found at $firebase_script"
+  fi
+
+  local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
+  local firebase_bucket="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET:-}"
+  local firebase_dir="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_DIR:-}"
+  local firebase_history="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_HISTORY:-}"
+  local firebase_devices="${NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS:-}"
+  local firebase_env="${NOVAPDF_AUTOMATION_FIREBASE_ENV:-}"
+
+  local -a cmd=("$firebase_script" --app "$APK_PATH" --test "$TEST_APK")
+
+  if [[ -n "$firebase_timeout" ]]; then
+    cmd+=(--timeout "$firebase_timeout")
+  fi
+
+  if [[ -n "$firebase_bucket" ]]; then
+    cmd+=(--results-bucket "$firebase_bucket")
+  fi
+
+  if [[ -n "$firebase_dir" ]]; then
+    cmd+=(--results-dir "$firebase_dir")
+  fi
+
+  if [[ -n "$firebase_history" ]]; then
+    cmd+=(--results-history-name "$firebase_history")
+  fi
+
+  if [[ -n "$firebase_devices" ]]; then
+    IFS=',' read -r -a device_specs <<<"$firebase_devices"
+    for spec in "${device_specs[@]}"; do
+      spec="$(trim_whitespace "$spec")"
+      if [[ -n "$spec" ]]; then
+        cmd+=(--device "$spec")
+      fi
+    done
+  fi
+
+  if [[ -n "$firebase_env" ]]; then
+    IFS=',' read -r -a extra_env <<<"$firebase_env"
+    for entry in "${extra_env[@]}"; do
+      entry="$(trim_whitespace "$entry")"
+      if [[ -n "$entry" ]]; then
+        cmd+=(--environment "$entry")
+      fi
+    done
+  fi
+
+  if [[ "${NOVAPDF_AUTOMATION_FIREBASE_DRY_RUN:-}" == "true" ]]; then
+    cmd+=(--dry-run)
+  fi
+
+  export PACKAGE_NAME
+
+  log "Running NovaPDF automation via Firebase Test Lab backend"
+  "${cmd[@]}"
+}
+
 ensure_cmdline_tools() {
   if resolve_cmdline_tool sdkmanager >/dev/null 2>&1 && \
      resolve_cmdline_tool avdmanager >/dev/null 2>&1; then
@@ -270,8 +422,13 @@ PLATFORM_API="${NOVAPDF_AUTOMATION_PLATFORM_API:-32}"
 RENDER_WAIT="${NOVAPDF_AUTOMATION_RENDER_WAIT:-10}"
 RENDER_INITIAL_DELAY="${NOVAPDF_AUTOMATION_INITIAL_DELAY:-5}"
 RENDER_TIMEOUT="${NOVAPDF_AUTOMATION_RENDER_TIMEOUT:-120}"
+EMULATOR_START_TIMEOUT="${NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT:-180}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 ADB_SERIAL="${ADB_SERIAL:-${NOVAPDF_AUTOMATION_SERIAL:-emulator-5554}}"
+
+if ! [[ "$EMULATOR_START_TIMEOUT" =~ ^[0-9]+$ ]] || (( EMULATOR_START_TIMEOUT <= 0 )); then
+  fatal "NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT must be a positive integer"
+fi
 
 export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
 export AWS_EC2_METADATA_DISABLED=true
@@ -288,6 +445,7 @@ WORK_DIR="$(mktemp -d)"
 PDF_LOCAL_PATH="$WORK_DIR/AI.pdf"
 LOCAL_SCREENSHOT_RAW="$WORK_DIR/device_screencap.png"
 LOGCAT_CAPTURE_PATH="$WORK_DIR/logcat.txt"
+EMULATOR_LOG="$WORK_DIR/emulator.log"
 SHARED_STAGING_PATH="/sdcard/Download/AI.pdf"
 EMULATOR_SCREENSHOT_PATH="/sdcard/Download/novapdf_automation.png"
 ARTIFACT_NAME="AI_pdf_render_$(date -u +"%Y%m%d_%H%M%S").png"
@@ -399,16 +557,35 @@ log "AVD $AVD_NAME is ready under $ANDROID_AVD_HOME"
 log "Downloading PDF s3://${SOURCE_BUCKET}/${SOURCE_KEY}"
 aws s3 cp "s3://${SOURCE_BUCKET}/${SOURCE_KEY}" "$PDF_LOCAL_PATH" --only-show-errors || fatal "Failed to download PDF from S3"
 
-log "Starting Android emulator $AVD_NAME"
-"$EMULATOR_BIN" -avd "$AVD_NAME" -no-snapshot -no-window -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -netfast -wipe-data &
+check_kvm_support
+
+log "Starting Android emulator $AVD_NAME (logging to $EMULATOR_LOG)"
+"$EMULATOR_BIN" -avd "$AVD_NAME" -no-snapshot -no-window -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none -netfast -wipe-data >"$EMULATOR_LOG" 2>&1 &
 EMULATOR_PID=$!
 
-log "Waiting for emulator (serial $ADB_SERIAL) to appear"
-adb -s "$ADB_SERIAL" wait-for-device >/dev/null
+log "Waiting for emulator (serial $ADB_SERIAL) to appear (timeout ${EMULATOR_START_TIMEOUT}s)"
+start_elapsed=0
+while (( start_elapsed < EMULATOR_START_TIMEOUT )); do
+  if adb -s "$ADB_SERIAL" get-state 2>/dev/null | grep -q '^device$'; then
+    break
+  fi
+  check_emulator_health "$EMULATOR_PID" "$EMULATOR_LOG"
+  sleep 2
+  start_elapsed=$((start_elapsed + 2))
+done
+
+if (( start_elapsed >= EMULATOR_START_TIMEOUT )); then
+  check_emulator_health "$EMULATOR_PID" "$EMULATOR_LOG"
+  if [[ -f "$EMULATOR_LOG" ]]; then
+    tail -n 200 "$EMULATOR_LOG" >&2 || true
+  fi
+  fatal "Timed out waiting for emulator to appear on adb within ${EMULATOR_START_TIMEOUT}s"
+fi
 
 boot_deadline=$((20 * 60))
 elapsed=0
 while true; do
+  check_emulator_health "$EMULATOR_PID" "$EMULATOR_LOG"
   if adb -s "$ADB_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q '^1$'; then
     break
   fi
