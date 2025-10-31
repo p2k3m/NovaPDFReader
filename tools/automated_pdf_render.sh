@@ -145,7 +145,51 @@ run_firebase_backend() {
       if [[ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
         return 0
       fi
-      fatal "GOOGLE_APPLICATION_CREDENTIALS is set to '$GOOGLE_APPLICATION_CREDENTIALS' but the file does not exist"
+
+      if python3 - <<'PY' >/dev/null 2>&1; then
+import base64
+import json
+import os
+import sys
+
+raw_value = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+if not raw_value.strip():
+    raise SystemExit(1)
+
+stripped = raw_value.lstrip()
+if stripped.startswith("{"):
+    try:
+        json.loads(raw_value)
+    except Exception:  # pragma: no cover - defensive guard
+        raise SystemExit(1)
+    raise SystemExit(0)
+
+try:
+    decoded = base64.b64decode(raw_value, validate=True)
+except Exception:  # pragma: no cover - defensive guard
+    raise SystemExit(1)
+
+try:
+    decoded_text = decoded.decode("utf-8")
+except Exception:  # pragma: no cover - defensive guard
+    raise SystemExit(1)
+
+if not decoded_text.lstrip().startswith("{"):
+    raise SystemExit(1)
+
+try:
+    json.loads(decoded_text)
+except Exception:  # pragma: no cover - defensive guard
+    raise SystemExit(1)
+
+raise SystemExit(0)
+PY
+      then
+        return 0
+      fi
+
+      fatal "GOOGLE_APPLICATION_CREDENTIALS is set but is neither a readable file nor valid JSON/base64 credentials"
     fi
 
     if command -v gcloud >/dev/null 2>&1; then
