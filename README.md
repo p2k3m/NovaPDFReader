@@ -236,6 +236,38 @@ flag payload now includes JSON metadata describing the document ID, sanitized id
 index, and total page count so downstream tooling can reason about the captured frame
 deterministically.
 
+### Stabilising heavy PDF screenshot runs
+
+`tools/capture_screenshots_ci.sh` now clears the harness cache directories before each launch and
+automatically retries once when the readiness flag fails to materialise, which keeps stale
+thousand-page fixtures from blocking subsequent attempts. The script also honours the following
+environment variables so especially slow devices can expand the waiting windows without modifying
+the wrapper:
+
+| Variable | Description |
+| --- | --- |
+| `NOVAPDF_ACTIVITY_MANAGER_TIMEOUT` / `NOVAPDF_ACTIVITY_MANAGER_TIMEOUT_SCALE` | Override or scale the Activity Manager warm-up timeout (defaults to the dynamic snapshot heuristics). |
+| `NOVAPDF_HARNESS_READY_TIMEOUT` / `NOVAPDF_HARNESS_READY_TIMEOUT_SCALE` | Override or scale how long the harness waits for the screenshot readiness flag. |
+| `NOVAPDF_HARNESS_READY_RETRIES` | Number of additional attempts to make after a readiness timeout (default `1`). |
+
+### Running the harness on Firebase Test Lab
+
+Physical devices in Firebase Test Lab avoid local virtualization limits when capturing the
+thousand-page stress document. The `tools/firebase_run_screenshot_harness.sh` helper wraps the
+`gcloud firebase test android run` invocation with sane defaults for the harness class, environment
+variables, and directories to pull so you only supply the APKs:
+
+```bash
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+tools/firebase_run_screenshot_harness.sh \
+    --app app/build/outputs/apk/debug/app-debug.apk \
+    --test app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+    --device model=panther,version=34
+```
+
+Pass `--dry-run` to inspect the underlying `gcloud` command or add repeated `--environment` flags to
+propagate extra instrumentation arguments.
+
 ## Baseline profile generation and macrobenchmarks
 
 NovaPDF ships a baseline profile so cold starts and the initial render of large documents

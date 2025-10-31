@@ -41,6 +41,66 @@ compute_timeout_from_snapshot() {
 
 ACTIVITY_MANAGER_TIMEOUT=$(compute_timeout_from_snapshot "$before_snapshot_path" 300)
 HARNESS_READY_TIMEOUT=$(compute_timeout_from_snapshot "$before_snapshot_path" 360)
+
+if [ -n "${NOVAPDF_ACTIVITY_MANAGER_TIMEOUT_SCALE:-}" ]; then
+  if python3 - "$NOVAPDF_ACTIVITY_MANAGER_TIMEOUT_SCALE" <<'PY' >/dev/null 2>&1; then
+import sys
+try:
+    scale = float(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+if scale <= 0:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+    scaled=$(python3 - "$ACTIVITY_MANAGER_TIMEOUT" "$NOVAPDF_ACTIVITY_MANAGER_TIMEOUT_SCALE" <<'PY'
+import sys
+timeout = float(sys.argv[1])
+scale = float(sys.argv[2])
+print(int(round(timeout * scale)))
+PY
+)
+    ACTIVITY_MANAGER_TIMEOUT=$scaled
+  else
+    echo "Invalid NOVAPDF_ACTIVITY_MANAGER_TIMEOUT_SCALE; ignoring" >&2
+  fi
+fi
+
+if [ -n "${NOVAPDF_HARNESS_READY_TIMEOUT_SCALE:-}" ]; then
+  if python3 - "$NOVAPDF_HARNESS_READY_TIMEOUT_SCALE" <<'PY' >/dev/null 2>&1; then
+import sys
+try:
+    scale = float(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+if scale <= 0:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+    scaled=$(python3 - "$HARNESS_READY_TIMEOUT" "$NOVAPDF_HARNESS_READY_TIMEOUT_SCALE" <<'PY'
+import sys
+timeout = float(sys.argv[1])
+scale = float(sys.argv[2])
+print(int(round(timeout * scale)))
+PY
+)
+    HARNESS_READY_TIMEOUT=$scaled
+  else
+    echo "Invalid NOVAPDF_HARNESS_READY_TIMEOUT_SCALE; ignoring" >&2
+  fi
+fi
+
+if [ -n "${NOVAPDF_ACTIVITY_MANAGER_TIMEOUT:-}" ]; then
+  ACTIVITY_MANAGER_TIMEOUT="${NOVAPDF_ACTIVITY_MANAGER_TIMEOUT}"
+fi
+
+if [ -n "${NOVAPDF_HARNESS_READY_TIMEOUT:-}" ]; then
+  HARNESS_READY_TIMEOUT="${NOVAPDF_HARNESS_READY_TIMEOUT}"
+fi
+
+HARNESS_READY_TIMEOUT=${HARNESS_READY_TIMEOUT:-360}
+ACTIVITY_MANAGER_TIMEOUT=${ACTIVITY_MANAGER_TIMEOUT:-300}
+
 echo "Using dynamic timeouts for screenshot harness: activity manager ${ACTIVITY_MANAGER_TIMEOUT}s, readiness ${HARNESS_READY_TIMEOUT}s" >&2
 
 HARNESS_RUN_AS_PACKAGE="${PACKAGE_NAME}.test"
@@ -51,6 +111,16 @@ HARNESS_FLAG_PACKAGE=""
 
 HANDSHAKE_PACKAGES=()
 HANDSHAKE_DIRECTORY_HINTS=()
+DEFAULT_HANDSHAKE_DIRECTORIES=(
+  "cache/screenshot-harness"
+  "cache/screenshot_harness"
+  "code_cache/screenshot-harness"
+  "code_cache/screenshot_harness"
+  "files/screenshot-harness"
+  "files/screenshot_harness"
+  "no_backup/screenshot-harness"
+  "no_backup/screenshot_harness"
+)
 
 resolve_package_name() {
   local candidate="$1"
@@ -439,6 +509,67 @@ cleanup_flags() {
   done
 }
 
+clear_handshake_cache_for_package() {
+  local package="$1"
+  if [ -z "$package" ]; then
+    return
+  fi
+
+  if ! adb shell run-as "$package" sh -c "exit 0" >/dev/null 2>&1; then
+    return
+  fi
+
+  local seen=""
+  local directory
+  for directory in "${DEFAULT_HANDSHAKE_DIRECTORIES[@]}"; do
+    if [ -z "$directory" ]; then
+      continue
+    fi
+    if printf '%s\n' "$seen" | grep -qxF "$directory"; then
+      continue
+    fi
+    seen+="$directory\n"
+  done
+
+  local hint
+  for hint in "${HANDSHAKE_DIRECTORY_HINTS[@]}"; do
+    if [ -z "$hint" ]; then
+      continue
+    fi
+    local hint_package="${hint%%:*}"
+    local hint_directory="${hint#*:}"
+    if [ -z "$hint_package" ] || [ "$hint_package" != "$package" ]; then
+      continue
+    fi
+    hint_directory="${hint_directory%/}"
+    if [ -z "$hint_directory" ]; then
+      continue
+    fi
+    if printf '%s\n' "$seen" | grep -qxF "$hint_directory"; then
+      continue
+    fi
+    seen+="$hint_directory\n"
+  done
+
+  if [ -z "$seen" ]; then
+    return
+  fi
+
+  echo "Clearing screenshot handshake cache directories for $package" >&2
+  printf '%s\n' "$seen" | while IFS= read -r directory; do
+    [ -z "$directory" ] && continue
+    adb shell run-as "$package" sh -c "rm -rf '$directory'" >/dev/null 2>&1 || true
+  done
+}
+
+clear_handshake_cache() {
+  update_handshake_directory_hints
+  for package in "${HANDSHAKE_PACKAGES[@]}"; do
+    clear_handshake_cache_for_package "$package"
+  done
+}
+
+MAX_READINESS_RETRIES=${NOVAPDF_HARNESS_READY_RETRIES:-1}
 harness_pid=""
 HARNESS_EXIT_REASON=""
 MAX_SYSTEM_CRASH_RETRIES=1
@@ -781,8 +912,10 @@ signal_screenshot_completion() {
 }
 
 system_crash_attempts=0
+readiness_retry_attempts=0
 while true; do
   cleanup_flags
+  clear_handshake_cache
   launch_screenshot_harness
   if wait_for_harness; then
     break
@@ -795,6 +928,13 @@ while true; do
     system_crash_attempts=$((system_crash_attempts + 1))
     echo "Detected Android system crash during screenshot harness; waiting for recovery before retrying" >&2
     wait_for_activity_manager
+    continue
+  fi
+
+  if [ "$HARNESS_EXIT_REASON" = "readiness_timeout" ] && [ $readiness_retry_attempts -lt $MAX_READINESS_RETRIES ]; then
+    readiness_retry_attempts=$((readiness_retry_attempts + 1))
+    echo "Screenshot harness readiness timed out; clearing caches and retrying (${readiness_retry_attempts}/${MAX_READINESS_RETRIES})" >&2
+    clear_handshake_cache
     continue
   fi
 
