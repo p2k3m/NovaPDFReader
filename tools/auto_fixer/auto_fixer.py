@@ -76,12 +76,18 @@ class RepoConfig:
                     "AUTO_FIX_MAX_ITERATIONS must be an integer if provided"
                 ) from exc
 
+        model_env = os.getenv("OPENAI_MODEL")
+        if model_env is None or not model_env.strip():
+            model = "gpt-4.1-mini"
+        else:
+            model = model_env.strip()
+
         return cls(
             owner=os.environ["REPO_OWNER"],
             name=os.environ["REPO_NAME"],
             github_token=os.environ["GITHUB_TOKEN"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
-            model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+            model=model,
             max_iterations=max_iterations,
             initial_run_id=int(initial_run_id_env) if initial_run_id_env else None,
             initial_branch=os.getenv("FAILED_WORKFLOW_BRANCH"),
