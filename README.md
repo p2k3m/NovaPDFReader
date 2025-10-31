@@ -354,6 +354,13 @@ process restart for `com.novapdf.reader`. It also verifies that both the
 without being skipped so regressions cannot silently avoid the heavy document coverage. To
 reproduce the checks locally, run `./gradlew connectedAndroidTest` on an emulator or device
 and inspect `adb logcat` for `ANR in com.novapdf.reader` or fatal exception entries.
+
+When the `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_PROJECT_ID` secrets are present,
+the CI workflow skips emulator provisioning entirely and pushes the instrumentation APKs to
+Firebase Test Lab physical devices instead. The emulator matrix still builds the binaries so
+artifact consumers receive consistent outputs, but device interactions, log collection, and
+macrobenchmarks are delegated to Test Lab. This keeps the pipeline focused on real hardware
+while retaining a deterministic fallback path when the Firebase credentials are unavailable.
 The helper script `tools/check_logcat_for_crashes.py` mirrors the CI check and can be
 run locally with captured logcat or bugreport dumps to confirm that no ANR or crash
 signatures were recorded:
