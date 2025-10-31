@@ -299,6 +299,14 @@ jobs:
               echo "::add-mask::$value"
             fi
           done
+      - name: Configure emulator gating
+        run: |
+          if [ "${{ steps.validate_required_secrets.outputs.firebase_configured }}" = "true" ]; then
+            echo "NOVAPDF_SKIP_EMULATORS=true" >> "$GITHUB_ENV"
+            echo "Firebase Test Lab secrets detected; emulator provisioning steps will be skipped."
+          else
+            echo "NOVAPDF_SKIP_EMULATORS=false" >> "$GITHUB_ENV"
+          fi
       - uses: actions/checkout@v4
       - name: Check baseline profile freshness
         id: baseline_profile_freshness
@@ -434,6 +442,7 @@ jobs:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
           TAG: ${{ matrix.tag }}
+          NOVAPDF_SKIP_EMULATORS: ${{ env.NOVAPDF_SKIP_EMULATORS }}
         run: |
           set -euo pipefail
 
@@ -454,10 +463,15 @@ jobs:
           packages=(
             "platform-tools"
             "platforms;android-${API_LEVEL}"
-            "system-images;android-${API_LEVEL};${TAG};${ABI}"
             "build-tools;34.0.0"
-            "emulator"
           )
+
+          if [ "${NOVAPDF_SKIP_EMULATORS:-}" != "true" ]; then
+            packages+=(
+              "system-images;android-${API_LEVEL};${TAG};${ABI}"
+              "emulator"
+            )
+          fi
 
           attempt=1
           max_attempts=3
@@ -1066,6 +1080,7 @@ jobs:
           set -euo pipefail
           aws sts get-caller-identity --query 'Account' --output text >/dev/null
       - name: Start emulator
+        if: env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           API_LEVEL: ${{ matrix.api }}
           ABI: ${{ matrix.abi }}
@@ -1336,6 +1351,7 @@ jobs:
 
           echo "Waiting for emulator PID ${emulator_pid} to reach readiness markers in a subsequent step"
       - name: Wait for emulator readiness
+        if: env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           serial="${EMULATOR_SERIAL:-emulator-5554}"
@@ -1352,6 +1368,7 @@ jobs:
             exit 1
           fi
       - name: Capture emulator memory after boot
+        if: env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           serial="${EMULATOR_SERIAL:-emulator-5554}"
@@ -1363,6 +1380,7 @@ jobs:
             --serial "$serial" \
             --output "${resource_dir}/boot-complete.json"
       - name: Configure emulator system settings
+        if: env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           serial="${EMULATOR_SERIAL:-emulator-5554}"
@@ -1373,6 +1391,7 @@ jobs:
           adb -s "$serial" shell settings put global animator_duration_scale 0 || true
           adb -s "$serial" shell input keyevent 82 || true
       - name: Install app under test
+        if: env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2075,7 +2094,7 @@ jobs:
           manifest_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
           PY
       - name: Stage stress PDFs on emulator
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           STRESS_DEST: stress-large.pdf
           THOUSAND_DEST: stress-thousand-pages.pdf
@@ -2146,7 +2165,7 @@ jobs:
           stage_fixture "$stress_path" "$STRESS_DEST"
           stage_fixture "$thousand_path" "$THOUSAND_DEST"
       - name: Push AI.pdf fixture to device Downloads directory
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           AI_PDF_PATH: ${{ steps.download_ai_pdf.outputs.ai_pdf_path }}
         run: |
@@ -2203,7 +2222,7 @@ jobs:
           echo "Verifying AI.pdf presence on device at ${pushed_path}" >&2
           adb shell ls -l "$pushed_path"
       - name: Run instrumentation tests against stress PDFs
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2222,7 +2241,7 @@ jobs:
             --label "connected-android-test-after" \
             --output "${resource_dir}/connected-android-test-after.json"
       - name: Verify heavy PDF instrumentation coverage
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2318,7 +2337,7 @@ jobs:
               print(f"Confirmed {key[0]}.{key[1]} execution in {report}")
           PY
       - name: Collect and validate device logs after connected tests
-        if: ${{ env.UNIT_TESTS_PASSED == 'true' && always() }}
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2346,7 +2365,7 @@ jobs:
             exit 1
           fi
       - name: Run macrobenchmark regression suite
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2365,12 +2384,12 @@ jobs:
             --label "macrobenchmark-after" \
             --output "${resource_dir}/macrobenchmark-after.json"
       - name: Verify macrobenchmark coverage
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           python3 tools/verify_macrobenchmark_coverage.py
       - name: Collect and validate device logs after macrobenchmarks
-        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && always() }}
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2398,7 +2417,7 @@ jobs:
             exit 1
           fi
       - name: Generate release baseline profile
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2417,7 +2436,7 @@ jobs:
             --label "baseline-profile-after" \
             --output "${resource_dir}/baseline-profile-after.json"
       - name: Collect and validate device logs after baseline profile generation
-        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && always() }}
+        if: ${{ env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2445,7 +2464,7 @@ jobs:
             exit 1
           fi
       - name: Verify committed baseline profile is current
-        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL
+        if: env.UNIT_TESTS_PASSED == 'true' && matrix.device_label == env.BASELINE_DEVICE_LABEL && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           patterns=(
@@ -2475,7 +2494,7 @@ jobs:
             exit 1
           fi
       - name: Install debug build for screenshots
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
 
@@ -2627,7 +2646,7 @@ jobs:
             echo "Retrying adb install (attempt $install_attempt of $install_attempts_max)"
           done
       - name: Install instrumentation harness for screenshots
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2898,14 +2917,14 @@ jobs:
             fi
           fi
       - name: Capture screenshots
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
           MATRIX_API: ${{ matrix.api }}
           MATRIX_DEVICE_LABEL: ${{ matrix.device_label }}
         run: tools/capture_screenshots_ci.sh
       - name: Collect and validate device logs after screenshot harness
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         env:
           PACKAGE_NAME: ${{ env.APP_PACKAGE_NAME }}
         run: |
@@ -2933,7 +2952,7 @@ jobs:
             exit 1
           fi
       - name: Verify instrumentation log tails
-        if: env.UNIT_TESTS_PASSED == 'true'
+        if: env.UNIT_TESTS_PASSED == 'true' && env.NOVAPDF_SKIP_EMULATORS != 'true'
         run: |
           set -euo pipefail
           python3 tools/scripts/verify_log_markers.py \
@@ -2941,7 +2960,7 @@ jobs:
             --path "device-logs/screenshot-harness/logcat.txt" \
             --require-any "TestRunner: run finished||INSTRUMENTATION_RESULT: stream=||INSTRUMENTATION_STATUS_CODE: -1"
       - name: Collect emulator logs
-        if: always()
+        if: ${{ env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         run: |
           set -euo pipefail
           log_dir="${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
@@ -2965,7 +2984,7 @@ jobs:
             fi
           fi
       - name: Stage device diagnostics
-        if: always()
+        if: ${{ env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         run: |
           set -euo pipefail
           target_dir="${ARTIFACTS_DIR}/logs/api${{ matrix.api }}/${{ matrix.device_label }}"
@@ -2978,7 +2997,7 @@ jobs:
             fi
           fi
       - name: Capture failure screenshot
-        if: failure()
+        if: ${{ failure() && env.NOVAPDF_SKIP_EMULATORS != 'true' }}
         run: |
           set -euo pipefail
           target_dir="${ARTIFACTS_DIR}/screenshots/api${{ matrix.api }}/${{ matrix.device_label }}"
@@ -2996,7 +3015,7 @@ jobs:
             echo "::warning::Emulator not reachable for failure screenshot" >&2
           fi
       - name: Capture emulator memory before teardown
-        if: always()
+        if: ${{ env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         run: |
           set -euo pipefail
           serial="${EMULATOR_SERIAL:-emulator-5554}"
@@ -3019,10 +3038,10 @@ jobs:
             vm_stat || true
           fi
       - name: Stop emulator
-        if: always()
+        if: ${{ env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         run: adb -s emulator-5554 emu kill || true
       - name: Stop emulator watchdog
-        if: always()
+        if: ${{ env.NOVAPDF_SKIP_EMULATORS != 'true' && always() }}
         run: |
           set -euo pipefail
 
@@ -3108,7 +3127,7 @@ jobs:
       - heavy-pdf-tests
     if: needs.build-test.result == 'success' && needs.heavy-pdf-tests.result == 'success' && needs.build-test.outputs.firebase_configured == 'true'
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - device_label: pixel6-physical
