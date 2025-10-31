@@ -3331,8 +3331,8 @@ jobs:
           done
       - name: Add Android platform tools to PATH
         run: echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-      - name: Assemble debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Assemble debug APKs
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
       - name: Validate AWS credentials for automation
         run: |
           set -euo pipefail
@@ -3360,6 +3360,7 @@ jobs:
           set -euo pipefail
           tools/automated_pdf_render.sh \
             --apk app/build/outputs/apk/debug/app-debug.apk \
+            --test-apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
             --package "$APP_PACKAGE_NAME"
   weekly-regressions:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
