@@ -199,13 +199,16 @@ PY
           return 0
         fi
       fi
-      fatal "No active gcloud account is configured for Firebase Test Lab. Authenticate with 'gcloud auth login' or provide NOVAPDF_FTL_SERVICE_ACCOUNT_KEY(_B64)/GOOGLE_APPLICATION_CREDENTIALS"
+      return 1
     fi
 
-    fatal "gcloud CLI is not installed and no Firebase Test Lab credentials were provided. Install gcloud and authenticate or supply NOVAPDF_FTL_SERVICE_ACCOUNT_KEY(_B64)/GOOGLE_APPLICATION_CREDENTIALS"
+    return 1
   }
 
-  ensure_firebase_auth
+  if ! ensure_firebase_auth; then
+    log "Firebase credentials were not detected; falling back to the emulator backend"
+    return 2
+  fi
 
   local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
   local firebase_bucket="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET:-}"
@@ -263,8 +266,17 @@ PY
 }
 
 if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
-  run_firebase_backend
-  exit $?
+  if run_firebase_backend; then
+    exit 0
+  fi
+
+  status=$?
+  if (( status == 2 )); then
+    AUTOMATION_BACKEND="emulator"
+    log "Continuing with NOVAPDF_AUTOMATION_BACKEND=emulator"
+  else
+    exit "$status"
+  fi
 fi
 
 if [[ -z "$ANDROID_HOME" ]]; then
