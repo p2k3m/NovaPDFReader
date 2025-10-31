@@ -136,6 +136,33 @@ run_firebase_backend() {
     fatal "Firebase harness driver not found at $firebase_script"
   fi
 
+  ensure_firebase_auth() {
+    if [[ -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY:-}" || -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64:-}" ]]; then
+      return 0
+    fi
+
+    if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+      if [[ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
+        return 0
+      fi
+      fatal "GOOGLE_APPLICATION_CREDENTIALS is set to '$GOOGLE_APPLICATION_CREDENTIALS' but the file does not exist"
+    fi
+
+    if command -v gcloud >/dev/null 2>&1; then
+      local active_accounts
+      if active_accounts=$(gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>/dev/null); then
+        if [[ -n "${active_accounts//[$'\n\r\t ']}" ]]; then
+          return 0
+        fi
+      fi
+      fatal "No active gcloud account is configured for Firebase Test Lab. Authenticate with 'gcloud auth login' or provide NOVAPDF_FTL_SERVICE_ACCOUNT_KEY(_B64)/GOOGLE_APPLICATION_CREDENTIALS"
+    fi
+
+    fatal "gcloud CLI is not installed and no Firebase Test Lab credentials were provided. Install gcloud and authenticate or supply NOVAPDF_FTL_SERVICE_ACCOUNT_KEY(_B64)/GOOGLE_APPLICATION_CREDENTIALS"
+  }
+
+  ensure_firebase_auth
+
   local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
   local firebase_bucket="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET:-}"
   local firebase_dir="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_DIR:-}"
