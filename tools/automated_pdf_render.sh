@@ -30,7 +30,7 @@ Options:
   --package <name>          Application package name (required).
   --serial <serial>         adb serial to target when using the emulator backend.
   --test-apk <path>         Instrumentation APK required for the Firebase backend.
-  --backend <name>          Automation backend: "emulator" (default) or "firebase".
+  --backend <name>          Automation backend: "firebase" (default) or "emulator".
 
 Environment variables:
   NOVAPDF_AUTOMATION_SOURCE_BUCKET   Source S3 bucket (default: pics-1234)
@@ -44,7 +44,7 @@ Environment variables:
   NOVAPDF_AUTOMATION_INITIAL_DELAY   Initial delay before monitoring render logs (default: 5)
   NOVAPDF_AUTOMATION_RENDER_TIMEOUT  Maximum seconds to wait for render confirmation (default: 120)
   NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT  Seconds to wait for the emulator to register with adb (default: 180)
-  NOVAPDF_AUTOMATION_BACKEND         Default backend selection (emulator or firebase)
+  NOVAPDF_AUTOMATION_BACKEND         Default backend selection (firebase or emulator)
   NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS  Comma-separated Firebase device specs for the firebase backend
   NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT       Timeout passed to Firebase harness (default: 900)
   NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET  Optional Firebase results bucket
@@ -61,7 +61,7 @@ APK_PATH=""
 PACKAGE_NAME=""
 ADB_SERIAL=""
 TEST_APK=""
-AUTOMATION_BACKEND="${NOVAPDF_AUTOMATION_BACKEND:-emulator}"
+AUTOMATION_BACKEND="${NOVAPDF_AUTOMATION_BACKEND:-firebase}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
