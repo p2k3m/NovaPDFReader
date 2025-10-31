@@ -11,7 +11,7 @@ The script requires the following environment variables to run:
 - `REPO_OWNER` – GitHub organisation or user name.
 - `REPO_NAME` – repository name.
 - `OPENAI_API_KEY` – API key for the selected OpenAI compatible model.
-- `OPENAI_MODEL` *(optional)* – model identifier (defaults to `gpt-4.1-mini`).
+- `OPENAI_MODEL` *(optional)* – model identifier (defaults to `gpt-4.1-mini` when unset or blank).
 - `AUTO_FIX_MAX_ITERATIONS` *(optional)* – maximum retry count (default `3`).
 
 ## Usage
