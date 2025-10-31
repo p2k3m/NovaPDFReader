@@ -128,6 +128,69 @@ if [[ "$AUTOMATION_BACKEND" == "emulator" ]] && ! command -v aws >/dev/null 2>&1
 fi
 
 ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+run_firebase_backend() {
+  local firebase_script="$SCRIPT_DIR/firebase_run_screenshot_harness.sh"
+
+  if [[ ! -x "$firebase_script" ]]; then
+    fatal "Firebase harness driver not found at $firebase_script"
+  fi
+
+  local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
+  local firebase_bucket="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET:-}"
+  local firebase_dir="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_DIR:-}"
+  local firebase_history="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_HISTORY:-}"
+  local firebase_devices="${NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS:-}"
+  local firebase_env="${NOVAPDF_AUTOMATION_FIREBASE_ENV:-}"
+
+  local -a cmd=("$firebase_script" --app "$APK_PATH" --test "$TEST_APK")
+
+  if [[ -n "$firebase_timeout" ]]; then
+    cmd+=(--timeout "$firebase_timeout")
+  fi
+
+  if [[ -n "$firebase_bucket" ]]; then
+    cmd+=(--results-bucket "$firebase_bucket")
+  fi
+
+  if [[ -n "$firebase_dir" ]]; then
+    cmd+=(--results-dir "$firebase_dir")
+  fi
+
+  if [[ -n "$firebase_history" ]]; then
+    cmd+=(--results-history-name "$firebase_history")
+  fi
+
+  if [[ -n "$firebase_devices" ]]; then
+    IFS=',' read -r -a device_specs <<<"$firebase_devices"
+    for spec in "${device_specs[@]}"; do
+      spec="$(trim_whitespace "$spec")"
+      if [[ -n "$spec" ]]; then
+        cmd+=(--device "$spec")
+      fi
+    done
+  fi
+
+  if [[ -n "$firebase_env" ]]; then
+    IFS=',' read -r -a extra_env <<<"$firebase_env"
+    for entry in "${extra_env[@]}"; do
+      entry="$(trim_whitespace "$entry")"
+      if [[ -n "$entry" ]]; then
+        cmd+=(--environment "$entry")
+      fi
+    done
+  fi
+
+  if [[ "${NOVAPDF_AUTOMATION_FIREBASE_DRY_RUN:-}" == "true" ]]; then
+    cmd+=(--dry-run)
+  fi
+
+  export PACKAGE_NAME
+
+  log "Running NovaPDF automation via Firebase Test Lab backend"
+  "${cmd[@]}"
+}
+
 if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
   run_firebase_backend
   exit $?
@@ -275,68 +338,6 @@ check_emulator_health() {
     tail -n 200 "$log_path" >&2 || true
     fatal "Android emulator reported missing hardware acceleration (KVM permissions required)"
   fi
-}
-
-run_firebase_backend() {
-  local firebase_script="$SCRIPT_DIR/firebase_run_screenshot_harness.sh"
-
-  if [[ ! -x "$firebase_script" ]]; then
-    fatal "Firebase harness driver not found at $firebase_script"
-  fi
-
-  local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
-  local firebase_bucket="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_BUCKET:-}"
-  local firebase_dir="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_DIR:-}"
-  local firebase_history="${NOVAPDF_AUTOMATION_FIREBASE_RESULTS_HISTORY:-}"
-  local firebase_devices="${NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS:-}"
-  local firebase_env="${NOVAPDF_AUTOMATION_FIREBASE_ENV:-}"
-
-  local -a cmd=("$firebase_script" --app "$APK_PATH" --test "$TEST_APK")
-
-  if [[ -n "$firebase_timeout" ]]; then
-    cmd+=(--timeout "$firebase_timeout")
-  fi
-
-  if [[ -n "$firebase_bucket" ]]; then
-    cmd+=(--results-bucket "$firebase_bucket")
-  fi
-
-  if [[ -n "$firebase_dir" ]]; then
-    cmd+=(--results-dir "$firebase_dir")
-  fi
-
-  if [[ -n "$firebase_history" ]]; then
-    cmd+=(--results-history-name "$firebase_history")
-  fi
-
-  if [[ -n "$firebase_devices" ]]; then
-    IFS=',' read -r -a device_specs <<<"$firebase_devices"
-    for spec in "${device_specs[@]}"; do
-      spec="$(trim_whitespace "$spec")"
-      if [[ -n "$spec" ]]; then
-        cmd+=(--device "$spec")
-      fi
-    done
-  fi
-
-  if [[ -n "$firebase_env" ]]; then
-    IFS=',' read -r -a extra_env <<<"$firebase_env"
-    for entry in "${extra_env[@]}"; do
-      entry="$(trim_whitespace "$entry")"
-      if [[ -n "$entry" ]]; then
-        cmd+=(--environment "$entry")
-      fi
-    done
-  fi
-
-  if [[ "${NOVAPDF_AUTOMATION_FIREBASE_DRY_RUN:-}" == "true" ]]; then
-    cmd+=(--dry-run)
-  fi
-
-  export PACKAGE_NAME
-
-  log "Running NovaPDF automation via Firebase Test Lab backend"
-  "${cmd[@]}"
 }
 
 ensure_cmdline_tools() {
