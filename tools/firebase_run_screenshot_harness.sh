@@ -103,6 +103,20 @@ if ! command -v "$GCLOUD_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+active_account="$($GCLOUD_BIN auth list --format='value(account)' --filter='status:ACTIVE' 2>/dev/null || true)"
+if [ -z "$active_account" ]; then
+  cat >&2 <<'MSG'
+No active gcloud account is configured for Firebase Test Lab.
+
+Please authenticate with one of the following commands before re-running this script:
+  gcloud auth login
+  gcloud auth activate-service-account --key-file <path-to-service-account-key>
+If you have already authenticated, select the correct account:
+  gcloud config set account <ACCOUNT>
+MSG
+  exit 1
+fi
+
 if ! python3 - "$TIMEOUT_SECS" <<'PY' >/dev/null 2>&1; then
 import sys
 try:
