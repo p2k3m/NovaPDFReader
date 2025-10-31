@@ -146,7 +146,7 @@ run_firebase_backend() {
         return 0
       fi
 
-      if python3 - <<'PY' >/dev/null 2>&1; then
+      if python3 - <<'PY' >/dev/null 2>&1
 import base64
 import json
 import os
