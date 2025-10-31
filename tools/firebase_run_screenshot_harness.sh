@@ -103,8 +103,66 @@ if ! command -v "$GCLOUD_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-active_account="$($GCLOUD_BIN auth list --format='value(account)' --filter='status:ACTIVE' 2>/dev/null || true)"
-if [ -z "$active_account" ]; then
+ensure_gcloud_authentication() {
+  local active_account
+  local temp_key_file=""
+  local cleanup_temp_key=0
+
+  active_account="$($GCLOUD_BIN auth list --format='value(account)' --filter='status:ACTIVE' 2>/dev/null || true)"
+  if [ -n "$active_account" ]; then
+    return
+  fi
+
+  if [ -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY:-}" ]; then
+    temp_key_file="$(mktemp)"
+    printf '%s' "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY}" >"$temp_key_file"
+    cleanup_temp_key=1
+  elif [ -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64:-}" ]; then
+    temp_key_file="$(mktemp)"
+    if ! python3 - "$temp_key_file" <<'PY'
+import base64
+import os
+import sys
+
+destination = sys.argv[1]
+payload = os.environ.get("NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64", "")
+
+try:
+    decoded = base64.b64decode(payload)
+except Exception as exc:  # pragma: no cover - defensive guard
+    raise SystemExit(f"Failed to decode NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64: {exc}")
+
+with open(destination, "wb") as fh:
+    fh.write(decoded)
+PY
+    then
+      echo "Failed to decode NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64" >&2
+      rm -f "$temp_key_file"
+      exit 1
+    fi
+    cleanup_temp_key=1
+  elif [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]; then
+    temp_key_file="${GOOGLE_APPLICATION_CREDENTIALS}"
+  fi
+
+  if [ -n "$temp_key_file" ]; then
+    if ! "$GCLOUD_BIN" auth activate-service-account --key-file "$temp_key_file" >/dev/null 2>&1; then
+      if [ "$cleanup_temp_key" -eq 1 ]; then
+        rm -f "$temp_key_file"
+      fi
+      echo "Failed to activate gcloud service account from provided credentials" >&2
+      exit 1
+    fi
+    if [ "$cleanup_temp_key" -eq 1 ]; then
+      rm -f "$temp_key_file"
+    fi
+  fi
+
+  active_account="$($GCLOUD_BIN auth list --format='value(account)' --filter='status:ACTIVE' 2>/dev/null || true)"
+  if [ -n "$active_account" ]; then
+    return
+  fi
+
   cat >&2 <<'MSG'
 No active gcloud account is configured for Firebase Test Lab.
 
@@ -113,9 +171,17 @@ Please authenticate with one of the following commands before re-running this sc
   gcloud auth activate-service-account --key-file <path-to-service-account-key>
 If you have already authenticated, select the correct account:
   gcloud config set account <ACCOUNT>
+
+Alternatively, set one of the following environment variables so the script can
+authenticate automatically:
+  NOVAPDF_FTL_SERVICE_ACCOUNT_KEY        Raw JSON credentials contents
+  NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64    Base64-encoded JSON credentials
+  GOOGLE_APPLICATION_CREDENTIALS         Path to a JSON credentials file
 MSG
   exit 1
-fi
+}
+
+ensure_gcloud_authentication
 
 if ! python3 - "$TIMEOUT_SECS" <<'PY' >/dev/null 2>&1; then
 import sys

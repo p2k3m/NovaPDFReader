@@ -268,6 +268,17 @@ tools/firebase_run_screenshot_harness.sh \
 Pass `--dry-run` to inspect the underlying `gcloud` command or add repeated `--environment` flags to
 propagate extra instrumentation arguments.
 
+When running in CI environments, provide service account credentials via one of the
+following environment variables so the helper can authenticate automatically without
+interactive `gcloud` commands:
+
+- `NOVAPDF_FTL_SERVICE_ACCOUNT_KEY` – raw JSON credentials contents.
+- `NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64` – base64-encoded JSON credentials.
+- `GOOGLE_APPLICATION_CREDENTIALS` – filesystem path to a JSON credentials file.
+
+If no credentials are available, the script falls back to prompting for manual
+`gcloud auth login` instructions and exits with an error.
+
 ## Baseline profile generation and macrobenchmarks
 
 NovaPDF ships a baseline profile so cold starts and the initial render of large documents
