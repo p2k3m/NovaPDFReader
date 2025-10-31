@@ -274,7 +274,8 @@ interactive `gcloud` commands:
 
 - `NOVAPDF_FTL_SERVICE_ACCOUNT_KEY` – raw JSON credentials contents.
 - `NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64` – base64-encoded JSON credentials.
-- `GOOGLE_APPLICATION_CREDENTIALS` – filesystem path to a JSON credentials file.
+- `GOOGLE_APPLICATION_CREDENTIALS` – filesystem path to a JSON credentials file, the raw JSON
+  payload, or a base64-encoded JSON payload.
 
 If no credentials are available, the script falls back to prompting for manual
 `gcloud auth login` instructions and exits with an error.

@@ -141,8 +141,59 @@ PY
       exit 1
     fi
     cleanup_temp_key=1
-  elif [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]; then
-    temp_key_file="${GOOGLE_APPLICATION_CREDENTIALS}"
+  elif [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+    if [ -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]; then
+      temp_key_file="${GOOGLE_APPLICATION_CREDENTIALS}"
+    else
+      temp_key_file="$(mktemp)"
+      if ! python3 - "$temp_key_file" <<'PY'
+import base64
+import json
+import os
+import sys
+
+destination = sys.argv[1]
+raw_value = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+if not raw_value.strip():
+    raise SystemExit("GOOGLE_APPLICATION_CREDENTIALS is set but empty")
+
+def write_bytes(payload: bytes) -> None:
+    with open(destination, "wb") as handle:
+        handle.write(payload)
+
+stripped = raw_value.lstrip()
+if stripped.startswith("{"):
+    write_bytes(raw_value.encode("utf-8"))
+    raise SystemExit(0)
+
+try:
+    decoded = base64.b64decode(raw_value, validate=True)
+except Exception as exc:  # pragma: no cover - defensive guard
+    raise SystemExit(f"Failed to decode GOOGLE_APPLICATION_CREDENTIALS as base64: {exc}")
+
+try:
+    decoded_text = decoded.decode("utf-8")
+except Exception as exc:  # pragma: no cover - defensive guard
+    raise SystemExit(f"Decoded GOOGLE_APPLICATION_CREDENTIALS is not valid UTF-8: {exc}")
+
+if not decoded_text.lstrip().startswith("{"):
+    raise SystemExit("Decoded GOOGLE_APPLICATION_CREDENTIALS does not appear to be JSON credentials")
+
+try:
+    json.loads(decoded_text)
+except Exception as exc:  # pragma: no cover - defensive guard
+    raise SystemExit(f"Decoded GOOGLE_APPLICATION_CREDENTIALS is not valid JSON: {exc}")
+
+write_bytes(decoded)
+PY
+      then
+        rm -f "$temp_key_file"
+        echo "Failed to materialize GOOGLE_APPLICATION_CREDENTIALS contents" >&2
+        exit 1
+      fi
+      cleanup_temp_key=1
+    fi
   fi
 
   if [ -n "$temp_key_file" ]; then
