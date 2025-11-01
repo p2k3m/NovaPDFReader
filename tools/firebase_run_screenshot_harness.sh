@@ -313,4 +313,31 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-exec "${cmd[@]}"
+stderr_capture_file="$(mktemp)"
+
+if ! "${cmd[@]}" 2> >(tee "$stderr_capture_file" >&2); then
+  exit_code=$?
+
+  if grep -q "SERVICE_DISABLED" "$stderr_capture_file" && grep -q "testing.googleapis.com" "$stderr_capture_file"; then
+    project_id="$($GCLOUD_BIN config get-value project 2>/dev/null || true)"
+    printf '\n' >&2
+    printf 'The Cloud Testing API appears to be disabled for the current gcloud project.' >&2
+    if [ -n "$project_id" ]; then
+      printf ' (%s)' "$project_id" >&2
+    fi
+    printf '\n' >&2
+    cat >&2 <<'MSG'
+
+Enable the API before re-running this script by executing:
+  gcloud services enable testing.googleapis.com --project <project-id>
+
+If you do not have permission to enable services, please contact a project
+administrator to enable the "Cloud Testing API" for you.
+MSG
+  fi
+
+  rm -f "$stderr_capture_file"
+  exit "$exit_code"
+fi
+
+rm -f "$stderr_capture_file"
