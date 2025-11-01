@@ -1,9 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Provide sensible defaults when the surrounding CI tooling is not
+# orchestrating the script. This mirrors the behaviour of the Gradle build,
+# which also falls back to the public application id when NOVAPDF_APP_ID is
+# not specified.
+: "${ARTIFACTS_DIR:="$PWD/artifacts"}"
+: "${MATRIX_API:="local"}"
+: "${MATRIX_DEVICE_LABEL:="local"}"
+: "${PACKAGE_NAME:="com.novapdf.reader"}"
+
+mkdir -p "$ARTIFACTS_DIR"
+
 if [ "${NOVAPDF_VIRTUALIZATION_UNAVAILABLE:-}" = "true" ]; then
   echo "::warning::Skipping screenshot capture because Android emulator virtualization is unavailable" >&2
   exit 0
+fi
+
+if ! command -v adb >/dev/null 2>&1; then
+  echo "::error::Android Debug Bridge (adb) is not available. Install the Android SDK platform-tools or ensure they are on the PATH." >&2
+  exit 1
 fi
 
 resource_dir="${ARTIFACTS_DIR}/resources/api${MATRIX_API}/${MATRIX_DEVICE_LABEL}"
