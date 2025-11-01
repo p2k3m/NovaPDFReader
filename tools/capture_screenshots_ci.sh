@@ -428,6 +428,88 @@ PY
   done <<< "$parsed"
 }
 
+detect_ready_flag_from_log() {
+  if [ ! -f "$HARNESS_LOG" ]; then
+    return 1
+  fi
+
+  local parsed
+  parsed=$(
+    python3 - "$HARNESS_LOG" "${HANDSHAKE_PACKAGES[@]}" <<'PY'
+import re
+import sys
+
+log_path = sys.argv[1]
+packages = [arg for arg in sys.argv[2:] if arg]
+package_set = set(packages)
+
+try:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+        lines = handle.readlines()
+except OSError:
+    sys.exit(0)
+
+pattern = re.compile(r"Writing screenshot ready flag to (?P<path>[^|]+)", re.IGNORECASE)
+
+def infer_package_and_relative(path: str):
+    path = path.strip()
+    if " with payload" in path:
+        path = path.split(" with payload", 1)[0].strip()
+    if path.endswith(","):
+        path = path[:-1].strip()
+
+    if not path:
+        return None
+
+    prefixes = []
+    for package in packages:
+        if not package:
+            continue
+        prefixes.extend([
+            (package, f"/data/user/0/{package}/"),
+            (package, f"/data/user_de/0/{package}/"),
+            (package, f"/data/data/{package}/"),
+        ])
+    for package, prefix in prefixes:
+        if path.startswith(prefix):
+            relative = path[len(prefix):].lstrip("/")
+            if relative:
+                return package, relative
+
+    match = re.search(r"/data/(?:user(?:_de)?/\d+/|data/)([^/]+)/(.+)", path)
+    if match:
+        package = match.group(1)
+        relative = match.group(2).lstrip("/")
+        if relative:
+            return package, relative
+
+    return None
+
+for raw_line in reversed(lines):
+    match = pattern.search(raw_line)
+    if not match:
+        continue
+    inferred = infer_package_and_relative(match.group("path"))
+    if not inferred:
+        continue
+    package, relative = inferred
+    if package_set and package not in package_set:
+        continue
+    if not relative:
+        continue
+    print(f"{package}:{relative}")
+    sys.exit(0)
+PY
+  ) || return 1
+
+  if [ -z "$parsed" ]; then
+    return 1
+  fi
+
+  printf '%s' "$parsed"
+  return 0
+}
+
 resolve_instrumentation_component() {
   local package_name="$1"
   local runner_name="$2"
@@ -831,6 +913,7 @@ wait_for_harness() {
 
     if [ -n "$ready_package" ]; then
       HARNESS_FLAG_PACKAGE="$ready_package"
+      add_handshake_package "$HARNESS_FLAG_PACKAGE"
       if [ -n "$ready_relative_path" ]; then
         if [[ "$ready_relative_path" == */* ]]; then
           HARNESS_FLAG_RELATIVE_DIR="${ready_relative_path%/*}"
@@ -840,6 +923,27 @@ wait_for_harness() {
       fi
       echo "Detected screenshot readiness flag for package $HARNESS_FLAG_PACKAGE" >&2
       break
+    fi
+
+    local log_ready_hint=""
+    if log_ready_hint=$(detect_ready_flag_from_log 2>/dev/null); then
+      if [ -n "$log_ready_hint" ]; then
+        ready_package="${log_ready_hint%%:*}"
+        ready_relative_path="${log_ready_hint#*:}"
+        if [ -n "$ready_package" ]; then
+          HARNESS_FLAG_PACKAGE="$ready_package"
+          add_handshake_package "$HARNESS_FLAG_PACKAGE"
+        fi
+        if [ -n "$ready_relative_path" ]; then
+          if [[ "$ready_relative_path" == */* ]]; then
+            HARNESS_FLAG_RELATIVE_DIR="${ready_relative_path%/*}"
+          else
+            HARNESS_FLAG_RELATIVE_DIR="."
+          fi
+        fi
+        echo "Detected screenshot readiness from harness log for package $HARNESS_FLAG_PACKAGE" >&2
+        break
+      fi
     fi
 
     if [ $elapsed -ge $timeout ]; then
