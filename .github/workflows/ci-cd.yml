@@ -134,6 +134,7 @@ jobs:
       NOVAPDF_APP_ID: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
       UNIT_TESTS_PASSED: 'false'
+      NOVAPDF_SKIP_EMULATORS: 'true'
       NOVAPDF_ALLOW_CI_CONNECTED_TESTS: 'true'
       ACTIONS_RUNNER_DISABLE_NESTED_VIRTUALIZATION: 'true'
       ACTIONS_RUNNER_ACCELERATION_PREFERENCE: 'kvm'
@@ -299,14 +300,6 @@ jobs:
               echo "::add-mask::$value"
             fi
           done
-      - name: Configure emulator gating
-        run: |
-          if [ "${{ steps.validate_required_secrets.outputs.firebase_configured }}" = "true" ]; then
-            echo "NOVAPDF_SKIP_EMULATORS=true" >> "$GITHUB_ENV"
-            echo "Firebase Test Lab secrets detected; emulator provisioning steps will be skipped."
-          else
-            echo "NOVAPDF_SKIP_EMULATORS=false" >> "$GITHUB_ENV"
-          fi
       - uses: actions/checkout@v4
       - name: Check baseline profile freshness
         id: baseline_profile_freshness
@@ -3298,12 +3291,14 @@ jobs:
       ANDROID_HOME: /usr/lib/android-sdk
       ANDROID_SDK_ROOT: /usr/lib/android-sdk
       APP_PACKAGE_NAME: ${{ vars.NOVAPDF_APP_ID || secrets.NOVAPDF_APP_ID || 'com.novapdf.reader' }}
+      FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
       NOVAPDF_AUTOMATION_SOURCE_BUCKET: ${{ vars.AI_PDF_BUCKET || 'pics-1234' }}
       NOVAPDF_AUTOMATION_SOURCE_KEY: ${{ vars.AI_PDF_KEY || 'AI.pdf' }}
       NOVAPDF_AUTOMATION_TARGET_BUCKET: ${{ vars.AUTOMATION_SCREENSHOT_BUCKET || vars.NOVAPDF_AUTOMATION_TARGET_BUCKET || 'novapdfreader' }}
       NOVAPDF_AUTOMATION_PLATFORM_API: 32
       NOVAPDF_AUTOMATION_SYSTEM_IMAGE: system-images;android-32;google_apis;x86_64
       NOVAPDF_AUTOMATION_AVD_NAME: novapdf-automation-api32
+      NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS: ${{ vars.NOVAPDF_AUTOMATION_FIREBASE_DEVICE_SPECS || 'model=cheetah,version=33,locale=en,orientation=portrait' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
@@ -3317,6 +3312,25 @@ jobs:
           java-version: 17
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+      - name: Validate Firebase configuration for automation
+        run: |
+          set -e
+          if [ -z "${FIREBASE_PROJECT_ID:-}" ]; then
+            echo "::error::FIREBASE_PROJECT_ID repository variable or secret must be configured for automated PDF rendering."
+            exit 1
+          fi
+          if [ -z "${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT_JSON secret is required for Firebase Test Lab automation."
+            exit 1
+          fi
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.FIREBASE_PROJECT_ID }}
       - name: Grant execute permission for Gradle
         run: chmod +x gradlew
       - name: Mask AWS credentials
@@ -3366,46 +3380,57 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - api: 29
             suite: cache
-            device_task: pixel4Api29DebugAndroidTest
             test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+            device_model: blueline
+            device_version: 29
           - api: 29
             suite: repository
-            device_task: pixel4Api29DebugAndroidTest
             test_class: com.novapdf.reader.LargePdfInstrumentedTest
+            device_model: blueline
+            device_version: 29
           - api: 29
             suite: render
-            device_task: pixel4Api29DebugAndroidTest
             test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+            device_model: blueline
+            device_version: 29
           - api: 32
             suite: cache
-            device_task: pixel6Api32DebugAndroidTest
             test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+            device_model: oriole
+            device_version: 33
           - api: 32
             suite: repository
-            device_task: pixel6Api32DebugAndroidTest
             test_class: com.novapdf.reader.LargePdfInstrumentedTest
+            device_model: oriole
+            device_version: 33
           - api: 32
             suite: render
-            device_task: pixel6Api32DebugAndroidTest
             test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+            device_model: oriole
+            device_version: 33
           - api: 34
             suite: cache
-            device_task: pixel8Api34DebugAndroidTest
             test_class: com.novapdf.reader.cache.DefaultCacheDirectoriesInstrumentationTest
+            device_model: husky
+            device_version: 34
           - api: 34
             suite: repository
-            device_task: pixel8Api34DebugAndroidTest
             test_class: com.novapdf.reader.LargePdfInstrumentedTest
+            device_model: husky
+            device_version: 34
           - api: 34
             suite: render
-            device_task: pixel8Api34DebugAndroidTest
             test_class: com.novapdf.reader.SamplePdfInstrumentedTest
+            device_model: husky
+            device_version: 34
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK 17
@@ -3415,22 +3440,116 @@ jobs:
           java-version: 17
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-      - name: Run weekly regression suite
+      - name: Validate Firebase configuration for weekly regressions
         env:
-          DEVICE_TASK: ${{ matrix.device_task }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          set -e
+          if [ -z "${FIREBASE_PROJECT_ID:-}" ]; then
+            echo "::error::FIREBASE_PROJECT_ID repository variable or secret must be configured for weekly regressions."
+            exit 1
+          fi
+          if [ -z "${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT_JSON secret is required for Firebase Test Lab regressions."
+            exit 1
+          fi
+          echo "FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}" >> "$GITHUB_ENV"
+      - name: Configure Firebase results path
+        run: echo "RESULTS_JSON=$RUNNER_TEMP/firebase-weekly-results.json" >> "$GITHUB_ENV"
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.FIREBASE_PROJECT_ID }}
+      - name: Assemble debug APKs for weekly regressions
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace --no-build-cache
+      - name: Run weekly regression suite on Firebase
+        id: firebase_weekly
+        env:
           TEST_CLASS: ${{ matrix.test_class }}
+          DEVICE_MODEL: ${{ matrix.device_model }}
+          DEVICE_VERSION: ${{ matrix.device_version }}
         run: |
           set -euo pipefail
-          echo "Executing ${TEST_CLASS} on ${DEVICE_TASK}"
-          ./gradlew --stacktrace --no-build-cache "${DEVICE_TASK}" \
-            -Pandroid.testInstrumentationRunnerArguments.class="${TEST_CLASS}" \
-            -Pandroid.experimental.testOptions.managedDevices.emulator.gpu=swiftshader_indirect
-      - name: Upload managed device reports
+
+          results_path="$RESULTS_JSON"
+          rm -f "$results_path"
+
+          app_apk="app/build/outputs/apk/debug/app-debug.apk"
+          test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+
+          if [ ! -f "$app_apk" ] || [ ! -f "$test_apk" ]; then
+            echo "::error::Required APKs missing for Firebase regression run" >&2
+            exit 1
+          fi
+
+          set +e
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app "$app_apk" \
+            --test "$test_apk" \
+            --device model="$DEVICE_MODEL",version="$DEVICE_VERSION",locale=en,orientation=portrait \
+            --timeout 30m \
+            --num-flaky-test-attempts=1 \
+            --results-history-name="weekly-regressions" \
+            --environment-variables class="$TEST_CLASS" \
+            --format=json > "$results_path"
+          status=$?
+          set -e
+
+          if [ $status -ne 0 ]; then
+            echo "::error::gcloud firebase test command failed with exit code $status" >&2
+            cat "$results_path" || true
+            exit $status
+          fi
+
+          python3 - <<'PY'
+import json
+import os
+import sys
+
+results_path = os.environ["RESULTS_JSON"]
+with open(results_path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+outcome = payload.get("outcomeSummary")
+storage_path = payload.get("resultStoragePath")
+matrix_id = payload.get("testMatrixId")
+
+print(f"Firebase Test Lab matrix {matrix_id} completed with outcome {outcome}")
+
+if storage_path:
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+        output.write(f"storage_path={storage_path}\n")
+        output.write(f"matrix_id={matrix_id}\n")
+
+if outcome != "SUCCESS":
+    print(f"::error::Firebase weekly regression failed with outcome {outcome}")
+    sys.exit(1)
+PY
+      - name: Download Firebase weekly results
+        if: always()
+        env:
+          STORAGE_PATH: ${{ steps.firebase_weekly.outputs.storage_path }}
+          SUITE_LABEL: ${{ matrix.suite }}
+          API_LEVEL: ${{ matrix.api }}
+        run: |
+          set -euo pipefail
+          if [ -z "${STORAGE_PATH:-}" ]; then
+            echo "No Firebase results storage path found; skipping download."
+            exit 0
+          fi
+
+          target_dir="firebase-weekly-results/api${API_LEVEL}/${SUITE_LABEL}"
+          mkdir -p "$target_dir"
+          gcloud storage cp --recursive "${STORAGE_PATH}/*" "$target_dir/"
+      - name: Upload weekly Firebase artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: weekly-regression-${{ matrix.suite }}-api${{ matrix.api }}
-          path: |
-            app/build/reports/androidTests/managedDevice
-            app/build/outputs/androidTest-results/managedDevice
+          path: firebase-weekly-results
           if-no-files-found: warn

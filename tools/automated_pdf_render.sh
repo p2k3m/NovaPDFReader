@@ -141,6 +141,11 @@ run_firebase_backend() {
       return 0
     fi
 
+    if [[ -n "${FIREBASE_SERVICE_ACCOUNT_JSON:-}" ]]; then
+      export NOVAPDF_FTL_SERVICE_ACCOUNT_KEY="${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY:-${FIREBASE_SERVICE_ACCOUNT_JSON}}"
+      return 0
+    fi
+
     if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
       if [[ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]]; then
         return 0
@@ -206,8 +211,7 @@ PY
   }
 
   if ! ensure_firebase_auth; then
-    log "Firebase credentials were not detected; falling back to the emulator backend"
-    return 2
+    fatal "Firebase credentials were not detected. Set FIREBASE_SERVICE_ACCOUNT_JSON or configure GOOGLE_APPLICATION_CREDENTIALS for NOVAPDF_AUTOMATION_BACKEND=firebase"
   fi
 
   local firebase_timeout="${NOVAPDF_AUTOMATION_FIREBASE_TIMEOUT:-}"
@@ -266,17 +270,8 @@ PY
 }
 
 if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
-  if run_firebase_backend; then
-    exit 0
-  fi
-
-  status=$?
-  if (( status == 2 )); then
-    AUTOMATION_BACKEND="emulator"
-    log "Continuing with NOVAPDF_AUTOMATION_BACKEND=emulator"
-  else
-    exit "$status"
-  fi
+  run_firebase_backend
+  exit "$?"
 fi
 
 if [[ -z "$ANDROID_HOME" ]]; then
