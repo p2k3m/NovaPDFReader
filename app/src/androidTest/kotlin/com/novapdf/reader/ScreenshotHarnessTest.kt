@@ -2,6 +2,7 @@ package com.novapdf.reader
 
 import android.Manifest
 import android.app.Instrumentation
+import android.app.UiAutomation
 import android.content.Context
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -42,6 +43,7 @@ import kotlin.math.min
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -168,7 +170,7 @@ class ScreenshotHarnessTest {
             (appContext as? NovaPdfApp)?.ensureStrictModeHarnessOverride()
             activityScenario = ActivityScenario.launch(ReaderActivity::class.java)
             performSlowSystemPreflight()
-            device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            device = obtainUiDeviceWithRetry(InstrumentationRegistry.getInstrumentation())
             handshakePackageName = resolveTestPackageName()
             logHarnessInfo("Resolved screenshot harness package name: $handshakePackageName")
             screenshotCompletionTimeoutMs = resolveScreenshotCompletionTimeoutMillis(appContext)
@@ -282,6 +284,65 @@ class ScreenshotHarnessTest {
             blacklistRunner = true,
         )
         assumeTrue("System CPU load too high for screenshot harness preflight", false)
+    }
+
+    private suspend fun obtainUiDeviceWithRetry(
+        instrumentation: Instrumentation,
+    ): UiDevice {
+        val start = SystemClock.elapsedRealtime()
+        var attempt = 0
+        var lastError: Throwable? = null
+        while (SystemClock.elapsedRealtime() - start < UI_AUTOMATION_ACQUISITION_TIMEOUT_MS) {
+            attempt++
+            val automationResult = runCatching {
+                instrumentation.uiAutomation
+                    ?: instrumentation.getUiAutomation(
+                        UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES,
+                    )
+            }
+            val automation = automationResult.getOrNull()
+            if (automation != null) {
+                if (attempt > 1) {
+                    logHarnessInfo(
+                        "UiAutomation acquired after $attempt attempts",
+                        field("attempts", attempt),
+                        field(
+                            "elapsedMs",
+                            SystemClock.elapsedRealtime() - start,
+                        ),
+                    )
+                }
+                return UiDevice.getInstance(instrumentation)
+            }
+
+            val error = automationResult.exceptionOrNull()
+            if (attempt == 1) {
+                val cause = error ?: IllegalStateException("UiAutomation unavailable from instrumentation")
+                logHarnessWarn(
+                    "UiAutomation unavailable from instrumentation; retrying",
+                    cause,
+                    field("attempt", attempt),
+                    field("retryDelayMs", UI_AUTOMATION_RETRY_DELAY_MS),
+                )
+            }
+            if (error != null) {
+                lastError = error
+            }
+            delay(UI_AUTOMATION_RETRY_DELAY_MS)
+        }
+
+        val elapsed = SystemClock.elapsedRealtime() - start
+        val failure = IllegalStateException(
+            "Unable to obtain UiAutomation from instrumentation after $attempt attempts",
+            lastError,
+        )
+        logHarnessWarn(
+            "Failed to obtain UiAutomation from instrumentation after ${elapsed}ms",
+            failure,
+            field("attempts", attempt),
+            field("elapsedMs", elapsed),
+        )
+        throw failure
     }
 
     private fun capturePreflightCpuSample(): CpuPreflightSample? {
@@ -2474,6 +2535,8 @@ class ScreenshotHarnessTest {
         private const val DEVICE_IDLE_TIMEOUT_MS = 10_000L
         private const val UI_READY_CONFIRMATION_TIMEOUT_MS = 30_000L
         private const val UI_READY_UNDER_LOAD_GRACE_PERIOD_MS = 20_000L
+        private const val UI_AUTOMATION_ACQUISITION_TIMEOUT_MS = 15_000L
+        private const val UI_AUTOMATION_RETRY_DELAY_MS = 250L
         private const val PREFLIGHT_CPU_SAMPLE_INTERVAL_MS = 500L
         private const val PREFLIGHT_TOTAL_CPU_THRESHOLD_PERCENT = 90f
         private const val PREFLIGHT_OTHER_CPU_THRESHOLD_PERCENT = 80f
