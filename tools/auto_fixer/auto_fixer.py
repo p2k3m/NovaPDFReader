@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import random
 import string
@@ -318,11 +319,41 @@ class OpenAIClient:
             """
         )
         response = self._chat(system_prompt, [{"role": "user", "content": user_prompt}])
+        data = self._parse_json_response(response)
+        return DiffResponse(patch=data["patch"], rationale=data.get("rationale", ""))
+
+    @staticmethod
+    def _parse_json_response(response: str) -> dict:
+        """Best-effort parsing for LLM responses that should be JSON."""
+
+        stripped = response.strip()
+        if not stripped:
+            raise AutoFixerError("Model returned empty response when JSON was expected")
+
+        # Fast path: try direct JSON parsing first.
         try:
-            data = json.loads(response)
-            return DiffResponse(patch=data["patch"], rationale=data.get("rationale", ""))
-        except json.JSONDecodeError as exc:  # pragma: no cover - depends on LLM output.
-            raise AutoFixerError("Model did not return valid JSON") from exc
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+        # Handle common formatting issues such as fenced code blocks or
+        # leading explanatory text by extracting the first JSON object.
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
+        if fence_match:
+            candidate = fence_match.group(1)
+        else:
+            json_match = re.search(r"(\{.*\})", stripped, re.DOTALL)
+            candidate = json_match.group(1) if json_match else None
+
+        if candidate:
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+
+        raise AutoFixerError(
+            "Model did not return valid JSON",
+        )
 
     def _chat(self, system_prompt: str, messages: List[dict]) -> str:
         if self._client is not None:
