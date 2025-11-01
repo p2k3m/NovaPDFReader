@@ -371,8 +371,8 @@ When the `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_PROJECT_ID` secrets are p
 the CI workflow skips emulator provisioning entirely and pushes the instrumentation APKs to
 Firebase Test Lab physical devices instead. The emulator matrix still builds the binaries so
 artifact consumers receive consistent outputs, but device interactions, log collection, and
-macrobenchmarks are delegated to Test Lab. This keeps the pipeline focused on real hardware
-while retaining a deterministic fallback path when the Firebase credentials are unavailable.
+macrobenchmarks are delegated to Test Lab. Firebase credentials are now mandatory, ensuring
+every CI run executes on real hardware rather than falling back to local emulators.
 The helper script `tools/check_logcat_for_crashes.py` mirrors the CI check and can be
 run locally with captured logcat or bugreport dumps to confirm that no ANR or crash
 signatures were recorded:
