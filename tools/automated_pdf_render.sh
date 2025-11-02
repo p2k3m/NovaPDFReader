@@ -136,6 +136,14 @@ run_firebase_backend() {
     fatal "Firebase harness driver not found at $firebase_script"
   fi
 
+  if [[ -z "${FIREBASE_PROJECT_ID:-}" ]]; then
+    fatal "FIREBASE_PROJECT_ID environment variable must be provided for Firebase automation"
+  fi
+
+  if [[ -z "${FIREBASE_SERVICE_ACCOUNT_JSON:-}" ]]; then
+    fatal "FIREBASE_SERVICE_ACCOUNT_JSON environment variable must be provided for Firebase automation"
+  fi
+
   ensure_firebase_auth() {
     if [[ -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY:-}" || -n "${NOVAPDF_FTL_SERVICE_ACCOUNT_KEY_B64:-}" ]]; then
       return 0
@@ -265,10 +273,182 @@ PY
 
   export PACKAGE_NAME
 
+  local result_json_path="$WORK_DIR/firebase_result.json"
+  local storage_path_file="$WORK_DIR/firebase_storage_path.txt"
+  rm -f "$result_json_path" "$storage_path_file"
+  export NOVAPDF_FTL_RESULT_JSON_PATH="$result_json_path"
+  export NOVAPDF_FTL_RESULT_STORAGE_PATH_FILE="$storage_path_file"
+
+  log "Using Firebase project $FIREBASE_PROJECT_ID for automation"
   log "Running NovaPDF automation via Firebase Test Lab backend"
-  "${cmd[@]}"
+  if ! "${cmd[@]}"; then
+    return $?
+  fi
+
+  local firebase_storage_path=""
+  if [[ -f "$storage_path_file" ]]; then
+    firebase_storage_path="$(<"$storage_path_file")"
+    firebase_storage_path="${firebase_storage_path//[$'\r\n']}"
+  fi
+
+  if [[ -z "$firebase_storage_path" ]]; then
+    fatal "Firebase results storage path was not recorded by $firebase_script"
+  fi
+
+  if ! command -v gcloud >/dev/null 2>&1; then
+    fatal "gcloud CLI is required to download Firebase Test Lab artifacts"
+  fi
+
+  local firebase_download_root="$WORK_DIR/firebase_artifacts"
+  mkdir -p "$firebase_download_root"
+
+  log "Downloading Firebase artifacts from $firebase_storage_path"
+  if ! gcloud storage cp --recursive "${firebase_storage_path}/artifacts" "$firebase_download_root/"; then
+    fatal "Failed to download Firebase artifacts from $firebase_storage_path"
+  fi
+
+  local artifacts_root="$firebase_download_root/artifacts"
+  if [[ ! -d "$artifacts_root" ]]; then
+    artifacts_root="$firebase_download_root"
+  fi
+
+  local screenshot_candidate
+  screenshot_candidate="$(find "$artifacts_root" -type f -name 'programmatic_screenshot.png' -print -quit)"
+
+  if [[ -z "$screenshot_candidate" ]]; then
+    if command -v unzip >/dev/null 2>&1; then
+      local extracted_root="$firebase_download_root/extracted"
+      mkdir -p "$extracted_root"
+      while IFS= read -r zip_path; do
+        [[ -z "$zip_path" ]] && continue
+        local zip_basename
+        zip_basename="$(basename "${zip_path%.zip}")"
+        local zip_dest="$extracted_root/$zip_basename"
+        mkdir -p "$zip_dest"
+        if unzip -qq "$zip_path" -d "$zip_dest"; then
+          log "Extracted Firebase artifact archive $zip_path"
+        else
+          log "Failed to extract Firebase artifact archive $zip_path; continuing"
+        fi
+      done < <(find "$artifacts_root" -type f -name '*.zip' -print)
+
+      screenshot_candidate="$(find "$extracted_root" -type f -name 'programmatic_screenshot.png' -print -quit)"
+      if [[ -z "$screenshot_candidate" ]]; then
+        screenshot_candidate="$(find "$extracted_root" -type f -name '*.png' -print -quit)"
+      fi
+    fi
+  fi
+
+  if [[ -z "$screenshot_candidate" ]]; then
+    screenshot_candidate="$(find "$artifacts_root" -type f -name '*.png' -print -quit)"
+  fi
+
+  if [[ -z "$screenshot_candidate" ]]; then
+    fatal "Unable to locate screenshot PNG in Firebase artifacts from $firebase_storage_path"
+  fi
+
+  log "Found Firebase screenshot artifact at $screenshot_candidate"
+  cp "$screenshot_candidate" "$ARTIFACT_PATH" || fatal "Failed to stage screenshot artifact from Firebase results"
+
+  log "Uploading screenshot artifact to s3://${TARGET_BUCKET}/${ARTIFACT_NAME}"
+  aws s3 cp "$ARTIFACT_PATH" "s3://${TARGET_BUCKET}/${ARTIFACT_NAME}" --only-show-errors || fatal "Failed to upload screenshot to S3"
+
+  log "Automation completed successfully. Artifact URI: s3://${TARGET_BUCKET}/${ARTIFACT_NAME}"
 }
 
+SOURCE_BUCKET="${NOVAPDF_AUTOMATION_SOURCE_BUCKET:-pics-1234}"
+SOURCE_KEY="${NOVAPDF_AUTOMATION_SOURCE_KEY:-AI.pdf}"
+TARGET_BUCKET="${NOVAPDF_AUTOMATION_TARGET_BUCKET:-novapdfreader}"
+AVD_NAME="${NOVAPDF_AUTOMATION_AVD_NAME:-novapdf-automation-api32}"
+SYSTEM_IMAGE="${NOVAPDF_AUTOMATION_SYSTEM_IMAGE:-system-images;android-32;google_apis;x86_64}"
+DEVICE_PROFILE="${NOVAPDF_AUTOMATION_DEVICE_PROFILE:-pixel_5}"
+PLATFORM_API="${NOVAPDF_AUTOMATION_PLATFORM_API:-32}"
+RENDER_WAIT="${NOVAPDF_AUTOMATION_RENDER_WAIT:-10}"
+RENDER_INITIAL_DELAY="${NOVAPDF_AUTOMATION_INITIAL_DELAY:-5}"
+RENDER_TIMEOUT="${NOVAPDF_AUTOMATION_RENDER_TIMEOUT:-120}"
+EMULATOR_START_TIMEOUT="${NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT:-180}"
+AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+ADB_SERIAL="${ADB_SERIAL:-${NOVAPDF_AUTOMATION_SERIAL:-emulator-5554}}"
+
+if ! [[ "$EMULATOR_START_TIMEOUT" =~ ^[0-9]+$ ]] || (( EMULATOR_START_TIMEOUT <= 0 )); then
+  fatal "NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT must be a positive integer"
+fi
+
+export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
+export AWS_EC2_METADATA_DISABLED=true
+
+AWS_ACCESS_KEY_ID_VALUE="${AWS_ACCESS_KEY_ID:-}"
+AWS_SECRET_ACCESS_KEY_VALUE="${AWS_SECRET_ACCESS_KEY:-}"
+AWS_SESSION_TOKEN_VALUE="${AWS_SESSION_TOKEN:-}"
+
+if [[ -z "$AWS_ACCESS_KEY_ID_VALUE" || -z "$AWS_SECRET_ACCESS_KEY_VALUE" ]]; then
+  fatal "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables must be supplied"
+fi
+
+WORK_DIR="$(mktemp -d)"
+PDF_LOCAL_PATH="$WORK_DIR/AI.pdf"
+LOCAL_SCREENSHOT_RAW="$WORK_DIR/device_screencap.png"
+LOGCAT_CAPTURE_PATH="$WORK_DIR/logcat.txt"
+EMULATOR_LOG="$WORK_DIR/emulator.log"
+SHARED_STAGING_PATH="/sdcard/Download/AI.pdf"
+EMULATOR_SCREENSHOT_PATH="/sdcard/Download/novapdf_automation.png"
+ARTIFACT_NAME="AI_pdf_render_$(date -u +"%Y%m%d_%H%M%S").png"
+ARTIFACT_PATH="$WORK_DIR/$ARTIFACT_NAME"
+DEVICE_CACHE_DIR="cache/pdf-cache/docs"
+DEVICE_CACHE_PATH="$DEVICE_CACHE_DIR/AI.pdf"
+CONTENT_URI="content://${PACKAGE_NAME}.fileprovider/pdf_docs/AI.pdf"
+
+EMULATOR_PID=""
+LOGCAT_PID=""
+AUTOMATION_SUCCESS_PATTERN="AutomationStatus"
+AWS_CONFIG_DIR="$WORK_DIR/aws"
+AWS_SHARED_CREDENTIALS_FILE="$AWS_CONFIG_DIR/credentials"
+AWS_CONFIG_FILE="$AWS_CONFIG_DIR/config"
+
+mkdir -p "$AWS_CONFIG_DIR"
+chmod 700 "$AWS_CONFIG_DIR"
+
+{
+  old_umask=$(umask)
+  umask 077
+  cat >"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY_ID_VALUE
+aws_secret_access_key = $AWS_SECRET_ACCESS_KEY_VALUE
+EOF
+  if [[ -n "$AWS_SESSION_TOKEN_VALUE" ]]; then
+    cat >>"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
+aws_session_token = $AWS_SESSION_TOKEN_VALUE
+EOF
+  fi
+  cat >"$AWS_CONFIG_FILE" <<EOF
+[default]
+region = $AWS_REGION
+output = json
+EOF
+  umask "$old_umask"
+}
+
+export AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE
+
+log "Configuring AWS CLI credentials for automation"
+
+cleanup() {
+  local exit_code=$?
+  if [[ -n "$LOGCAT_PID" ]] && kill -0 "$LOGCAT_PID" >/dev/null 2>&1; then
+    log "Stopping logcat capture (PID $LOGCAT_PID)"
+    kill "$LOGCAT_PID" >/dev/null 2>&1 || true
+    wait "$LOGCAT_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$EMULATOR_PID" ]] && kill -0 "$EMULATOR_PID" >/dev/null 2>&1; then
+    log "Stopping Android emulator (PID $EMULATOR_PID)"
+    adb -s "$ADB_SERIAL" emu kill >/dev/null 2>&1 || true
+    wait "$EMULATOR_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORK_DIR"
+  return $exit_code
+}
+trap cleanup EXIT INT TERM
 if [[ "$AUTOMATION_BACKEND" == "firebase" ]]; then
   run_firebase_backend
   exit "$?"
@@ -490,100 +670,6 @@ AVDMANAGER_DIR="$(dirname "$AVDMANAGER")"
 if [[ "$AVDMANAGER_DIR" != "$CMDLINE_TOOLS_DIR" ]]; then
   export PATH="$AVDMANAGER_DIR:$PATH"
 fi
-
-SOURCE_BUCKET="${NOVAPDF_AUTOMATION_SOURCE_BUCKET:-pics-1234}"
-SOURCE_KEY="${NOVAPDF_AUTOMATION_SOURCE_KEY:-AI.pdf}"
-TARGET_BUCKET="${NOVAPDF_AUTOMATION_TARGET_BUCKET:-novapdfreader}"
-AVD_NAME="${NOVAPDF_AUTOMATION_AVD_NAME:-novapdf-automation-api32}"
-SYSTEM_IMAGE="${NOVAPDF_AUTOMATION_SYSTEM_IMAGE:-system-images;android-32;google_apis;x86_64}"
-DEVICE_PROFILE="${NOVAPDF_AUTOMATION_DEVICE_PROFILE:-pixel_5}"
-PLATFORM_API="${NOVAPDF_AUTOMATION_PLATFORM_API:-32}"
-RENDER_WAIT="${NOVAPDF_AUTOMATION_RENDER_WAIT:-10}"
-RENDER_INITIAL_DELAY="${NOVAPDF_AUTOMATION_INITIAL_DELAY:-5}"
-RENDER_TIMEOUT="${NOVAPDF_AUTOMATION_RENDER_TIMEOUT:-120}"
-EMULATOR_START_TIMEOUT="${NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT:-180}"
-AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-ADB_SERIAL="${ADB_SERIAL:-${NOVAPDF_AUTOMATION_SERIAL:-emulator-5554}}"
-
-if ! [[ "$EMULATOR_START_TIMEOUT" =~ ^[0-9]+$ ]] || (( EMULATOR_START_TIMEOUT <= 0 )); then
-  fatal "NOVAPDF_AUTOMATION_EMULATOR_START_TIMEOUT must be a positive integer"
-fi
-
-export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
-export AWS_EC2_METADATA_DISABLED=true
-
-AWS_ACCESS_KEY_ID_VALUE="${AWS_ACCESS_KEY_ID:-}"
-AWS_SECRET_ACCESS_KEY_VALUE="${AWS_SECRET_ACCESS_KEY:-}"
-AWS_SESSION_TOKEN_VALUE="${AWS_SESSION_TOKEN:-}"
-
-if [[ -z "$AWS_ACCESS_KEY_ID_VALUE" || -z "$AWS_SECRET_ACCESS_KEY_VALUE" ]]; then
-  fatal "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables must be supplied"
-fi
-
-WORK_DIR="$(mktemp -d)"
-PDF_LOCAL_PATH="$WORK_DIR/AI.pdf"
-LOCAL_SCREENSHOT_RAW="$WORK_DIR/device_screencap.png"
-LOGCAT_CAPTURE_PATH="$WORK_DIR/logcat.txt"
-EMULATOR_LOG="$WORK_DIR/emulator.log"
-SHARED_STAGING_PATH="/sdcard/Download/AI.pdf"
-EMULATOR_SCREENSHOT_PATH="/sdcard/Download/novapdf_automation.png"
-ARTIFACT_NAME="AI_pdf_render_$(date -u +"%Y%m%d_%H%M%S").png"
-ARTIFACT_PATH="$WORK_DIR/$ARTIFACT_NAME"
-DEVICE_CACHE_DIR="cache/pdf-cache/docs"
-DEVICE_CACHE_PATH="$DEVICE_CACHE_DIR/AI.pdf"
-CONTENT_URI="content://${PACKAGE_NAME}.fileprovider/pdf_docs/AI.pdf"
-
-EMULATOR_PID=""
-LOGCAT_PID=""
-AUTOMATION_SUCCESS_PATTERN="AutomationStatus"
-AWS_CONFIG_DIR="$WORK_DIR/aws"
-AWS_SHARED_CREDENTIALS_FILE="$AWS_CONFIG_DIR/credentials"
-AWS_CONFIG_FILE="$AWS_CONFIG_DIR/config"
-
-mkdir -p "$AWS_CONFIG_DIR"
-chmod 700 "$AWS_CONFIG_DIR"
-
-{
-  old_umask=$(umask)
-  umask 077
-  cat >"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
-[default]
-aws_access_key_id = $AWS_ACCESS_KEY_ID_VALUE
-aws_secret_access_key = $AWS_SECRET_ACCESS_KEY_VALUE
-EOF
-  if [[ -n "$AWS_SESSION_TOKEN_VALUE" ]]; then
-    cat >>"$AWS_SHARED_CREDENTIALS_FILE" <<EOF
-aws_session_token = $AWS_SESSION_TOKEN_VALUE
-EOF
-  fi
-  cat >"$AWS_CONFIG_FILE" <<EOF
-[default]
-region = $AWS_REGION
-output = json
-EOF
-  umask "$old_umask"
-}
-
-export AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE
-
-log "Configuring AWS CLI credentials for automation"
-
-cleanup() {
-  local exit_code=$?
-  if [[ -n "$LOGCAT_PID" ]] && kill -0 "$LOGCAT_PID" >/dev/null 2>&1; then
-    log "Stopping logcat capture (PID $LOGCAT_PID)"
-    kill "$LOGCAT_PID" >/dev/null 2>&1 || true
-    wait "$LOGCAT_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$EMULATOR_PID" ]] && kill -0 "$EMULATOR_PID" >/dev/null 2>&1; then
-    log "Stopping Android emulator (PID $EMULATOR_PID)"
-    adb -s "$ADB_SERIAL" emu kill >/dev/null 2>&1 || true
-    wait "$EMULATOR_PID" 2>/dev/null || true
-  fi
-  rm -rf "$WORK_DIR"
-  return $exit_code
-}
-trap cleanup EXIT INT TERM
 
 log "Ensuring required Android SDK packages are installed"
 # sdkmanager may close its stdin early which causes `yes` to receive SIGPIPE.

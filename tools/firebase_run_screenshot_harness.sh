@@ -287,6 +287,11 @@ cmd=(
 )
 
 cmd+=("${device_args[@]}")
+cmd+=(--directories-to-pull "/sdcard/Android/data/${PACKAGE_NAME}/cache")
+
+if [ -n "${FIREBASE_PROJECT_ID:-}" ]; then
+  cmd+=(--project "$FIREBASE_PROJECT_ID")
+fi
 
 if [ -n "$RESULTS_BUCKET" ]; then
   cmd+=("--results-bucket" "$RESULTS_BUCKET")
@@ -306,7 +311,8 @@ if [ ${#EXTRA_ENV[@]} -gt 0 ]; then
 fi
 
 printf 'Running screenshot harness on Firebase Test Lab with command:\n' >&2
-printf '  %q' "${cmd[@]}" >&2
+exec_cmd=("${cmd[@]}" "--format=json")
+printf '  %q' "${exec_cmd[@]}" >&2
 printf '\n' >&2
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -314,8 +320,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 stderr_capture_file="$(mktemp)"
+results_json_file="$(mktemp)"
 
-if ! "${cmd[@]}" 2> >(tee "$stderr_capture_file" >&2); then
+if ! "${exec_cmd[@]}" >"$results_json_file" 2> >(tee "$stderr_capture_file" >&2); then
   exit_code=$?
 
   if grep -q "SERVICE_DISABLED" "$stderr_capture_file" && grep -q "testing.googleapis.com" "$stderr_capture_file"; then
@@ -337,7 +344,72 @@ MSG
   fi
 
   rm -f "$stderr_capture_file"
+  rm -f "$results_json_file"
   exit "$exit_code"
 fi
 
+parse_output=$(python3 - "$results_json_file" <<'PY')
+import json
+import os
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+if isinstance(payload, list):
+    payload = payload[0] if payload else {}
+
+if not isinstance(payload, dict):
+    payload = {}
+
+storage_path = str(payload.get("resultStoragePath") or "").strip()
+outcome = str(payload.get("outcomeSummary") or payload.get("outcome") or "").strip()
+matrix_id = str(payload.get("testMatrixId") or payload.get("matrixId") or "").strip()
+
+print(f"storage_path={storage_path}")
+print(f"outcome={outcome}")
+print(f"matrix_id={matrix_id}")
+PY
+)
+
+storage_path=""
+matrix_id=""
+outcome=""
+while IFS='=' read -r key value; do
+  case "$key" in
+    storage_path) storage_path="$value" ;;
+    matrix_id) matrix_id="$value" ;;
+    outcome) outcome="$value" ;;
+  esac
+done <<<"$parse_output"
+
+if [ -n "${NOVAPDF_FTL_RESULT_JSON_PATH:-}" ]; then
+  cp "$results_json_file" "$NOVAPDF_FTL_RESULT_JSON_PATH"
+fi
+
+if [ -n "${NOVAPDF_FTL_RESULT_STORAGE_PATH_FILE:-}" ]; then
+  printf '%s\n' "$storage_path" >"$NOVAPDF_FTL_RESULT_STORAGE_PATH_FILE"
+fi
+
+rm -f "$results_json_file"
 rm -f "$stderr_capture_file"
+
+if [ -n "$matrix_id" ]; then
+  printf 'Firebase Test Lab matrix %s completed with outcome %s\n' "$matrix_id" "${outcome:-unknown}" >&2
+fi
+
+if [ -z "$storage_path" ]; then
+  echo "Firebase results did not include a storage path." >&2
+  exit 1
+fi
+
+if [ -z "$outcome" ]; then
+  echo "Firebase results did not include an outcome summary." >&2
+  exit 1
+fi
+
+if [ "$outcome" != "SUCCESS" ]; then
+  echo "Firebase instrumentation failed with outcome $outcome" >&2
+  exit 1
+fi
