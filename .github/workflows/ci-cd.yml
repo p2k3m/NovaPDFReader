@@ -3370,6 +3370,7 @@ jobs:
           NOVAPDF_AUTOMATION_INITIAL_DELAY: 5
           NOVAPDF_AUTOMATION_RENDER_WAIT: 10
           NOVAPDF_AUTOMATION_RENDER_TIMEOUT: 180
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
           tools/automated_pdf_render.sh \
