@@ -335,7 +335,41 @@ import sys
 
 log_path = sys.argv[1]
 packages = [arg for arg in sys.argv[2:] if arg]
-package_set = set(packages)
+
+
+def compile_package_matchers(values):
+    matchers = []
+    for value in values:
+        if not value:
+            continue
+        if any(char in value for char in "*?"):
+            try:
+                pattern = re.compile(
+                    "^" + re.escape(value).replace(r"\\*", ".*").replace(r"\\?", ".") + "$"
+                )
+            except re.error:
+                continue
+            matchers.append(pattern)
+        else:
+            matchers.append(value)
+    return matchers
+
+
+def matches_package(candidate: str) -> bool:
+    if not candidate:
+        return False
+    if not package_matchers:
+        return True
+    for matcher in package_matchers:
+        if isinstance(matcher, str):
+            if candidate == matcher:
+                return True
+        elif matcher.match(candidate):
+            return True
+    return False
+
+
+package_matchers = compile_package_matchers(packages)
 
 try:
     with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
@@ -414,16 +448,15 @@ for raw_line in lines:
         inferred_package, inferred_relative = infer_package_from_path(path)
         added = False
         if inferred_package and inferred_relative:
-            if not package_set or inferred_package in package_set:
+            if matches_package(inferred_package):
                 results.append(f"{inferred_package}:{inferred_relative}")
                 added = True
         if added:
             continue
-        if path_package:
-            if not package_set or path_package in package_set:
-                relative = extract_relative_path(path, path_package)
-                if relative:
-                    results.append(f"{path_package}:{relative}")
+        if path_package and matches_package(path_package):
+            relative = extract_relative_path(path, path_package)
+            if relative:
+                results.append(f"{path_package}:{relative}")
 
 if results:
     seen = set()
@@ -457,7 +490,41 @@ import sys
 
 log_path = sys.argv[1]
 packages = [arg for arg in sys.argv[2:] if arg]
-package_set = set(packages)
+
+
+def compile_package_matchers(values):
+    matchers = []
+    for value in values:
+        if not value:
+            continue
+        if any(char in value for char in "*?"):
+            try:
+                pattern = re.compile(
+                    "^" + re.escape(value).replace(r"\\*", ".*").replace(r"\\?", ".") + "$"
+                )
+            except re.error:
+                continue
+            matchers.append(pattern)
+        else:
+            matchers.append(value)
+    return matchers
+
+
+def matches_known_package(candidate: str) -> bool:
+    if not candidate:
+        return False
+    if not package_matchers:
+        return True
+    for matcher in package_matchers:
+        if isinstance(matcher, str):
+            if candidate == matcher:
+                return True
+        elif matcher.match(candidate):
+            return True
+    return False
+
+
+package_matchers = compile_package_matchers(packages)
 
 try:
     with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
@@ -509,7 +576,7 @@ for raw_line in reversed(lines):
     if not inferred:
         continue
     package, relative = inferred
-    if package_set and package not in package_set:
+    if not matches_known_package(package):
         continue
     if not relative:
         continue
